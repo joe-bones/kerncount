@@ -14,7 +14,7 @@ DEFAULTS: dict = {
         "csv_delimiter": ",",  # use ";" if your Excel is set to German/European locale
     },
     "channels": {
-        "names": [],  # e.g. ["DAPI", "pEIF2A"]; empty = C1, C2, ...
+        "names": [],  # e.g. ["DAPI", "marker"]; empty = C1, C2, ...
         "segment": 1,  # 1-based channel used to find nuclei
     },
     "segmentation": {
@@ -71,7 +71,7 @@ date_order = "DMY"        # n-folder dates: 05.06.26 = 5 June 2026
 csv_delimiter = ","       # set to ";" if Excel (German/European locale) shows everything in one column
 
 [channels]
-names = []                # e.g. ["DAPI", "pEIF2A"]; empty = C1, C2, ...
+names = []                # e.g. ["DAPI", "marker"]; empty = C1, C2, ...
 segment = 1               # channel (1-based) used to find nuclei
 
 [segmentation]

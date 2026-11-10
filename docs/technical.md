@@ -76,7 +76,8 @@ g1/
   <n>/<treatment>/fields.csv   per-field values + count_fields.png
   <n>/count_summary.csv        per treatment: fields, mean, SD, SEM, % of LyoVec / Control
   <n>/count_prism.csv          Prism Column table (fields as rows)
-  <n>/count_stats.csv          ANOVA + Dunnett vs reference (fields = technical replicates)
+  <n>/count_stats.csv          ANOVA + Dunnett vs reference, or the next control if the reference
+                               is missing in that n (fields = technical replicates)
   <n>/count.png/.pdf
   all_n/count_summary.csv      per-n means, mean of n, SD, SEM, % of controls
   all_n/count_prism.csv        Prism Column table: rows = n, columns = treatments
@@ -136,16 +137,22 @@ For every counted nucleus, each channel is measured in the **nucleus**, the **ri
 and the **cell** (nucleus + ring; the Fiji macro's "enlarge 6 px" region), with background
 subtracted. Ring width is 0.25 × nucleus diameter by default, so it adapts to magnification.
 Per-cell values are in `_work/cells.csv`. Per-image means flow into the same per-n / all-n
-analysis as the counts. For two-channel images (C1 DAPI, C2 p-eIF2α), set in `settings.toml`:
+analysis as the counts. For two-channel images (C1 DAPI, C2 marker), set in `settings.toml`:
 ```
 [channels]
-names = ["DAPI", "pEIF2A"]
+names = ["DAPI", "marker"]
 segment = 1
 [intensity]
 measure = [2]
 ```
 For whole-cell mCherry segmentation instead of nuclei, set `segment` to the mCherry channel and
 `backend = "classical"`.
+
+## Significance on plots
+Bars get stars only when their comparison has `p_adj` < 0.05 (no mark = not significant); the control is
+labelled "ref" and a footer names the test. Per-n plots: Dunnett vs reference. All-n plots: Holm-adjusted
+ratio paired t-test vs the plotted control, plus the RM ANOVA p in the footer. Implemented in
+`analysis.significance_marks` / `analysis._bar_plot`; covered by `test_significance_marks_only_where_significant`.
 
 ## Tests
 `pip install -e .[test]` then `pytest`.

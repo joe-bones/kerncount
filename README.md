@@ -57,7 +57,7 @@ project folder (settings, counts file, review images, results).
 
 ## 2. Install (once per computer)
 
-1. Install **Python 3.12** from python.org. On Windows, tick *"Add python.exe to PATH"*.
+1. Install **Python 3.12** from python.org (3.11 or newer works; 3.12 is recommended for TensorFlow). On Windows, tick *"Add python.exe to PATH"*.
 2. Download this repository (green **Code** button → *Download ZIP*, or `git clone`).
 3. Double-click `setup.bat` (Windows) or run `setup.command` (Mac/Linux).
    This takes a few minutes and about 1 GB. The StarDist model (~5 MB) downloads automatically on the
@@ -113,6 +113,22 @@ cellcount sampling "analysis"
 ```
 Results are written to `analysis/sampling/g<N>/` (section 5.5).
 
+### Measuring a second channel (e.g. a marker in C2)
+For multi-channel TIFFs (C1 = DAPI, C2 = signal), set in `settings.toml`:
+```
+[channels]
+names = ["DAPI", "marker"]
+segment = 1            # find nuclei in DAPI
+
+[intensity]
+measure = [2]          # measure the marker
+regions = ["nucleus", "ring", "cell"]
+```
+Then run as usual. Per-cell values go to `_work/cells.csv` (one row per detected object, with its
+category). Per-image means go to `qc_details.csv` and through the same per-n and all-n statistics as the
+counts (`intensity_marker_cell_*` files). To segment whole cells from an mCherry channel instead of nuclei,
+set `segment` to that channel and `[segmentation] backend = "classical"`.
+
 ### Command options
 | Command | What it does |
 |---|---|
@@ -138,7 +154,7 @@ Edit with any text editor. A setting you delete falls back to its default.
 ### `[channels]`
 | Setting | Default | Meaning |
 |---|---|---|
-| `names` | `[]` | Channel names, e.g. `["DAPI", "pEIF2A"]`. Empty = C1, C2, ... |
+| `names` | `[]` | Channel names, e.g. `["DAPI", "marker"]`. Empty = C1, C2, ... |
 | `segment` | `1` | Channel used to find nuclei |
 
 ### `[segmentation]`: finding nuclei
@@ -176,7 +192,7 @@ isn't automatically "low". An image with 0 nuclei is always "low" (check for a b
 | Setting | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Measure intensities |
-| `measure` | `"all"` | Channels to measure, e.g. `[2]` for p-eIF2α only |
+| `measure` | `"all"` | Channels to measure, e.g. `[2]` for channel 2 only |
 | `regions` | `["nucleus", "cell"]` | `nucleus`; `ring` (band around the nucleus, i.e. cytoplasm); `cell` (nucleus + ring, which is the Fiji macro's "enlarge 6 px") |
 | `ring_px` | `"auto"` | Band width; `auto` = 0.25 × nucleus diameter |
 | `subtract_background` | `true` | Subtract each image's background (median of empty areas) |
@@ -215,7 +231,8 @@ analysis/
 ├── review/                       pictures to check the counting (5.1)
 ├── generations/g1, g2, ...       results (5.3, 5.4)
 ├── sampling/g1/                  how many images are needed (5.5)
-└── _work/                        cache + backups of counts.csv (safe to ignore; deleting it forces re-detection)
+└── _work/                        cache, cells.csv (per-cell measurements), backups/ of counts.csv
+                                  (deleting _work forces re-detection)
 ```
 
 ### 5.1 Review images: `review/`
@@ -247,6 +264,9 @@ The header gives the count, the plausible range, the QC level and the reasons. O
 - `diameter_px`: typical nucleus size in that folder (useful as a magnification/biology check).
 - `fiji_count`: what the old macro gave, for comparison.
 - `intensity_<channel>_<region>`: mean background-subtracted intensity of the counted cells.
+- `nuclei_per_mm2`: only present once `pixel_size_um` is set.
+- `stardist_scale`, `saturated_frac`, `source_file`: detector rescaling factor, fraction of saturated
+  nuclear pixels, and the raw file the row came from.
 
 *About the QC levels:* they are rules of thumb until checked against hand counts (ground truth).
 Hand-counting about 15 images across densities would turn them into real error estimates.
@@ -271,14 +291,14 @@ g1/
 │   ├── count_summary.csv             per treatment: fields, mean, SD, SEM, median, % of LyoVec, % of Control
 │   ├── count_prism.csv               Prism Column table: columns = treatments, rows = fields
 │   ├── count_stats.csv               one-way ANOVA + Dunnett vs reference
-│   └── count.png / .pdf              bar = mean, error = SD, dots = fields
+│   └── count.png / .pdf              bar = mean, error = SD, dots = fields, stars = Dunnett (5.4.2)
 └── all_n/                            all experiments combined
     ├── count_summary.csv             per treatment: value per n, N, mean, SD, SEM, % of controls
     ├── count_prism.csv               Prism Column table: columns = treatments, rows = n
     ├── count_prism_pct_of_LyoVec.csv same, normalised to LyoVec within each n (also _Control)
     ├── count_stats.csv               RM one-way ANOVA + ratio paired t-tests vs each control
-    ├── count.png / .pdf              bar = mean of n, error = SEM, dot colour = n (see n_colours.csv)
-    ├── count_pct_of_LyoVec.png/.pdf  normalised version (dashed line = 100%)
+    ├── count.png / .pdf              bar = mean of n, error = SEM, dot colour = n (legend), stars (5.4.2)
+    ├── count_pct_of_LyoVec.png/.pdf  normalised version (dashed line = 100%); also _Control
     └── n_colours.csv
 ```
 The same set of files exists for each intensity metric (`intensity_<channel>_<region>_*`).
@@ -286,9 +306,36 @@ The same set of files exists for each intensity metric (`intensity_<channel>_<re
 **Prism:** open a `*_prism*.csv` and paste it into a Column table, or use File → Import.
 The all-n files have the n label as a row title in the first column.
 
+**`results.xlsx` sheets:** *About* (what this generation is) · *Counts used* · *Count - all n* ·
+*Count - stats all n* · *Count - per n* · *Count - stats per n* · and, if intensity is on,
+*Intensity - all n* · *Intensity - stats all n* · *Intensity - per n*.
+
+#### 5.4.1 Columns of `*_stats.csv`
+| Column | Meaning |
+|---|---|
+| `test` | Which test, and which control it compares against |
+| `comparison` | `<treatment> vs <control>`, or `all` for an overall ANOVA |
+| `N` | (all n) number of n's that contain both groups |
+| `ratio`, `ci_low`, `ci_high` | (all n) geometric-mean fold change vs the control and its 95% CI |
+| `statistic` | t, F or Dunnett statistic |
+| `p` / `p_adj` | raw / multiple-comparison-adjusted p (Dunnett is adjusted by construction; t-tests by Holm) |
+| `significance` | stars from `p_adj`: ns, \*, \*\*, \*\*\*, \*\*\*\* (< 0.05 / 0.01 / 0.001 / 0.0001) |
+
+#### 5.4.2 How significance is shown on the plots
+- **Stars** (\* to \*\*\*\*) above a bar appear only when that treatment's comparison is significant
+  (`p_adj` < 0.05). **No mark = not significant.** The control used is labelled **"ref"** above its bar.
+- **Per-n plots** use Dunnett vs the reference. If the reference is missing in that n, the next control
+  group (from `normalise_to`) is used, and the footer says which. These stars describe one experiment only.
+- **All-n plots** use the ratio paired t-test (Holm-adjusted) vs the control shown: the raw plot uses
+  `reference`; each `pct_of_<X>` plot uses X. The footer also gives the overall RM ANOVA p-value.
+  A significant ANOVA with no starred bars means the treatments differ as a group, but no single
+  comparison is significant yet with this many n's.
+- The footer of every plot names the test, so a figure can be read without the tables.
+
 **How to read the statistics:**
 - **Within one n** (`<n>/count_stats.csv`): the fields are *technical* replicates, so these p-values only
-  describe that experiment. Do not report them as the result.
+  describe that experiment. Do not report them as the result. Dunnett compares against `reference`, or
+  the next control group if the reference is missing from that n.
 - **All n** (`all_n/count_stats.csv`): each n is one biological replicate (the mean of its fields).
   - *RM one-way ANOVA* (on n's that have every treatment): is there any difference at all?
   - *Ratio paired t-test vs LyoVec / vs Control*: for each treatment, the ratio to the control within
@@ -331,7 +378,20 @@ exact values.
 4. Check the red/orange tiles in `review/*_overview.jpg`. Correct counts in `counts.csv` → `manual_1` and run again.
 5. Report from the latest generation: `generations/g<N>/results.xlsx`, `all_n/` plots, and Prism CSVs.
 
-## 7. Notes and known limitations
+## 7. Troubleshooting
+| Problem | Fix |
+|---|---|
+| First run fails while downloading the model | The StarDist model downloads once on first use; connect to the internet and run again. |
+| `counts.csv` opens as one column in Excel | Set `csv_delimiter = ";"` in `settings.toml` (European Excel). Files Excel re-saves with `;` are read correctly either way. |
+| `run` fails to write `counts.csv` (Windows) | Close the file in Excel first; Excel locks open files. |
+| "cannot read manual value" | A manual cell contains something other than a whole number or `x`; the message gives the row and column. |
+| "g2 already exists but counts.csv now gives different values" | You changed a manual column after g2 was built. Re-run with `--rebuild g2` to update it on purpose. |
+| A treatment name is wrong or a folder should be left out | Edit `layout.csv` (`treatment`, `include`) and run again. |
+| "has 1 channel(s) but settings ask for channel 2" | `[channels] segment` points to a channel the images do not have. (Channels in `[intensity] measure` that do not exist are skipped silently; check the `intensity_*` columns.) |
+| Run is slow | First runs take ~2–3 s per image; later runs are cached. `--no-review` skips the review images. |
+| Counts look wrong in a whole folder | Check `diameter_px` in `qc_details.csv`; if the size estimate is off (e.g. almost empty folder), set `nucleus_diameter_px` to a number. |
+
+## 8. Notes and known limitations
 - 8-bit camera images saved as 16-bit TIFF (every value × 257) are handled. Saturation is detected either way.
 - Compared with a simple Fiji threshold macro, counts are usually lower. Threshold macros count
   background noise in blank or defocused fields, split lobed nuclei, and count every edge-touching nucleus.
@@ -340,6 +400,13 @@ exact values.
 - Without a known pixel size, results are per field rather than per mm².
 - QC levels are heuristics until calibrated against hand counts.
 - Technical details (algorithms, tests): `docs/technical.md`.
+
+## 9. Development
+```
+pip install -e ".[test]"
+pytest
+```
+Algorithm and implementation notes: `docs/technical.md`.
 
 ## Acknowledgements
 Nucleus detection uses [StarDist](https://github.com/stardist/stardist) (Schmidt et al., MICCAI 2018;
