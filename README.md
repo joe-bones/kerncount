@@ -1,5 +1,7 @@
 # kerncount: automated nucleus counting and analysis
 
+*[Deutsche Fassung](README.de.md)*
+
 `kerncount` replaces a manual Fiji-macro + Prism workflow for fluorescence cell-count experiments with one
 Python tool. It does the following:
 
@@ -12,7 +14,7 @@ Python tool. It does the following:
 
 ```
 kerncount/                 (this repository)
-├── README.md              ← this guide
+├── README.md              ← this guide (README.de.md = German version)
 ├── docs/technical.md      ← algorithms and implementation notes
 ├── src/kerncount/         ← the code
 ├── tests/                 ← unit tests (pytest)
