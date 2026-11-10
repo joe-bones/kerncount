@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cellcount import analysis, discover, master, segment
+from kerncount import analysis, discover, master, segment
 
 
 @pytest.mark.parametrize("raw, expected", [
@@ -87,7 +87,7 @@ def test_holm_and_stars():
 
 
 def test_significance_marks_only_where_significant(tmp_path):
-    from cellcount import settings as st_mod
+    from kerncount import settings as st_mod
     rng = np.random.default_rng(0)
     rows = []
     for n in ["n1", "n2", "n3", "n4"]:
@@ -107,7 +107,7 @@ def test_significance_marks_only_where_significant(tmp_path):
 
 def test_workspace_init_by_name(tmp_path, monkeypatch):
     import tifffile
-    from cellcount import cli, settings as st_mod
+    from kerncount import cli, settings as st_mod
 
     for exp in ("expA", "expB"):
         d = tmp_path / "data" / exp / "01.02.26 run" / "cntrl"

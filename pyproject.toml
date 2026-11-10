@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cellcount"
+name = "kerncount"
 version = "0.1.0"
 description = "Automated nucleus counting, intensity measurement and multi-n analysis for fluorescence images"
 readme = "README.md"
@@ -25,10 +25,10 @@ dependencies = [
 test = ["pytest"]
 
 [project.scripts]
-cellcount = "cellcount.cli:main"
+kerncount = "kerncount.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-cellcount = ["models/**/*"]
+kerncount = ["models/**/*"]

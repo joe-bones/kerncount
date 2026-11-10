@@ -1,11 +1,11 @@
-"""cellcount: automated nucleus counting and analysis.
+"""kerncount: automated nucleus counting and analysis.
 
 Workspace convention (recommended):
     <workspace>/data/<experiment>/       raw images (input, never modified)
     <workspace>/analysis/<experiment>/   project: settings, counts.csv, review images, results
 Run commands from the workspace folder and refer to experiments by name:
-    cellcount init my_experiment    cellcount run my_experiment    cellcount run --all
-Explicit paths also work:  cellcount init RAW_DIR PROJECT_DIR  /  cellcount run PROJECT_DIR
+    kerncount init my_experiment    kerncount run my_experiment    kerncount run --all
+Explicit paths also work:  kerncount init RAW_DIR PROJECT_DIR  /  kerncount run PROJECT_DIR
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ DATA, ANALYSIS = "data", "analysis"
 
 def workspace_root(start: Path | None = None) -> Path | None:
     """Nearest folder (cwd or a parent) that contains a data/ folder."""
-    env = os.environ.get("CELLCOUNT_WORKSPACE")
+    env = os.environ.get("KERNCOUNT_WORKSPACE")
     if env:
         return Path(env).resolve()
     p = (start or Path.cwd()).resolve()
@@ -53,7 +53,7 @@ def resolve_project(arg: str, must_exist: bool = True) -> Path:
     if p.is_dir():
         return p.resolve()
     sys.exit(f"project not found: {arg}" + (f" (also looked in {ws / ANALYSIS})" if ws else "")
-             + " - create it with `cellcount init`")
+             + " - create it with `kerncount init`")
 
 
 def _init_one(raw: Path, prj: Path, force: bool):
@@ -75,7 +75,7 @@ def _init_one(raw: Path, prj: Path, force: bool):
         print(layout[["n", "treatment", "treatment_folder", "images", "note"]].to_string(index=False))
     ws = workspace_root()
     target = prj.name if ws and prj.resolve().parent == (ws / ANALYSIS).resolve() else str(prj)
-    print(f"\nWrote {lp}\nCheck the n / treatment names (edit the CSV if needed), then run:  cellcount run \"{target}\"")
+    print(f"\nWrote {lp}\nCheck the n / treatment names (edit the CSV if needed), then run:  kerncount run \"{target}\"")
 
 
 def cmd_init(a):
@@ -102,7 +102,7 @@ def _projects(a) -> list[Path]:
         prjs = [ws / ANALYSIS / e for e in _experiments(ws) if (ws / ANALYSIS / e / "settings.toml").exists()]
         missing = [e for e in _experiments(ws) if not (ws / ANALYSIS / e / "settings.toml").exists()]
         if missing:
-            print(f"not initialised yet (run `cellcount init <name>` first): {', '.join(missing)}")
+            print(f"not initialised yet (run `kerncount init <name>` first): {', '.join(missing)}")
         return prjs
     if not a.project:
         sys.exit("give an experiment/project name or --all")
@@ -126,7 +126,7 @@ def cmd_sampling(a):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="cellcount", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(prog="kerncount", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     i = sub.add_parser("init", help="scan raw images and create a project (analysis/<experiment>)")
     i.add_argument("raw_dir", nargs="?", help="experiment name in data/, or a raw folder path")

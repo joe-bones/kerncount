@@ -1,4 +1,4 @@
-# cellcount
+# kerncount
 
 Automated nucleus counting (DAPI), per-cell intensity measurement, quality control, manual
 correction and full statistics from single fields up to all experiments (n) combined.
@@ -15,12 +15,12 @@ Replaces `NucleiCount new.ijm`, the Mean-intensity macros, and the Prism bookkee
 Work in a workspace folder with `data/<experiment>/` (raw images) and `analysis/<experiment>/` (outputs).
 From the workspace folder:
 ```
-cellcount init <experiment>        # or: cellcount init --all
-cellcount run  <experiment>        # or: cellcount run --all
-cellcount sampling <experiment>
+kerncount init <experiment>        # or: kerncount init --all
+kerncount run  <experiment>        # or: kerncount run --all
+kerncount sampling <experiment>
 ```
-Explicit paths also work: `cellcount init <raw folder> <project folder>`, `cellcount run <project folder>`.
-Workspace lookup: the current folder or nearest parent containing `data/`, or `$CELLCOUNT_WORKSPACE`.
+Explicit paths also work: `kerncount init <raw folder> <project folder>`, `kerncount run <project folder>`.
+Workspace lookup: the current folder or nearest parent containing `data/`, or `$KERNCOUNT_WORKSPACE`.
 `settings.toml` stores `raw_dir` relative to the project (`../../data/<experiment>`), so workspaces are movable.
 
 **init** writes `layout.csv` (folder → clean n / treatment names; check once) and `settings.toml` (all
@@ -62,7 +62,7 @@ project/
   at the end.
 - Existing generation folders are **never overwritten by default**. If you change a manual column
   after its generation was built, `run` warns you. To rebuild it on purpose:
-  `cellcount run <experiment> --rebuild g2`, or `--rebuild all`.
+  `kerncount run <experiment> --rebuild g2`, or `--rebuild all`.
 - Before `counts.csv` is rewritten, the previous version is backed up to `_work/backups/`.
 - If your Excel saves CSV with `;`, that is fine; it is detected automatically.
 
@@ -113,7 +113,7 @@ g1/
 ## How many images are needed?
 
 ```
-cellcount sampling "<project folder>"          (uses the latest generation; --generation g2 to choose)
+kerncount sampling "<project folder>"          (uses the latest generation; --generation g2 to choose)
 ```
 Uses the plate design in `settings.toml` `[design]`: 2 plates × 6 fields, images 1–6 = plate 1, 7–12 = plate 2.
 Writes `sampling/<gN>/`:

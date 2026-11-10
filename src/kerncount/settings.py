@@ -63,7 +63,7 @@ DEFAULTS: dict = {
     },
 }
 
-TEMPLATE = '''# cellcount settings — edit freely; anything left out falls back to defaults.
+TEMPLATE = '''# kerncount settings — edit freely; anything left out falls back to defaults.
 
 [project]
 raw_dir = "{raw_dir}"   # raw images; relative paths are relative to this folder
@@ -109,7 +109,7 @@ normalise_to = ["LyoVec", "Control"]
 treatment_order = ["Control", "LyoVec", "CL075"]
 exclude_low_qc = false
 
-[design]                  # used by `cellcount sampling` (how many images are needed?)
+[design]                  # used by `kerncount sampling` (how many images are needed?)
 plates = 2
 fields_per_plate = 6
 plate_layout = "consecutive"   # images 1-6 = plate 1, 7-12 = plate 2; or "alternating" (odd/even)

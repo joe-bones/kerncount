@@ -1,6 +1,6 @@
-# cellcount: automated nucleus counting and analysis
+# kerncount: automated nucleus counting and analysis
 
-`cellcount` replaces a manual Fiji-macro + Prism workflow for fluorescence cell-count experiments with one
+`kerncount` replaces a manual Fiji-macro + Prism workflow for fluorescence cell-count experiments with one
 Python tool. It does the following:
 
 1. Counts nuclei in every image (DAPI), with a deep-learning detector.
@@ -11,12 +11,12 @@ Python tool. It does the following:
 6. Estimates how many images per condition you actually need.
 
 ```
-cellcount/                 (this repository)
+kerncount/                 (this repository)
 ├── README.md              ← this guide
 ├── docs/technical.md      ← algorithms and implementation notes
-├── src/cellcount/         ← the code
+├── src/kerncount/         ← the code
 ├── tests/                 ← unit tests (pytest)
-└── setup.bat / setup.command / cellcount.bat   ← install and launch helpers
+└── setup.bat / setup.command / kerncount.bat   ← install and launch helpers
 ```
 Your images and results live in a separate **workspace** folder, with input and output kept apart:
 ```
@@ -75,8 +75,8 @@ data/<experiment>/                              e.g. data/my_experiment/
    first run, so that run needs internet.
 
 Commands are run from your workspace folder. On Windows, every command below starts with the full path
-to `cellcount.bat` in this folder instead of `cellcount` (e.g. `C:\tools\cellcount\cellcount.bat run my_experiment`).
-On Mac/Linux it is `<this folder>/.venv/bin/cellcount`. Adding that folder to your PATH lets you type just `cellcount`.
+to `kerncount.bat` in this folder instead of `kerncount` (e.g. `C:\tools\kerncount\kerncount.bat run my_experiment`).
+On Mac/Linux it is `<this folder>/.venv/bin/kerncount`. Adding that folder to your PATH lets you type just `kerncount`.
 
 ---
 
@@ -87,10 +87,10 @@ to by their folder name in `data/`.
 
 ### Step 1: create a project (once per experiment)
 ```
-cellcount init my_experiment
+kerncount init my_experiment
 ```
 This scans `data/my_experiment/` and creates `analysis/my_experiment/` with two files
-(`cellcount init --all` does this for every experiment in `data/`):
+(`kerncount init --all` does this for every experiment in `data/`):
 
 - **`layout.csv`** has one row per raw folder. Check the `n` and `treatment` columns. To fix a name, edit it;
   to leave a folder out, set `include` to `no`. The `note` column shows anything unusual
@@ -99,9 +99,9 @@ This scans `data/my_experiment/` and creates `analysis/my_experiment/` with two 
 
 ### Step 2: run the analysis
 ```
-cellcount run my_experiment
+kerncount run my_experiment
 ```
-(`cellcount run --all` runs every initialised experiment.)
+(`kerncount run --all` runs every initialised experiment.)
 The first run takes about 2–3 s per image (roughly 15 min for 370 images). After that, results are
 cached and a re-run takes under a minute. It is **always safe to re-run**.
 
@@ -121,12 +121,12 @@ Open **`analysis/my_experiment/counts.csv`** in Excel:
 | n1_2026-06-05 | miR-21-5p | 9 | 4 | no | low | **x** | | |
 
 - In `manual_1`, type a corrected count, or **`x`** to exclude that image. Leave all other cells empty.
-- Save, then `cellcount run my_experiment` again. This creates generation **g2** (see section 5).
+- Save, then `kerncount run my_experiment` again. This creates generation **g2** (see section 5).
 - A later round of corrections goes into `manual_2`, which makes g3, and so on.
 
 ### Step 5: how many images do we need? (optional)
 ```
-cellcount sampling my_experiment
+kerncount sampling my_experiment
 ```
 Results are written to `analysis/my_experiment/sampling/g<N>/` (section 5.5).
 
@@ -149,17 +149,17 @@ set `segment` to that channel and `[segmentation] backend = "classical"`.
 ### Command options
 | Command | What it does |
 |---|---|
-| `cellcount init <experiment>` | Create `analysis/<experiment>/` from `data/<experiment>/` |
-| `cellcount init --all` | Same for every experiment in `data/` (existing projects are kept) |
-| `cellcount init <experiment> --force` | Re-scan and overwrite `layout.csv` and `settings.toml` |
-| `cellcount run <experiment>` / `--all` | Count, check and analyse one / every experiment |
-| `cellcount run <experiment> --rebuild g2` | Overwrite an existing generation folder (never done by default). `--rebuild all` for all. |
-| `cellcount run <experiment> --resegment` | Ignore the cache and re-detect every nucleus |
-| `cellcount run <experiment> --no-review` | Skip drawing review images (faster) |
-| `cellcount sampling <experiment> --generation g2` | Sampling analysis on a particular generation (default: latest) |
+| `kerncount init <experiment>` | Create `analysis/<experiment>/` from `data/<experiment>/` |
+| `kerncount init --all` | Same for every experiment in `data/` (existing projects are kept) |
+| `kerncount init <experiment> --force` | Re-scan and overwrite `layout.csv` and `settings.toml` |
+| `kerncount run <experiment>` / `--all` | Count, check and analyse one / every experiment |
+| `kerncount run <experiment> --rebuild g2` | Overwrite an existing generation folder (never done by default). `--rebuild all` for all. |
+| `kerncount run <experiment> --resegment` | Ignore the cache and re-detect every nucleus |
+| `kerncount run <experiment> --no-review` | Skip drawing review images (faster) |
+| `kerncount sampling <experiment> --generation g2` | Sampling analysis on a particular generation (default: latest) |
 
-Paths work too, for folders outside a workspace: `cellcount init <raw folder> <project folder>`,
-`cellcount run <project folder>`. Setting the environment variable `CELLCOUNT_WORKSPACE` lets you run
+Paths work too, for folders outside a workspace: `kerncount init <raw folder> <project folder>`,
+`kerncount run <project folder>`. Setting the environment variable `KERNCOUNT_WORKSPACE` lets you run
 by name from anywhere.
 
 ---
@@ -229,7 +229,7 @@ isn't automatically "low". An image with 0 nuclei is always "low" (check for a b
 | `treatment_order` | `["Control", "LyoVec", "CL075"]` | Order in tables and plots; other treatments follow alphabetically |
 | `exclude_low_qc` | `false` | If `true`, images with QC low (and no manual value) are left out of the statistics |
 
-### `[design]`: used by `cellcount sampling`
+### `[design]`: used by `kerncount sampling`
 | Setting | Default | Meaning |
 |---|---|---|
 | `plates` | `2` | Plates (wells) imaged per condition per n |
@@ -397,14 +397,14 @@ exact values.
 ## 6. Typical workflows
 **A new n for an existing experiment**
 1. Put the new n folder into `data/<experiment>/` (same structure as the others).
-2. `cellcount init <experiment>`. Your `layout.csv` is kept and a fresh scan is written to `layout.new.csv`;
+2. `kerncount init <experiment>`. Your `layout.csv` is kept and a fresh scan is written to `layout.new.csv`;
    copy the new rows into `layout.csv` (check the names).
-3. `cellcount run <experiment>`. Only the new images are processed; the rest come from the cache.
+3. `kerncount run <experiment>`. Only the new images are processed; the rest come from the cache.
    Existing generations are not overwritten. Rebuild them on purpose with `--rebuild` once the new n is checked.
 
 **A new experiment**
 1. Create `data/<new experiment>/` with one folder per n.
-2. `cellcount init <new experiment>`, check `layout.csv`, then `cellcount run <new experiment>`.
+2. `kerncount init <new experiment>`, check `layout.csv`, then `kerncount run <new experiment>`.
 
 **Then, for either:** check the red and orange tiles in `review/*_overview.jpg`, correct counts in
 `counts.csv` → `manual_1`, and run again. Report from the latest generation: `generations/g<N>/results.xlsx`,
@@ -413,7 +413,7 @@ the `all_n/` plots, and the Prism CSVs.
 ## 7. Troubleshooting
 | Problem | Fix |
 |---|---|
-| "project not found" / "raw folder not found" | Run the command from the workspace folder (the one containing `data/`), check the experiment name, and run `cellcount init <experiment>` first. |
+| "project not found" / "raw folder not found" | Run the command from the workspace folder (the one containing `data/`), check the experiment name, and run `kerncount init <experiment>` first. |
 | First run fails while downloading the model | The StarDist model downloads once on first use; connect to the internet and run again. |
 | `counts.csv` opens as one column in Excel | Set `csv_delimiter = ";"` in `settings.toml` (European Excel). Files Excel re-saves with `;` are read correctly either way. |
 | `run` fails to write `counts.csv` (Windows) | Close the file in Excel first; Excel locks open files. |

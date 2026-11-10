@@ -129,7 +129,7 @@ def run(project_dir: Path, rebuild: list[str] | None = None, resegment: bool = F
     s = prj.settings
     layout_path = prj.path / "layout.csv"
     if not layout_path.exists():
-        raise SystemExit(f"{layout_path} not found - run 'cellcount init' first")
+        raise SystemExit(f"{layout_path} not found - run 'kerncount init' first")
     layout = discover.read_table(layout_path)
     recs, warns = discover.records(layout, prj.raw_dir())
     for w in warns:
@@ -222,7 +222,7 @@ def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebui
             if old.get("fingerprint") != g["fingerprint"]:
                 log(f"  WARNING: {g['name']} already exists but counts.csv now gives different values for it "
                     f"(automatic counts or {g['source']} changed). It was NOT overwritten. "
-                    f"To rebuild it: cellcount run \"{prj.path}\" --rebuild {g['name']}")
+                    f"To rebuild it: kerncount run \"{prj.path}\" --rebuild {g['name']}")
             else:
                 log(f"  {g['name']}: up to date")
             continue
@@ -285,7 +285,7 @@ def sampling(project_dir: Path, generation: str | None = None, iterations: int =
     root = prj.path / "generations"
     gens = sorted((p for p in root.glob("g*") if (p / "counts_used.csv").exists()), key=lambda p: int(p.name[1:]))
     if not gens:
-        raise SystemExit("no generations yet - run `cellcount run` first")
+        raise SystemExit("no generations yet - run `kerncount run` first")
     g = root / generation if generation else gens[-1]
     used = pd.read_csv(g / "counts_used.csv")
     used = used[~used["excluded"].astype(bool)].assign(value=lambda d: d["count"])
