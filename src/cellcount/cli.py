@@ -4,7 +4,7 @@ Workspace convention (recommended):
     <workspace>/data/<experiment>/       raw images (input, never modified)
     <workspace>/analysis/<experiment>/   project: settings, counts.csv, review images, results
 Run commands from the workspace folder and refer to experiments by name:
-    cellcount init DAPI_output      cellcount run DAPI_output      cellcount run --all
+    cellcount init my_experiment    cellcount run my_experiment    cellcount run --all
 Explicit paths also work:  cellcount init RAW_DIR PROJECT_DIR  /  cellcount run PROJECT_DIR
 """
 from __future__ import annotations
