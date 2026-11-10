@@ -84,3 +84,22 @@ def test_merge_oversplit_joins_lobes_not_neighbours():
 def test_holm_and_stars():
     assert analysis.holm([0.01, 0.04, 0.03]) == pytest.approx([0.03, 0.06, 0.06])
     assert analysis.stars(0.00001) == "****" and analysis.stars(0.2) == "ns"
+
+
+def test_significance_marks_only_where_significant(tmp_path):
+    from cellcount import settings as st_mod
+    rng = np.random.default_rng(0)
+    rows = []
+    for n in ["n1", "n2", "n3", "n4"]:
+        for t, mu in [("LyoVec", 100), ("Strong", 30), ("Null", 100)]:
+            for i in range(1, 13):
+                rows.append(dict(n=n, treatment=t, image=i, value=rng.normal(mu, 8)))
+    df = pd.DataFrame(rows)
+    s = st_mod.DEFAULTS
+    st = analysis.per_n(df, "count", "nuclei", "n1", tmp_path, s)
+    marks = analysis.significance_marks(st, "LyoVec", "Dunnett")
+    assert "Strong" in marks and "Null" not in marks
+    _, st_all = analysis.all_n(df, "count", "nuclei", tmp_path, s)
+    marks_all = analysis.significance_marks(st_all, "LyoVec", "vs LyoVec (")
+    assert "Strong" in marks_all and "Null" not in marks_all
+    assert (tmp_path / "count.png").exists() and (tmp_path / "count_pct_of_LyoVec.png").exists()

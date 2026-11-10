@@ -60,9 +60,24 @@ def prism_table(groups: dict[str, list[float]], row_titles: list[str] | None = N
 
 # ---------------------------------------------------------------- plotting
 
-def _bar_plot(order, values: dict, err: str, ylabel: str, title: str, out: Path, point_colour=None, ref_line=None):
-    fig, ax = plt.subplots(figsize=(max(4, 0.8 * len(order) + 1.5), 4))
+def significance_marks(st: pd.DataFrame, ref: str, test_contains: str) -> dict[str, str]:
+    """{treatment: stars} for significant comparisons '<t> vs <ref>' of one test family."""
+    out = {}
+    if st is None or st.empty:
+        return out
+    fam = st[st["test"].str.contains(test_contains, regex=False) & st["comparison"].str.endswith(f" vs {ref}")]
+    for _, r in fam.iterrows():
+        mark = stars(r["p_adj"])
+        if mark and mark != "ns":
+            out[r["comparison"][: -len(f" vs {ref}")]] = mark
+    return out
+
+
+def _bar_plot(order, values: dict, err: str, ylabel: str, title: str, out: Path, point_colour=None, ref_line=None,
+              sig: dict | None = None, ref: str | None = None, footer: str = "", legend: dict | None = None):
+    fig, ax = plt.subplots(figsize=(max(4.5, 0.8 * len(order) + 1.5), 4.4))
     rng = np.random.default_rng(0)
+    tops = {}
     for i, t in enumerate(order):
         v = np.asarray([x for x in values.get(t, []) if not np.isnan(x)])
         if len(v) == 0:
@@ -73,13 +88,30 @@ def _bar_plot(order, values: dict, err: str, ylabel: str, title: str, out: Path,
         ax.errorbar(i, m, yerr=e, color="black", capsize=4, zorder=3)
         cols = point_colour(t) if point_colour else ["black"] * len(v)
         ax.scatter(i + rng.uniform(-0.15, 0.15, len(v)), v, s=16, c=cols, zorder=4, edgecolors="none")
+        tops[t] = max(v.max(), m + e)
     if ref_line is not None:
         ax.axhline(ref_line, color="grey", lw=0.8, ls="--")
+    lo, hi = ax.get_ylim()
+    pad = 0.04 * (hi - lo)
+    for i, t in enumerate(order):
+        if t not in tops:
+            continue
+        if sig and t in sig:
+            ax.text(i, tops[t] + pad, sig[t], ha="center", va="bottom", fontsize=11, fontweight="bold")
+        elif ref and t == ref and sig is not None:
+            ax.text(i, tops[t] + pad, "ref", ha="center", va="bottom", fontsize=8, color="grey")
+    ax.set_ylim(lo, hi + 4 * pad)
     ax.set_xticks(range(len(order)), order, rotation=45, ha="right")
     ax.set_ylabel(ylabel)
     ax.set_title(title, fontsize=10)
     ax.spines[["top", "right"]].set_visible(False)
-    fig.tight_layout()
+    if legend:
+        from matplotlib.lines import Line2D
+        handles = [Line2D([], [], marker="o", ls="", color=c, markersize=5, label=k) for k, c in legend.items()]
+        ax.legend(handles=handles, fontsize=7, frameon=False, loc="upper left", bbox_to_anchor=(1.0, 1.0))
+    if footer:
+        fig.text(0.01, 0.005, footer, fontsize=6.5, color="#444444", ha="left", va="bottom", wrap=True)
+    fig.tight_layout(rect=(0, 0.06 if footer else 0, 1, 1))
     fig.savefig(out.with_suffix(".png"), dpi=200)
     fig.savefig(out.with_suffix(".pdf"))
     plt.close(fig)
@@ -108,7 +140,9 @@ def per_n(df: pd.DataFrame, metric: str, label: str, n: str, out_dir: Path, sett
 
     st = []
     valid = {t: v for t, v in groups.items() if len(v) >= 2}
-    ref = a["reference"]
+    # reference for this n: the configured reference, or the next control group if it is missing here
+    candidates = list(dict.fromkeys([a["reference"]] + list(a["normalise_to"])))
+    ref = next((c for c in candidates if c in valid), a["reference"])
     if len(valid) >= 2:
         f, p = stats.f_oneway(*valid.values())
         st.append(dict(test="one-way ANOVA (fields as replicates, descriptive)", comparison="all", statistic=f, p=p, p_adj=p))
@@ -116,12 +150,20 @@ def per_n(df: pd.DataFrame, metric: str, label: str, n: str, out_dir: Path, sett
             others = [t for t in valid if t != ref]
             res = stats.dunnett(*[valid[t] for t in others], control=valid[ref])
             for t, pv, sv in zip(others, res.pvalue, res.statistic):
-                st.append(dict(test="Dunnett vs reference (fields, descriptive)", comparison=f"{t} vs {ref}",
+                st.append(dict(test=f"Dunnett vs {ref} (fields, descriptive)", comparison=f"{t} vs {ref}",
                                statistic=sv, p=pv, p_adj=pv))
     st = pd.DataFrame(st, columns=["test", "comparison", "statistic", "p", "p_adj"])
     st["significance"] = [stars(p) for p in st["p_adj"]]
     st.to_csv(out_dir / f"{metric}_stats.csv", index=False)
-    _bar_plot(order, groups, "SD", label, f"{n}: {label} per field (mean ± SD)", out_dir / metric)
+    has_dunnett = st["test"].str.startswith("Dunnett").any()
+    marks = significance_marks(st, ref, "Dunnett") if has_dunnett else None
+    if has_dunnett:
+        foot = (f"Stars: Dunnett vs {ref} (fields = technical replicates; describes this experiment only). "
+                "* p<0.05  ** p<0.01  *** p<0.001  **** p<0.0001; no mark = not significant.")
+    else:
+        foot = f"No comparison possible: no control group with >= 2 fields in this n."
+    _bar_plot(order, groups, "SD", label, f"{n}: {label} (mean ± SD; dots = fields)", out_dir / metric,
+              sig=marks, ref=ref, footer=foot)
     return st.assign(n=n)
 
 
@@ -209,14 +251,25 @@ def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: di
     st["significance"] = [stars(p) for p in st["p_adj"]]
     st.to_csv(out_dir / f"{metric}_stats.csv", index=False)
 
+    def foot_for(ref_):
+        anova = st[st["test"].str.startswith("RM one-way ANOVA")]
+        a_txt = (f"RM one-way ANOVA p={anova['p'].iloc[0]:.2g} ({stars(anova['p'].iloc[0])}). "
+                 if len(anova) and not np.isnan(anova["p"].iloc[0]) else "")
+        return (f"{a_txt}Stars: ratio paired t-test vs {ref_} across n, Holm-adjusted. "
+                "* p<0.05  ** p<0.01  *** p<0.001  **** p<0.0001; no mark = not significant.")
+
     vals = {t: means[t].tolist() for t in order}
     colour = lambda t: [ncol[n] for n in means.index if not np.isnan(means.at[n, t])]
-    _bar_plot(order, vals, "SEM", label, f"All n: {label} (mean of n ± SEM; dots = n)", out_dir / metric, colour)
+    main_ref = next((r_ for r_ in refs if r_ in means), None)
+    _bar_plot(order, vals, "SEM", label, f"All n: {label} (mean of n ± SEM; dots = n)", out_dir / metric, colour, legend=ncol,
+              sig=significance_marks(st, main_ref, f"vs {main_ref} (") if main_ref else None, ref=main_ref,
+              footer=foot_for(main_ref) if main_ref else "")
     for ref_, pct in norms.items():
         pv = {t: pct[t].tolist() for t in order}
         colour_p = lambda t, pct=pct: [ncol[n] for n in pct.index if not np.isnan(pct.at[n, t])]
         _bar_plot(order, pv, "SEM", f"{label} (% of {ref_})", f"All n: % of {ref_} (mean ± SEM)",
-                  out_dir / f"{metric}_pct_of_{ref_}", colour_p, ref_line=100)
+                  out_dir / f"{metric}_pct_of_{ref_}", colour_p, ref_line=100, legend=ncol,
+                  sig=significance_marks(st, ref_, f"vs {ref_} ("), ref=ref_, footer=foot_for(ref_))
     legend = pd.DataFrame({"n": ns, "colour": [ncol[n] for n in ns]})
     legend.to_csv(out_dir / "n_colours.csv", index=False)
     return summ.reset_index(), st
