@@ -5,5 +5,7 @@ py -3.12 -m venv .venv || python -m venv .venv
 .venv\Scripts\python -m pip install --upgrade pip
 .venv\Scripts\python -m pip install -e .
 echo.
-echo Done. Use cellcount.bat, e.g.:  cellcount.bat run "D:\my_project"
+echo Done. From your workspace folder (containing data\ and analysis\), run e.g.:
+echo    "%~dp0cellcount.bat" init my_experiment
+echo    "%~dp0cellcount.bat" run my_experiment
 pause

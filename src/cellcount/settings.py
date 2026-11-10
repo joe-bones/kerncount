@@ -66,7 +66,7 @@ DEFAULTS: dict = {
 TEMPLATE = '''# cellcount settings — edit freely; anything left out falls back to defaults.
 
 [project]
-raw_dir = "{raw_dir}"
+raw_dir = "{raw_dir}"   # raw images; relative paths are relative to this folder
 date_order = "DMY"        # n-folder dates: 05.06.26 = 5 June 2026
 csv_delimiter = ","       # set to ";" if Excel (German/European locale) shows everything in one column
 
@@ -137,7 +137,15 @@ def load(project_dir: Path) -> dict:
 
 
 def write_template(project_dir: Path, raw_dir: Path) -> None:
-    raw = str(Path(raw_dir).resolve()).replace("\\", "/")
+    """raw_dir is stored relative to the project folder when possible, so a workspace can be moved."""
+    import os
+
+    raw_abs, prj_abs = Path(raw_dir).resolve(), Path(project_dir).resolve()
+    try:
+        raw = os.path.relpath(raw_abs, prj_abs)
+    except ValueError:  # different drives on Windows
+        raw = str(raw_abs)
+    raw = raw.replace("\\", "/")
     (Path(project_dir) / "settings.toml").write_text(TEMPLATE.format(raw_dir=raw), encoding="utf-8")
 
 

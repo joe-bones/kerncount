@@ -18,15 +18,26 @@ cellcount/                 (this repository)
 ├── tests/                 ← unit tests (pytest)
 └── setup.bat / setup.command / cellcount.bat   ← install and launch helpers
 ```
-Your raw images and your results live elsewhere: a raw folder (input, never modified) and a
-project folder (settings, counts file, review images, results).
+Your images and results live in a separate **workspace** folder, with input and output kept apart:
+```
+my_workspace/                    ← run all commands from this folder
+├── data/                        ← INPUT: one folder per experiment (raw images; never modified)
+│   ├── my_experiment/
+│   └── another_experiment/
+└── analysis/                    ← OUTPUT: one project per experiment, same name as in data/
+    ├── my_experiment/
+    └── another_experiment/
+```
+Nothing in `data/` is ever changed; everything produced for an experiment is in `analysis/<experiment>/`.
 
 ---
 
 ## 1. Input: how the raw data must be organised
 
+Each experiment is one folder in `data/`:
+
 ```
-<raw folder>/                                   e.g. raw_images/
+data/<experiment>/                              e.g. data/my_experiment/
 ├── <one folder per n (experiment)>/            e.g. "05.06.26 DAPI count"
 │   ├── <one folder per treatment>/             e.g. "hsamiRNA 21-5p", "LyoVec veh. cntrl", "cntrl"
 │   │   ├── 1.tif
@@ -63,18 +74,23 @@ project folder (settings, counts file, review images, results).
    This takes a few minutes and about 1 GB. The StarDist model (~5 MB) downloads automatically on the
    first run, so that run needs internet.
 
-On Windows, every command below starts with `cellcount.bat` (in this folder) instead of `cellcount`.
-On Mac/Linux it is `.venv/bin/cellcount`.
+Commands are run from your workspace folder. On Windows, every command below starts with the full path
+to `cellcount.bat` in this folder instead of `cellcount` (e.g. `C:\tools\cellcount\cellcount.bat run my_experiment`).
+On Mac/Linux it is `<this folder>/.venv/bin/cellcount`. Adding that folder to your PATH lets you type just `cellcount`.
 
 ---
 
 ## 3. How to use it
 
-### Step 1: create a project (once per dataset)
+Run every command from the workspace folder (the one that contains `data/`). Experiments are referred
+to by their folder name in `data/`.
+
+### Step 1: create a project (once per experiment)
 ```
-cellcount init "raw_images" "analysis"
+cellcount init my_experiment
 ```
-This scans the raw folder and creates `analysis/` with two files:
+This scans `data/my_experiment/` and creates `analysis/my_experiment/` with two files
+(`cellcount init --all` does this for every experiment in `data/`):
 
 - **`layout.csv`** has one row per raw folder. Check the `n` and `treatment` columns. To fix a name, edit it;
   to leave a folder out, set `include` to `no`. The `note` column shows anything unusual
@@ -83,19 +99,20 @@ This scans the raw folder and creates `analysis/` with two files:
 
 ### Step 2: run the analysis
 ```
-cellcount run "analysis"
+cellcount run my_experiment
 ```
+(`cellcount run --all` runs every initialised experiment.)
 The first run takes about 2–3 s per image (roughly 15 min for 370 images). After that, results are
 cached and a re-run takes under a minute. It is **always safe to re-run**.
 
 ### Step 3: review the counts
-Open `analysis/review/<n>/<treatment>_overview.jpg`. There is one sheet per treatment, showing every field
+Open `analysis/my_experiment/review/<n>/<treatment>_overview.jpg`. There is one sheet per treatment, showing every field
 with its count and a border coloured by quality: **green = high, orange = medium, red = low**.
 For a closer look, open the single image `review/<n>/<treatment>/<NN>.jpg`
 (left: original; right: what was counted). Start with the red ones.
 
 ### Step 4: correct counts by hand (optional)
-Open **`analysis/counts.csv`** in Excel:
+Open **`analysis/my_experiment/counts.csv`** in Excel:
 
 | n | treatment | image | auto_count | qc_ok | qc_level | manual_1 | manual_2 | manual_3 |
 |---|---|---|---|---|---|---|---|---|
@@ -104,14 +121,14 @@ Open **`analysis/counts.csv`** in Excel:
 | n1_2026-06-05 | miR-21-5p | 9 | 4 | no | low | **x** | | |
 
 - In `manual_1`, type a corrected count, or **`x`** to exclude that image. Leave all other cells empty.
-- Save, then `cellcount run "analysis"` again. This creates generation **g2** (see section 5).
+- Save, then `cellcount run my_experiment` again. This creates generation **g2** (see section 5).
 - A later round of corrections goes into `manual_2`, which makes g3, and so on.
 
 ### Step 5: how many images do we need? (optional)
 ```
-cellcount sampling "analysis"
+cellcount sampling my_experiment
 ```
-Results are written to `analysis/sampling/g<N>/` (section 5.5).
+Results are written to `analysis/my_experiment/sampling/g<N>/` (section 5.5).
 
 ### Measuring a second channel (e.g. a marker in C2)
 For multi-channel TIFFs (C1 = DAPI, C2 = signal), set in `settings.toml`:
@@ -132,11 +149,18 @@ set `segment` to that channel and `[segmentation] backend = "classical"`.
 ### Command options
 | Command | What it does |
 |---|---|
-| `cellcount run <project> --rebuild g2` | Overwrite an existing generation folder (never done by default). `--rebuild all` for all. |
-| `cellcount run <project> --resegment` | Ignore the cache and re-detect every nucleus |
-| `cellcount run <project> --no-review` | Skip drawing review images (faster) |
-| `cellcount sampling <project> --generation g2` | Run the sampling analysis on a particular generation (default: latest) |
-| `cellcount init <raw> <project> --force` | Re-scan and overwrite `layout.csv` and `settings.toml` |
+| `cellcount init <experiment>` | Create `analysis/<experiment>/` from `data/<experiment>/` |
+| `cellcount init --all` | Same for every experiment in `data/` (existing projects are kept) |
+| `cellcount init <experiment> --force` | Re-scan and overwrite `layout.csv` and `settings.toml` |
+| `cellcount run <experiment>` / `--all` | Count, check and analyse one / every experiment |
+| `cellcount run <experiment> --rebuild g2` | Overwrite an existing generation folder (never done by default). `--rebuild all` for all. |
+| `cellcount run <experiment> --resegment` | Ignore the cache and re-detect every nucleus |
+| `cellcount run <experiment> --no-review` | Skip drawing review images (faster) |
+| `cellcount sampling <experiment> --generation g2` | Sampling analysis on a particular generation (default: latest) |
+
+Paths work too, for folders outside a workspace: `cellcount init <raw folder> <project folder>`,
+`cellcount run <project folder>`. Setting the environment variable `CELLCOUNT_WORKSPACE` lets you run
+by name from anywhere.
 
 ---
 
@@ -147,7 +171,7 @@ Edit with any text editor. A setting you delete falls back to its default.
 ### `[project]`
 | Setting | Default | Meaning |
 |---|---|---|
-| `raw_dir` | (set by init) | Where the raw images are |
+| `raw_dir` | (set by init) | Where the raw images are. Stored relative to the project folder (`../../data/<experiment>`), so the whole workspace can be moved or copied. |
 | `date_order` | `"DMY"` | How dates in n-folder names are written (`DMY`, `MDY`, `YMD`) |
 | `csv_delimiter` | `","` | Use `";"` if your Excel (German/European locale) shows CSVs in one column. Reading auto-detects either. |
 
@@ -223,7 +247,7 @@ isn't automatically "low". An image with 0 nuclei is always "low" (check for a b
 ## 5. Output: what comes out and how to read it
 
 ```
-analysis/
+analysis/<experiment>/
 ├── settings.toml, layout.csv     your settings and folder mapping
 ├── counts.csv                    ★ THE file to work from: one row per image, all n's, manual columns
 ├── qc_details.csv                every per-image measurement (see 5.2)
@@ -370,17 +394,26 @@ exact values.
 
 ---
 
-## 6. Typical workflow for a new experiment
-1. Put the new n folder into the raw folder (same structure as before).
-2. `cellcount init "<raw>" "<project>"` (only for a brand-new project). For an existing project, add the new
-   folders to `layout.csv` (or re-run `init` and compare with `layout.new.csv`).
-3. `cellcount run "<project>"`.
-4. Check the red/orange tiles in `review/*_overview.jpg`. Correct counts in `counts.csv` → `manual_1` and run again.
-5. Report from the latest generation: `generations/g<N>/results.xlsx`, `all_n/` plots, and Prism CSVs.
+## 6. Typical workflows
+**A new n for an existing experiment**
+1. Put the new n folder into `data/<experiment>/` (same structure as the others).
+2. `cellcount init <experiment>`. Your `layout.csv` is kept and a fresh scan is written to `layout.new.csv`;
+   copy the new rows into `layout.csv` (check the names).
+3. `cellcount run <experiment>`. Only the new images are processed; the rest come from the cache.
+   Existing generations are not overwritten. Rebuild them on purpose with `--rebuild` once the new n is checked.
+
+**A new experiment**
+1. Create `data/<new experiment>/` with one folder per n.
+2. `cellcount init <new experiment>`, check `layout.csv`, then `cellcount run <new experiment>`.
+
+**Then, for either:** check the red and orange tiles in `review/*_overview.jpg`, correct counts in
+`counts.csv` → `manual_1`, and run again. Report from the latest generation: `generations/g<N>/results.xlsx`,
+the `all_n/` plots, and the Prism CSVs.
 
 ## 7. Troubleshooting
 | Problem | Fix |
 |---|---|
+| "project not found" / "raw folder not found" | Run the command from the workspace folder (the one containing `data/`), check the experiment name, and run `cellcount init <experiment>` first. |
 | First run fails while downloading the model | The StarDist model downloads once on first use; connect to the internet and run again. |
 | `counts.csv` opens as one column in Excel | Set `csv_delimiter = ";"` in `settings.toml` (European Excel). Files Excel re-saves with `;` are read correctly either way. |
 | `run` fails to write `counts.csv` (Windows) | Close the file in Excel first; Excel locks open files. |

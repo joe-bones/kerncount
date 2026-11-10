@@ -12,21 +12,19 @@ Replaces `NucleiCount new.ijm`, the Mean-intensity macros, and the Prism bookkee
 
 ## Use
 
+Work in a workspace folder with `data/<experiment>/` (raw images) and `analysis/<experiment>/` (outputs).
+From the workspace folder:
 ```
-cellcount init  "<raw image folder>"  "<project folder>"
-cellcount run   "<project folder>"
+cellcount init <experiment>        # or: cellcount init --all
+cellcount run  <experiment>        # or: cellcount run --all
+cellcount sampling <experiment>
 ```
-On Windows, `cellcount.bat` runs the same commands without activating anything:
-`cellcount.bat run "D:\analysis"`.
+Explicit paths also work: `cellcount init <raw folder> <project folder>`, `cellcount run <project folder>`.
+Workspace lookup: the current folder or nearest parent containing `data/`, or `$CELLCOUNT_WORKSPACE`.
+`settings.toml` stores `raw_dir` relative to the project (`../../data/<experiment>`), so workspaces are movable.
 
-**init** scans the raw folder and writes two files into the project folder:
-
-- `layout.csv` lists one row per raw folder, mapping messy folder names to clean names (`n1_2026-06-05`,
-  `miR-21-5p`, `LyoVec`, ...). Check it once; edit `treatment` or set `include` to `no` if needed.
-- `settings.toml` holds all parameters, with comments. The defaults are sensible.
-
-**run** does everything, and is safe to repeat at any time. Segmentation is cached, so a repeat run
-after a manual correction takes seconds.
+**init** writes `layout.csv` (folder → clean n / treatment names; check once) and `settings.toml` (all
+parameters, commented). **run** does everything, is safe to repeat, and caches segmentation.
 
 ### Raw folder layout expected
 ```
@@ -64,7 +62,7 @@ project/
   at the end.
 - Existing generation folders are **never overwritten by default**. If you change a manual column
   after its generation was built, `run` warns you. To rebuild it on purpose:
-  `cellcount run <project> --rebuild g2`, or `--rebuild all`.
+  `cellcount run <experiment> --rebuild g2`, or `--rebuild all`.
 - Before `counts.csv` is rewritten, the previous version is backed up to `_work/backups/`.
 - If your Excel saves CSV with `;`, that is fine; it is detected automatically.
 

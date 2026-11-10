@@ -103,3 +103,22 @@ def test_significance_marks_only_where_significant(tmp_path):
     marks_all = analysis.significance_marks(st_all, "LyoVec", "vs LyoVec (")
     assert "Strong" in marks_all and "Null" not in marks_all
     assert (tmp_path / "count.png").exists() and (tmp_path / "count_pct_of_LyoVec.png").exists()
+
+
+def test_workspace_init_by_name(tmp_path, monkeypatch):
+    import tifffile
+    from cellcount import cli, settings as st_mod
+
+    for exp in ("expA", "expB"):
+        d = tmp_path / "data" / exp / "01.02.26 run" / "cntrl"
+        d.mkdir(parents=True)
+        tifffile.imwrite(d / "1.tif", np.zeros((16, 16), np.uint16))
+    monkeypatch.chdir(tmp_path)
+    cli.main(["init", "expA"])
+    prj = tmp_path / "analysis" / "expA"
+    assert (prj / "layout.csv").exists()
+    s = st_mod.load(prj)
+    assert s["project"]["raw_dir"] == "../../data/expA"  # relative: the workspace can be moved
+    assert cli.resolve_project("expA") == prj.resolve()
+    cli.main(["init", "--all"])
+    assert (tmp_path / "analysis" / "expB" / "settings.toml").exists()
