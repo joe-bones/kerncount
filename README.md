@@ -70,7 +70,9 @@ data/<experiment>/                              e.g. data/my_experiment/
 
 ## 2. Install (once per computer)
 
-1. Install **Python 3.12** from python.org (3.11 or newer works; 3.12 is recommended for TensorFlow). On Windows, tick *"Add python.exe to PATH"*.
+1. **Mac/Linux:** install **Python 3.12** from python.org (3.11 or newer works; 3.12 is recommended for TensorFlow).
+   **Windows:** nothing to install first, and no admin rights needed: `setup.bat` fetches Python 3.12 itself
+   (via [uv](https://docs.astral.sh/uv/)) into your user folder (`%LOCALAPPDATA%\kc`).
 2. Download this repository (green **Code** button → *Download ZIP*, or `git clone`).
 3. Double-click `setup.bat` (Windows) or run `setup.command` (Mac/Linux).
    This takes a few minutes and about 1 GB. The StarDist model (~5 MB) downloads automatically on the

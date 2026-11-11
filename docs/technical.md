@@ -6,7 +6,7 @@ Replaces `NucleiCount new.ijm`, the Mean-intensity macros, and the Prism bookkee
 
 ## Install (once)
 
-1. Install **Python 3.12** from python.org (Windows: tick "Add python.exe to PATH").
+1. Mac/Linux: install **Python 3.12** from python.org. Windows: nothing; `setup.bat` gets Python 3.12 via uv into `%LOCALAPPDATA%\kc` (no admin, short path to avoid TensorFlow hitting the 260-char limit).
 2. Double-click `setup.bat` (Windows) or run `./setup.command` (Mac).
    This creates a private environment in `.venv` and installs everything (~1 GB, mostly TensorFlow).
 
