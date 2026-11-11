@@ -36,7 +36,7 @@ REM 3. Smoke test: TensorFlow is the usual failure point.
 "%VENV%\Scripts\python.exe" -c "import tensorflow, stardist, kerncount; print('kerncount OK, TensorFlow', tensorflow.__version__)" || goto :tf_fail
 
 echo.
-echo Done. From your workspace folder (containing data\ and analysis\), run e.g.:
+echo Done. Double-click kerncount-gui.bat to work in your browser, or from your workspace folder (containing data\ and analysis\), run e.g.:
 echo    "%~dp0kerncount.bat" init my_experiment
 echo    "%~dp0kerncount.bat" run my_experiment
 pause

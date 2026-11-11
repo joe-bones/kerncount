@@ -125,6 +125,12 @@ def cmd_sampling(a):
         pipeline.sampling(prj, a.generation, a.iterations)
 
 
+def cmd_gui(a):
+    from . import gui
+
+    gui.serve(a.workspace, a.port, not a.no_browser)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="kerncount", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -148,6 +154,11 @@ def main(argv=None):
     m.add_argument("--generation", default=None, help="e.g. g2 (default: latest)")
     m.add_argument("--iterations", type=int, default=1000)
     m.set_defaults(func=cmd_sampling)
+    g = sub.add_parser("gui", help="open the point-and-click web interface in your browser")
+    g.add_argument("workspace", nargs="?", help="workspace folder (default: found automatically)")
+    g.add_argument("--port", type=int, default=8765)
+    g.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
+    g.set_defaults(func=cmd_gui)
     a = p.parse_args(argv)
     a.func(a)
 

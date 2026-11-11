@@ -18,7 +18,7 @@ kerncount/                 (dieses Repository)
 ├── docs/technical.md      ← Algorithmen und Implementierungshinweise
 ├── src/kerncount/         ← der Code
 ├── tests/                 ← Unit-Tests (pytest)
-└── setup.bat / setup.command / kerncount.bat   ← Hilfsdateien für Installation und Start
+└── setup.bat / setup.command / kerncount.bat / kerncount-gui.*   ← Hilfsdateien für Installation und Start
 ```
 Ihre Bilder und Ergebnisse liegen in einem separaten **Arbeitsbereich** (Workspace), in dem Eingabe und Ausgabe getrennt sind:
 ```
@@ -88,6 +88,15 @@ Unter Mac/Linux lautet er `<dieser Ordner>/.venv/bin/kerncount`. Wenn Sie diesen
 
 Führen Sie jeden Befehl aus dem Arbeitsbereich-Ordner aus (dem Ordner, der `data/` enthält). Experimente werden
 über ihren Ordnernamen in `data/` angesprochen.
+
+### Ohne Befehle: die Weboberfläche
+Doppelklicken Sie auf **`kerncount-gui.bat`** (Windows) bzw. **`kerncount-gui.command`** (Mac). Im Browser öffnet
+sich eine Seite mit einer Zeile pro Experiment und Knöpfen für jeden der folgenden Schritte (**1 Set up**,
+**2 Run**, **Sampling**) sowie Knöpfen, die Layout, Einstellungen, Kontrollbilder, `counts.csv` und die
+Excel-Ergebnisse öffnen. Das Protokoll zeigt den Fortschritt live; **Stop** bricht einen Lauf ab. Lassen Sie das
+schwarze Fenster während der Arbeit offen und schließen Sie es zum Beenden. Die Seite funktioniert nur auf diesem
+Computer, und es wird nichts nach außen gesendet. Die Einstellungen unter *Options* entsprechen den
+Befehlsoptionen am Ende dieses Abschnitts. Dasselbe aus einem Terminal: `kerncount gui`.
 
 ### Schritt 1: Projekt anlegen (einmal pro Experiment)
 ```

@@ -18,7 +18,7 @@ kerncount/                 (this repository)
 ├── docs/technical.md      ← algorithms and implementation notes
 ├── src/kerncount/         ← the code
 ├── tests/                 ← unit tests (pytest)
-└── setup.bat / setup.command / kerncount.bat   ← install and launch helpers
+└── setup.bat / setup.command / kerncount.bat / kerncount-gui.*   ← install and launch helpers
 ```
 Your images and results live in a separate **workspace** folder, with input and output kept apart:
 ```
@@ -88,6 +88,14 @@ On Mac/Linux it is `<this folder>/.venv/bin/kerncount`. Adding that folder to yo
 
 Run every command from the workspace folder (the one that contains `data/`). Experiments are referred
 to by their folder name in `data/`.
+
+### Without commands: the web interface
+Double-click **`kerncount-gui.bat`** (Windows) or **`kerncount-gui.command`** (Mac). A page opens in your
+browser with one row per experiment and buttons for every step below (**1 Set up**, **2 Run**, **Sampling**),
+plus buttons that open the layout, settings, review images, `counts.csv` and the Excel results.
+The log shows progress live; **Stop** cancels a run. Keep the black window open while you work and close it
+to quit. The page only works on this computer, and nothing is sent anywhere else. The options under *Options*
+match the command options listed at the end of this section. The same thing from a terminal: `kerncount gui`.
 
 ### Step 1: create a project (once per experiment)
 ```
