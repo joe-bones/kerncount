@@ -245,6 +245,9 @@ tuning.preview(project_dir, cutoff, channel=None, n=None, measure="mean", field_
     -> {"cutoff", "channel", "measure", "nuclei", "positive", "frac_positive", "lod_frac_positive"}
 tuning.suggest_range(project_dir, channel=None, measure="mean") -> {"min", "max", "lod_median", ...}
 tuning.lock(project_dir, channel, cutoff, field_ids, measure="mean", n=None) -> the stored lock
+tuning.field_id(project_dir, n, treatment, image) -> opaque id of a known field
+    # NOT blinded: only for views that already show the condition (the browser's review page uses it to call
+    # render(cutoff=None) for a per-field marker overlay); the tuning view never calls it
 ```
 
 Errors: `tuning.TuningError` (unknown field / channel, project not run). Cut-off units: signal = mean inside the

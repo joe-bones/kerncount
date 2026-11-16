@@ -1,0 +1,125 @@
+# The browser interface (`kerncount gui`)
+
+Everything a biologist needs is possible in the browser, without code. The page talks to a small local server
+(`src/kerncount/gui.py`, standard library only, so it starts instantly) and is plain HTML/CSS/JavaScript in
+`src/kerncount/web/` (no build step, no external libraries: it works offline).
+
+Words follow `CONTEXT.md` (n, condition / treatment, well, field, form item). Result contracts:
+`docs/statistics.md` (generation `manifest.json`, `stats_long.csv`), `docs/intensity.md` (`intensity/manifest.json`,
+tuning API), `docs/planner.md` (`planner.json`, planner API).
+
+## Pages
+
+The left sidebar lists the experiments; the active experiment expands into its sections. Every view has a deep link
+in the URL hash, `#<experiment>/<section>?key=value&...`, so a link (or a bookmark, or a headless screenshot)
+reopens exactly that view.
+
+| section | what it shows | hash parameters |
+|---|---|---|
+| **Experiment home** (`home`) | header card with the experiment metadata (cell line, magnification, seeding density, stain, channel layout, negative control, references); the **Attention** panel; the n's with date, timepoint, conditions, images, QC-low share and acceptance (dot colour = the n's colour in every plot, from `n_colours.csv`); the design summary (`design_check.csv`); the generations and their status; the **Run** actions (set up, run, rebuild generations, sampling, wells template, plate maps) with their options. The live log is docked at the bottom on every page. | `anchor` |
+| **Results explorer** (`results`) | driven by `generations/gN/manifest.json`. Choose the generation, the level (all n, per cell line when several; per n; per treatment), the metric (grouped: Counts, Readouts, Intensity per channel; labels, units, kinds and estimands from the manifest) and the view (Absolute, Relative, Model, Comparisons, Robustness, Diagnostics, Design, Tables). Each plot shows its title, one-sentence description, PDF/PNG download, and enlarges on click. **Relative, comparison and robustness views always show the absolute plots of the same metric next to them.** With one n the "needs ≥ 2 n" state is stated above the plots. Only the selected plots are loaded (lazy images). | `gen, level, folder, n, t, metric, view` |
+| **Statistics table** (`stats`) | `stats_long.csv` as an interactive table: filters (level, n, cell line, metric, family, estimate type, significance incl. "needs ≥ 2 n", test source: mixed model / classical / descriptive, comparison text), sorting by any column, readable numbers (ratios `0.29×`, percentage points `+1.2 pp`, p `<0.0001`), the estimand on every row, significant rows highlighted, "needs ≥ 2 n" badges, export of the filtered view to CSV (in the browser), and a click on a row opens the plot it belongs to. | `gen, level, n, cl, metric, fam, et, sig, src, q, sort, dir, limit` |
+| **Layer comparison** (`layers`, fluorescence only) | the readout ladder per channel: the five layers and what each step changes; the ladder plot per reference (all n and per n) with the absolute version below it; the concordance table with a coloured call per layer and its plain-language summary ("the call changes at step 2→3 …"; red rows flip direction); the density scatters (generation and `intensity/`) and a link to the counts. | `gen, ch, lvl, ref` |
+| **Intensity & cut-off** (`intensity`, fluorescence only) | tabs: *Cut-offs & flat field* (cut-off rule and value per n and measure, % positive with / without flat field, locks and their history; flat-field maps with their magnitude; cut-off sweep), *Distributions & density*, *Channel checks* (alignment plot, flagged and mis-paired fields with their files), and the **blinded tuning view** (below). | `tab`; tuning: `ch, measure, scope, k, seed, field, cutoff` |
+| **Review images** (`review`) | review sheets per n and treatment; every field shows its source file(s) (`source_file`, `source_file_<channel>`), duplicates are marked; the lightbox steps through fields with arrow keys and takes corrections. Fluorescence experiments: **Show Ki67 positivity** draws the marker image with positive / negative / saturated outlines at the cut-off in force, with the condition shown (this is the non-blinded view). | `n, t, field, overlay, q` |
+| **Corrections** (`corrections`) | the manual-count editor that builds generations (g1 + round 1 → g2 …), unchanged; field numbers carry their source files as a tooltip. | |
+| **Planner** (`planner`) | from `sampling/gN/planner.json` via `planner.load / evaluate / curve`: sliders and selects for n, wells, fields, effect (a ratio or the observed effect of a treatment), reference, reference wells, alpha, target power and field positions; live power, CI half-width, smallest detectable ratio and effort, each with its pessimistic–optimistic band; a live SVG chart of the curve (vary n / wells / fields; power or CI width, with the band, target line and "your design" marker); the plain-language notes; "Recommendations for the next experiment" from `REPORT.txt`; the static planner plots and tables; and the sampling run. Without ≥ 2 n with the reference the page says so and shows the report only. | `gen, n, wells, fields, effect, ref, rw, alpha, power, pos, vary, show` |
+| **Plate maps** (`plates`) | a form (plates, format 6/12/24/48/96, wells per condition, reference wells or auto, avoid edge, balance, seed, negative-control name and wells) → `platemap.plan_project` in-process → the plate PNGs, edge-use table, README (seed and the command that recreates the maps), PDF/CSV downloads; earlier plans in `plans/`. | `plan` |
+| **Layout**, **Settings**, **All files** | layout.csv editor (n, date, timepoint, treatment, include); every setting as a form (all form-item kinds: bool, int, float, choice, multi, list, num_or, measure, names, table, text, with help text and defaults; settings that re-detect nuclei are marked); after saving, the page lists the steps that need re-running with a Start button each; the project folder browser. | `sec` (jump to a settings section) |
+
+Visual language: absolute = blue, relative = orange, model = purple, comparisons = teal, robustness = green,
+diagnostics = grey, design = brown, layers = magenta (`--k-*` in `app.css`); n's always use the plot colours.
+Confirmations are in-page (`confirmBox`); the browser's own dialogs are never used.
+
+### The Attention panel
+
+`gui.attention_items` gathers every issue, most serious first (error → warn → info), each with a plain-language
+explanation and a link to the evidence (a table, or the page that shows it): duplicate images across conditions
+(`duplicates.csv`), acceptance failures (`acceptance.csv` of the latest generation), mis-paired and shifted channel
+files (`intensity/alignment.csv`), design flags (`design_check.csv`), a high QC-low share per n, model fallbacks
+(`manifest.model_status`), the one-n notice, an automatic cut-off that calls almost every nucleus positive, a
+missing negative control, a locked cut-off not yet applied, settings changed after the latest generation, and a
+fresh folder scan (`layout.new.csv`).
+
+### What needs re-running after a settings change
+
+`gui.rerun_advice(before, after)`: a changed form item marked `reseg` → a run that re-detects every nucleus (slow);
+another change in project / experiment / channels / segmentation / counting / qc / intensity / positivity /
+readouts / design / review → a run (detections reused) with `--rebuild all`; analysis / acceptance → `regen
+--rebuild all` (statistics only); planner → the sampling analysis. The page shows these steps with Start buttons.
+
+## Endpoints
+
+All answers come from `127.0.0.1` only. Every request must be addressed to `127.0.0.1:<port>` or
+`localhost:<port>` (Host header; an Origin header, if present, must match too), which blocks other websites and DNS
+rebinding. Every API call and file needs the per-session token (`X-Token` header, or `?t=` for GETs such as images);
+`/` embeds it in the page. File paths are resolved inside the project folder (`gui.inside`) and generation names
+must match `g<number>`.
+
+| method | path | answer |
+|---|---|---|
+| GET | `/`, `/static/<file>` | the page (token embedded), the scripts and styles (only files directly in `web/`) |
+| GET | `/file?exp&path[&dl]` | a file inside the project |
+| GET | `/api/state`, `/api/log?since` | experiments (with `intensity` flag), running job; job log lines |
+| GET | `/api/project?exp` | settings, form schema (`items`), generations, n colours, sampling / planner generations |
+| GET | `/api/overview?exp` | experiment home: metadata, n's, design summary, generations, attention items, cut-offs |
+| GET | `/api/manifest?exp&gen` | `{manifest, colours}` (cached by file mtime) |
+| GET | `/api/stats?exp&gen` | `stats_long.csv` as `{columns, rows}` ("nan" → "") |
+| GET | `/api/review`, `/api/counts`, `/api/table`, `/api/text`, `/api/files` | review index (with `sources`, `marker`, `duplicate` per field), counts.csv, any CSV / text, folder listing |
+| GET | `/api/intensity?exp` | `intensity/manifest.json`, locks (without file names) and their history |
+| GET | `/api/tuning/info?exp` | marker channels, lock scopes (n's), locks, history |
+| GET | `/api/tuning/range?exp&channel&measure` | slider range: `min, max, lod_median` |
+| POST | `/api/tuning/sample` `{experiment, channel, k, seed, n}` | `{seed, channel, fields: [{field_id, nuclei}]}` |
+| GET | `/api/tuning/render?exp&field&channel&cutoff&measure` | PNG (token-checked) |
+| GET | `/api/tuning/preview?exp&cutoff&channel&measure&n&fields` | overall % positive in the scope and in the sampled fields; the automatic rule's % |
+| POST | `/api/tuning/lock`, `/api/tuning/unlock` | lock (via `tuning.lock`) / remove a lock; both append to `history` in `cutoffs.json` |
+| GET | `/api/field_overlay?exp&n&treatment&image&channel` | PNG of a known field with outlines at the cut-off in force (non-blinded; review page only) |
+| GET | `/api/planner?exp&gen` | design, options, effects, components, notes, recommendations, sampling manifest; `ok` / `error` |
+| POST | `/api/planner/evaluate` `{experiment, gen, n, wells, fields, effect, reference_wells, alpha, target_power, reference, positions, vary}` | `{result: planner.evaluate(...), curve: planner.curve(...), vary}` |
+| GET | `/api/plans?exp` | earlier plate maps (plates, files, README, edge use) and form defaults |
+| POST | `/api/platemap` | `platemap.plan_project(...)` in-process (validated options); returns the new folder |
+| POST | `/api/start` `{action: init / run / regen / sampling / wells-template / platemap, options}`, `/api/stop`, `/api/quit` | jobs (`python -m kerncount.cli ...` subprocess, one at a time) |
+| POST | `/api/settings`, `/api/settings_reset`, `/api/layout`, `/api/layout_use_new`, `/api/counts`, `/api/open`, `/api/workspace`, `/api/browse`, `/api/new_experiment` | small edits, with the command line's validation; `/api/settings` also returns `{changed, steps}` (what to re-run) |
+
+The scientific modules (`planner`, `tuning`, `platemap`) are imported on first use and warmed up in a background
+thread when the server starts; manifests, `stats_long.csv` and plans are cached and re-read when the file changes.
+On the review workspace a page loads in well under a second; the tuning slider re-renders a field in about 30-90 ms.
+
+## How blinding is guaranteed (cut-off tuning)
+
+1. **Opaque ids only.** `/api/tuning/sample` returns `{seed, channel, fields: [{field_id, nuclei}]}`: the salted
+   hash ids of `kerncount.tuning` (salt in `_work/tuning_salt`), in random order (round robin over conditions inside
+   the module). The server rebuilds the answer field by field, so the requested `n` (the lock scope) is not echoed and
+   nothing else from the module's internals passes through.
+2. **No per-condition result.** `/api/tuning/preview` returns only overall numbers: the % positive of the whole scope
+   (every n, or the one n chosen as the lock scope), of the sampled fields together, and of the automatic rule.
+3. **Images carry no label.** `/api/tuning/render` returns PNG bytes of the marker image with outlines; the field
+   is addressed only by its opaque id.
+4. **Locks without file names.** `tuning.lock` records the fields' files in `cutoffs.json` for the audit trail;
+   every answer the page receives (`/api/tuning/lock`, `/api/tuning/info`, `/api/intensity`) strips them
+   (`fields` becomes a count).
+5. **The page shows nothing else.** The tuning tab shows the field index, opaque id and nucleus count, the slider,
+   and the overall %; it never calls the review, overlay or results endpoints and displays nothing else. The only n
+   names on the tab are the lock-scope choices the user makes ("every n" or one n) and the scope of earlier locks,
+   which say nothing about the field on screen.
+6. **Tested.** `tests/test_gui.py::test_tuning_endpoints_are_blinded` runs the pipeline on a small synthetic
+   interleaved project and checks that no tuning answer contains a condition name, a folder name, a file name or
+   an n label.
+
+The non-blinded per-field overlay of the review page uses a separate endpoint (`/api/field_overlay`, addressed by
+n / condition / field, via `tuning.field_id`), so the two views cannot be mixed up. The lock confirmation explains
+that the value must be fixed before looking at the statistics and that a run applies it, and then offers to start
+the run.
+
+## Tests
+
+`tests/test_gui.py` (default suite): token, Host and Origin checks on every kind of endpoint; path confinement
+(`/file`, `/api/table`, `/static`, generation names, unknown experiments); the scripts parse (`node --check` when
+node is installed) and never use the browser's dialogs; manifest / stats_long serving; the experiment home and its
+attention items; the planner endpoints (bands ordered, curve, input validation); the plate-map endpoint and job
+arguments; a settings round-trip for every form-item kind; the re-run advice; the blinded tuning endpoints and the
+review overlay on a real (synthetic) run.
+
+Visual check: headless Chrome (`--headless=new --window-size=1440,1000 --virtual-time-budget=8000 --screenshot`)
+on deep links such as `#Ki67/intensity?tab=tune&cutoff=300&seed=7&field=1` or
+`#DAPI_output/planner?n=6&effect=0.7`.

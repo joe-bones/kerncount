@@ -331,3 +331,14 @@ def lock(project_dir, channel: str, cutoff: float, field_ids: list[str], measure
         files.append(dict(field_id=fid, files=[str(x) for x in f["rec"].sources]))
     return positivity.save_lock(p.path, ch, float(cutoff), list(field_ids), measure=measure, n=n,
                                 extra=dict(field_files=files, units="mean - local background, / flat field"))
+
+
+def field_id(project_dir, n: str, treatment: str, image: int) -> str:
+    """The opaque id of one known field, for NON-blinded views only (the browser's review page shows a field's
+    marker overlay next to its condition, outside the tuning view). Raises TuningError if that field has no
+    per-nucleus measurements (e.g. a mis-paired field or a project without a marker channel)."""
+    p = _project(project_dir)
+    fid = p.by_key.get((str(n), str(treatment), int(image)))
+    if fid is None:
+        raise TuningError(f"no marker measurements for {n} / {treatment} / field {image}")
+    return fid
