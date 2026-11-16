@@ -15,12 +15,62 @@ Absolute values are never replaced by percentages. Every table and plot set give
 `kerncount.metrics.registry(columns, settings)` decides which per-field columns are analysed. Every registered
 column goes through every statistic below.
 
-| column | kind | analysis scale | results reported as |
+| column | kind | analysis scale (model unit = well, default) | headline effect (estimand) |
 |---|---|---|---|
-| `count` (nuclei per field) | count | log(count + 0.5) | ratio; geometric mean in nuclei per field |
-| `intensity_*` | positive | log(value) | ratio; geometric mean in intensity units |
-| `nuclei_per_mm2` | positive | log(value) | ratio; geometric mean in nuclei/mm² |
-| `readout_*` | from `classify.READOUTS`, else `readout_frac_*` = fraction, others positive | log or logit | ratio, or odds ratio for fractions; mean = proportion |
+| `count` (nuclei per field) | count | log(well mean + 0.5) | **ratio of mean nuclei per field**; means in nuclei per field |
+| `intensity_*` | positive | log(well mean) | ratio of mean intensity; means in intensity units |
+| `nuclei_per_mm2` | positive | log(well mean) | ratio of mean nuclei/mm² |
+| `readout_*` | from `classify.READOUTS`, else `readout_frac_*` = fraction, others positive | log, or logit of the pooled well fraction | ratio; fractions: **difference in percentage points** (odds ratio and % of reference secondary); means in % of nuclei |
+
+The estimand is written into every table (`estimand` column of contrasts, model means and `stats_long.csv`), the
+manifest (`estimands`) and every model plot footer.
+
+### Model unit and estimand (`[analysis] model_unit`)
+Biologists read "0.4 × LyoVec" as "40% of the mean nuclei per field of LyoVec". The earlier model used one row per
+field on log(count + 0.5); that compares **geometric** means of fields, which sparse, uneven miRNA fields drag down
+(real data: ratios vs LyoVec 0.21–0.36 against 0.27–0.52 for ratios of mean nuclei per field).
+
+- `model_unit = "well"` (default): one row per well. Count / positive metrics: the arithmetic mean of the well's
+  fields, analysed as log(mean). Fractions: positives and nuclei pooled over the well's fields, K / N, analysed on
+  the empirical logit. Every well is imaged at the same positions, so position effects cancel in well means.
+- **Missing or excluded fields** (e.g. 11 images): a plain mean of the fields present would inherit the position
+  pattern (bright / dense centre fields). Such a well gets a **position-adjusted mean** = Σ fields present /
+  Σ r_p over their positions, where r_p is that n's position pattern (field / well mean, averaged over the n's
+  complete wells, normalised to mean 1). This is a ratio estimator: it equals the plain mean for a complete well
+  and is unbiased for a well missing fields when the pattern is multiplicative. Without a complete well in that n,
+  or with `[design] field_positions = "random"`, the plain mean is used (noted). Fractions are pooled over the
+  fields present without position adjustment (the pooled fraction already weights fields by their nuclei).
+  Tested in `tests/test_estimands.py::test_position_adjusted_well_mean_with_missing_fields`.
+- `model_unit = "field"`: the earlier field-level model (position and well random terms), kept as an option.
+- Small-sample note: the log of a mean of 6 very uneven fields is itself slightly low (Jensen). In a simulation
+  with treated fields of log-SD 1.1 and a true ratio 0.5, the well unit gave 0.40 on average, the ratio of the pooled
+  means 0.44, the field unit 0.27.
+
+### Fractions (`readout_frac_*`, % Ki-67-positive)
+Model on the logit scale with one row per well: y = log((K + 0.5) / (N − K + 0.5)). This is a binomial-type model
+with overdispersion: each well carries its **known binomial sampling variance** 1/(K + 0.5) + 1/(N − K + 0.5)
+(added to V; the variance of the empirical logit), and the well-to-well, n and n × treatment variances are
+estimated on top. Why not simply weight by nuclei: a nuclei weight lets a dense well dominate even when
+well-to-well biology is the main noise; a pure binomial model ignores that overdispersion and is overconfident.
+Here a well with few nuclei counts less, and a big well cannot buy precision the biology does not give.
+
+**Headline: difference in percentage points** vs each reference, with its 95% (and simultaneous) CI, beside the
+absolute % per condition (`percent`, `percent_ci_low/high` in `<m>_model_means.csv`). The pp difference is
+expit(μ_a) − expit(μ_b) at the model means. Its CI is computed by back-transforming the model's uncertainty:
+4000 draws of (μ_a, μ_b) from the bivariate t with the model covariance and the contrast's df, then the 2.5 / 97.5 %
+quantiles of 100·(expit(μ_a) − expit(μ_b)) (simultaneous CI: the quantiles matching the family's critical value;
+fixed seed, so reproducible). Why not the delta method: it was tried first and, with the real out-of-focus
+fractions (0.2–3 %), its symmetric intervals ran below −p_b for every comparison and had to be clipped to the
+impossible-value boundary; the back-transformed draws stay in the possible range, are asymmetric near 0 % and
+include the uncertainty of both levels. Back-transforming only the two marginal CIs separately cannot give a CI
+for their difference. The p-value and stars come from the logit-scale test, which tests the same null hypothesis
+p_a = p_b and behaves better near 0 % than a test on the % scale (so a pp CI can just touch 0 when the logit test is
+borderline). The odds ratio
+(`estimate`, `ci_low/high`) and % of the reference (`pct_of_comparator` = 100 p_a / p_b) are in the tables, never
+the headline: the out-of-focus fraction is 0 in most control images, and a ratio of near-zero fractions means
+nothing. The model % is that of a typical well (logit-normal median); `observed_mean` gives the pooled fraction
+averaged over n's for comparison. Nuclei N per field: counted nuclei (`count`), or count / (1 − f) for
+`readout_frac_out_of_focus` (out of focus / (counted + out of focus); `Metric.denominator`).
 
 Why log: effects are multiplicative. Baselines differ between n's (62–90 nuclei per field in the current data),
 and a treatment that removes 70% of cells removes 70% whatever the baseline. On the log scale such effects are
@@ -61,24 +111,32 @@ the footer, `model_status` in the manifest and the About sheet say so.
 
 ## 3. The hierarchical model
 
-Fitted per metric to the field-level data (one row per field):
+Fitted per metric. Default unit = well (one row per well, section 1); with `model_unit = "field"` one row per field:
 
 ```
 y = treatment                      (fixed; + timepoint when >= 2 timepoints are known)
   + n                              random intercept: day / plate / passage
   + n × treatment                  random, a SEPARATE variance for each treatment class
+  + residual                       well unit: well-to-well (+ known binomial variance for fractions)
+  field unit only:
   + well within n × treatment      random (only if some condition has >= 2 wells)
   + field position within n        random n:position (only if [design] field_positions = "fixed")
   + field residual
 ```
 
-- **Treatment classes** (`[analysis] classes`, e.g. `{ mirna = ["miR-*"] }`; `*` is a wildcard). Default: the
-  control groups (`reference` + `normalise_to`) form the class `controls`, everything else `treatments`. With
-  classes defined, unmatched controls stay in `controls` and other unmatched treatments go to `other`. A class
-  with fewer than 3 n × treatment cells cannot have its own variance; one common variance is then used.
-  Each class's n × treatment variance says how much that kind of treatment's effect changes from experiment to
-  experiment. This is the fix for the overconfident pooled error.
-- **Position**: a random n:position term, not fixed position effects. Every treatment is imaged at the same
+- **Treatment classes** (`[analysis] classes`). **Default `"auto"`: one class per non-control treatment, the
+  control groups (`reference` + `normalise_to`) pooled in `controls`.** Each comparison then rests on the
+  n-to-n variability of its own treatment (plus the controls'), like the ratio paired t-test but using all wells.
+  Pooling several treatments in one class was shown to give a type I error of 0.16 for a treatment that varies
+  more than the rest of its class (table below); `"auto"` removes that failure mode. Other settings: `{}` =
+  `controls` vs everything else (`treatments`; the earlier default), or a table `{ mirna = ["miR-*"] }` (`*` is a
+  wildcard; unmatched controls stay in `controls`, other unmatched treatments go to `other`). A class with
+  several treatments needs >= 3 n × treatment cells, a one-treatment class >= 2 (2 n's); otherwise one common
+  variance is used (noted). A treatment present in only one n has no n × treatment term (its single cell is
+  absorbed by its fixed effect; its comparisons are "needs ≥ 2 n").
+- **One well per condition** (well unit): the well-to-well residual is not identifiable next to n × treatment;
+  it is held at ~0 and reported as "not identifiable".
+- **Position** (field unit): a random n:position term, not fixed position effects. Every treatment is imaged at the same
   positions, so position hardly changes the treatment estimates; it removes a big chunk of field-to-field noise
   (24% of the variance in the current counts) and its variance is reported. It is nested in n because the
   pattern differs between days. With fixed positions the n-level shift and the position pattern share
@@ -107,24 +165,37 @@ rate. kerncount uses a t distribution with:
   "not estimable" and no p-value.
 - Estimated means use Satterthwaite capped at (n's with that treatment) − 1.
 
-**Null simulation** (4 n's, 8 treatments, 2 wells × 6 positions, variance components like the real counts, no
-true effects; 150 data sets per row; `vs LyoVec` family):
+**Null simulation of the default** (`model_unit = "well"`, `classes = "auto"`): 8 treatments (Control, LyoVec,
+CL075, 5 miRNAs), 2 wells × 6 fixed positions, Poisson-lognormal field counts (~70 per field; n variance 0.05,
+well 0.03, position 0.1, field log-SD 0.45), no true effect on the mean nuclei per field; with 4 n's LyoVec is
+missing in one n (as in the real data). `vs LyoVec` family, 7 comparisons per data set; 400 data sets per row
+(300 for the last three scenarios). Script: `tests/sim_null.py` (quick versions in
+`tests/test_estimands.py::test_type_one_error_default_including_misspecification` and
+`tests/test_models.py::test_null_type_one_error_is_roughly_nominal_at_four_n`).
 
-| scenario | per-comparison rate (p < 0.05) | family-wise (adjusted p < 0.05) |
+| scenario (n × treatment variances) | n's | per-comparison (p < 0.05) | family-wise (adj. p < 0.05) | the odd treatment (miR-1) |
+|---|---|---|---|---|
+| treatments 0.1, controls 0 | 3 / 4 / 6 | 0.025 / 0.027 / 0.032 | 0.018 / 0.013 / 0.040 | 0.023 / 0.040 / 0.035 |
+| none anywhere | 3 / 4 / 6 | 0.003 / 0.009 / 0.023 | 0.000 / 0.003 / 0.008 | 0.005 / 0.018 / 0.018 |
+| treatments 0.3, controls 0 | 3 / 4 / 6 | 0.041 / 0.047 / 0.040 | 0.048 / 0.058 / 0.073 | 0.033 / 0.050 / 0.050 |
+| **misspecified for pooled classes**: miR-1 0.3, other treatments 0.02 | 3 / 4 / 6 | 0.015 / 0.014 / 0.028 | 0.017 / 0.010 / 0.017 | **0.067 / 0.050 / 0.047** |
+| controls unequal: LyoVec 0.1, Control 0, treatments 0.1 | 3 / 4 / 6 | 0.037 / 0.050 / 0.057 | 0.027 / 0.040 / 0.067 | 0.040 / 0.033 / 0.043 |
+| uneven fields: miRNA field log-SD 1.0 vs 0.4, equal means | 3 / 4 / 6 | 0.016 / 0.014 / 0.037 | 0.020 / 0.013 / 0.030 | 0.027 / 0.020 / 0.040 |
+
+Comparison at 4 n's, 200 data sets (earlier settings):
+
+| settings | misspecified: per-comparison / family-wise / miR-1 | uneven fields: per-comparison / family-wise |
 |---|---|---|
-| treatments n × treatment variance 0.1, controls 0 | 0.043 | 0.027 |
-| no n × treatment variance anywhere | 0.035 | 0.033 |
-| treatments 0.3, controls 0 | 0.051 | 0.060 |
-| treatments 0.1, controls 0.03 | 0.041 | 0.040 |
-| **misspecified**: one treatment 0.3, the rest of its class 0.02 | 0.038 overall, **0.16 for that treatment** | 0.113 |
+| well unit, `classes = {}` (controls vs the rest) | 0.046 / 0.090 / **0.225** | 0.021 / 0.010 |
+| field unit, `classes = {}` (the previous default) | 0.043 / 0.105 / **0.230** | **0.172 / 0.240** |
 
-So the test is close to nominal when the classes are right. It is **not** protected against one treatment that
-varies much more than the rest of its class: the class variance is pooled. Check the per-n effect plot
-(`<metric>_per_n_ratio_vs_<control>.png`) and leave-one-n-out; if one treatment is much more variable, give it
-its own class (e.g. `classes = { mir132 = ["miR-132-5p"], mirna = ["miR-*"] }`). Giving every treatment its own
-class is the most conservative setting (each comparison then rests on its own n-to-n variability, like the ratio
-paired t-test but with field-level information). The quick version of this simulation runs in
-`tests/test_models.py::test_null_type_one_error_is_roughly_nominal_at_four_n`.
+So: (1) pooling the n × treatment variance of several treatments lets the most variable one through about one
+time in four-five; one class per treatment ("auto") keeps it at nominal. (2) The field-level model tests geometric
+means of fields: when treated fields are much more uneven, it reports "effects" on the mean nuclei per field that
+do not exist (17% false positives); the well unit does not. (3) The default is somewhat conservative when there is
+little n-to-n variation (rates 0.003–0.03), the price of letting every treatment carry its own n-to-n variance with
+3–6 n's. The per-comparison rate stays at or below ~0.06 in every scenario. With unequal controls (LyoVec varies,
+Control does not, both in the pooled `controls` class) the rate reaches 0.057 at 6 n's.
 
 ### Multiplicity: comparison families
 Within each family the p-values are adjusted by the **single-step multivariate t** method (Dunnett-type; the
@@ -152,18 +223,70 @@ df; the 90% CI is reported.
 ### Outputs per metric (`all_n/`)
 | file | content |
 |---|---|
-| `<m>_model_means.csv`, `<m>_model_absolute.png` | estimated marginal means per treatment **in absolute units** (geometric means, proportions for fractions) with 95% CI and % of each control; plot with per-n means (coloured) and fields (grey) |
-| `<m>_contrasts.csv`, `<m>_forest_<family>.png` | every comparison: ratio (odds ratio), 95% CI, simultaneous CI, % of comparator, t, df, p, adjusted p, stars / equivalence verdict |
+| `<m>_model_means.csv`, `<m>_model_absolute.png` | estimated marginal means per treatment **in absolute units** (mean per field; proportions + `percent` for fractions) with 95% CI, `estimand`, `observed_mean`, `wells`, `fields`, `note` and % of each control; plot with per-n values (coloured) and fields (grey) |
+| `<m>_contrasts.csv`, `<m>_forest_<family>.png` | every comparison: `estimand`, ratio (odds ratio for fractions), 95% CI, simultaneous CI, `pct_of_comparator`; fractions also `pp_difference` with `pp_ci_low/high(_adj)`, `pct_group`, `pct_comparator`; t, df, p, adjusted p, stars / equivalence verdict, note. Fraction forest plots show percentage points |
 | `<m>_variance_components.csv/.png` | variance per level (n, n × treatment per class, well, position, field) on the log scale, SD, ≈ CV, % of total, approximate CI (Wald on log-variance from the expected information; flagged "too uncertain" or "at zero" when not meaningful; residual: chi-square) |
 | `<m>_diagnostics.png` | residuals vs fitted, normal QQ, estimated random effects per n |
 | `<m>_model_info.csv` | model used, formula, df rule, convergence, estimation, notes, failed attempts |
 | `<m>_loo.csv`, `<m>_loo_summary.csv` | leave-one-n-out with the primary test (estimate, CI, p, adjusted p for every drop) and per comparison `stable = yes/no` (same direction **and** same significance whichever n is dropped) |
-| `<m>_per_n_ratios.csv`, `<m>_per_n_ratio_vs_<control>.png` | the effect in every n: ratio of geometric means (model scale) and ratio of arithmetic means |
+| `<m>_per_n_ratios.csv`, `<m>_per_n_ratio_vs_<control>.png` | the effect in every n: `ratio` (model scale), `ratio_of_means`, `pp_difference` (fractions), technical interval `tech_ci_low/high` + `interval` (descriptive) |
+| `<fraction>_density_adjusted_means.csv`, `_density_adjusted_contrasts.csv`, `_density.png` | density-adjusted model (section 3, density) |
 | `count_position_effect.png` | the position pattern per n |
 
-Note on estimates: the model ratio is a ratio of **geometric** means of fields. When the treated fields are much
-more uneven than the control fields (miRNA wells with a few dense and many sparse fields), it is smaller than the
-ratio of arithmetic means used by the % tables and the ratio t-test. Both are in the tables.
+Note on estimates: with the default well unit the model ratio is a ratio of **mean nuclei per field** (averaged
+over wells and n's on the log scale), the quantity of the % tables and the ratio t-test. With `model_unit =
+"field"` it is a ratio of geometric means of fields, which is smaller when the treated fields are much more uneven.
+
+### One n, and comparisons without 2 n's
+The all-n level keeps **exactly the same files, columns and plot layout** whatever the number of n's.
+- With one n, estimates are filled in from that n (N = 1): model means, ratios / pp differences, per-n effects,
+  Dunnett differences, ratio t-test ratios. Every across-n CI, p-value and star is empty (NaN in tables) with the
+  note **"needs ≥ 2 n"** (`note` columns; `model_status.across_n_inference = false`; plot footers). No stars are
+  drawn. Field or well variation is never used to make one experiment look like a biological test: the two-way
+  ANOVA treatment × n is written as empty tables and a plot without tests; the variance-components table shows
+  only the well-to-well variance, labelled "descriptive: technical replicates".
+- The same applies with 2+ n's to any comparison where fewer than 2 n's contain both groups ("needs ≥ 2 n
+  containing both groups"), and to the ratio t-test rows with fewer than 2 pairs.
+- The per-n level carries technical intervals, labelled **"descriptive: technical replicates"**: the 95% CI of
+  the field mean (`ci_low`, `ci_high`, `interval` in `<n>/<m>_summary.csv`) and the technical 95% interval of each
+  per-n effect (`tech_ci_low`, `tech_ci_high` in `all_n/<m>_per_n_ratios.csv`; from the field SEs, delta method on
+  the log ratio, or the ratio-estimator SE of a pooled fraction).
+
+### Cell lines are never pooled
+If the per-image table carries a `cell_line` column (from the design layer; "" = unknown) with more than one
+non-empty value, the all-n analysis runs once per cell line in **`all_n/<cell line>/`** (rows with an empty
+cell line form `all_n/unknown/`). One line (or no column): `all_n/` as before. Per-n folders are unaffected.
+Manifest: `cell_lines`, `all_n_folders` (cell_line, path, n_count), `cell_line` on every file entry,
+`model_status` keyed `<cell line>/<metric>`; `stats_long.csv` has a `cell_line` column.
+
+### Negative control
+`[experiment] negative_control` (a treatment name; "" = none) only sets positivity cut-offs. Its images are kept
+in `counts_used.csv` (excluded, source "negative control (cut-off only; not analysed)") and left out of every test,
+plot and summary of the generation; listed in the About sheet, README and manifest (`negative_control`, `notes`).
+
+### Density-adjusted estimates (fraction metrics)
+`[analysis] density_covariate` (default `readout_coverage`; "" = off). For every fraction metric a second model
+adds the well mean of the covariate (centred; position-adjusted like the response) as a fixed effect on the logit
+scale. Adjusted means and pp differences are at the average density of all wells; the raw estimate stays the
+headline. Outputs: `<m>_density_adjusted_means.csv` (with `raw_percent`), `<m>_density_adjusted_contrasts.csv`
+(with `raw_pp_difference`, the slope, `density_overlap`, `density_flag`), `all_n/<m>_density.png` (wells, colour =
+treatment, marker = n, lines = adjusted model per treatment) and `<n>/<m>_density.png` (fields with a descriptive
+common-slope fit within that n). Stats_long families `... (density-adjusted)`.
+
+**Overlap criterion**: for a comparison a vs b, overlap = min(share of a's wells whose density lies inside b's
+min–max well range, share of b's wells inside a's range). If overlap < 0.5 the row is flagged **"conditions do not
+overlap in density; adjusted estimate not trustworthy"**: the adjustment would then extrapolate the density slope
+outside the data of one group, so it rests on the assumed straight line, not on comparable wells. Treatments that
+kill or detach cells (the miRNAs) usually fail this check, which is the point: their fractions cannot be separated
+from their crowding by this data.
+
+### Duplicate raw images
+`build_generations` hashes (SHA-256) every raw file listed in `qc_details.csv` (`source_file`), caching hashes by
+path, size and mtime in `_work/file_hashes.json` (a re-run reads only new or changed files). Images sharing
+content are written to `duplicates.csv` in the project folder (columns group, n, treatment, image, source_file,
+hash, copies, cross_condition, shared_with; copied into the generation), a WARNING is logged, the affected n /
+treatments are listed in the About sheet, README and manifest (`duplicates`, `notes`), and the acceptance
+criterion `no_duplicate_images` fails for an n with an image shared across conditions.
 
 ## 4. Acceptance criteria per n (`[acceptance]`)
 Checked on the counts of every n and written to `acceptance.csv` (n, criterion, value, limit, result = pass /
@@ -175,6 +298,7 @@ fail / not applicable, detail; plus one `overall` row per n):
 | `positive_control_max_ratio` | "" (off) | positive control / primary reference ≤ value (or ≥ value if value > 1) |
 | `min_images_per_condition` | 3 | every condition has at least this many usable images |
 | `max_low_qc_fraction` | 0.5 | at most this share of the n's images are QC low |
+| `no_duplicate_images` | true | no raw image of that n is byte-identical to an image of another condition (not applicable when the files were not checked) |
 | `enforce` | false | true: failing n's are left out of every all-n statistic (listed in About and the manifest) |
 
 ## 5. `stats_long.csv`: every result in one table
@@ -186,17 +310,23 @@ One row per test result, for interactive filtering. Columns:
 | `level` | `n` (within one experiment) or `all_n` |
 | `n` | the n for level `n`, else empty |
 | `metric` | metric id (see `manifest.json` `metrics`) |
-| `family` | `vs <control>`, `vehicle check (equivalence)`, `vs positive control X`, `within class C (all pairs)`, `omnibus`, `all pairs (two-way)`, `estimated means`, `<family> (leave-one-n-out)`, `vs <control> (per-n ratio)` |
+| `family` | `vs <control>`, `vehicle check (equivalence)`, `vs positive control X`, `within class C (all pairs)`, `omnibus`, `all pairs (two-way)`, `estimated means`, `<family> (leave-one-n-out)`, `<family> (density-adjusted)`, `vs <control> (per-n ratio)`, `vs <control> (per-n difference)` (fractions) |
 | `test` | plain name of the test (e.g. `Dunnett vs LyoVec (RM ANOVA, pooled error; Prism standard)`) |
 | `comparison` | `A vs B`, a treatment (estimated means), a factor (omnibus) or `all` |
 | `estimate` | the effect |
-| `estimate_type` | `ratio`, `odds_ratio`, `difference` (raw-scale difference of means), `mean` (absolute estimated mean); empty for omnibus tests |
+| `estimate_type` | `ratio`, `odds_ratio`, `difference` (raw-scale difference of means), `pp_difference` (difference in percentage points; the headline for fractions), `mean` (absolute estimated mean); empty for omnibus tests. A model comparison of a fraction has two rows with the same test: `pp_difference` (headline) and `odds_ratio` |
 | `ci_low`, `ci_high` | 95% CI (90% for the equivalence test); empty if not available |
 | `p`, `p_adj` | raw and family-adjusted p |
 | `significance` | stars (`ns`, `*` … `****`) or the equivalence verdict |
 | `N` | n's in the comparison (fields for per-n ratios) |
 | `model` | `classical`, `classical (fields as replicates)`, `descriptive`, or the mixed model description |
-| `note` | df, "without nX" for leave-one-out, "not estimable ...", etc. |
+| `note` | df, "without nX" for leave-one-out, "needs ≥ 2 n", density overlap / flag, technical-interval label, etc. |
+| `estimand` | (new) what the estimate is, e.g. `ratio of mean nuclei per field`, `difference in percentage points (pooled per well; logit model)`, `difference in mean nuclei per field` |
+| `cell_line` | (new) cell line of the all-n analysis / of the n; empty with one (unknown) cell line |
+
+Per-n rows (`level = n`, family `(per-n ratio)` / `(per-n difference)`) are descriptive with a technical
+interval in `ci_low/ci_high` (from the fields; label in `note`). With one n every all-n `p`, `ci_*` is empty and
+`significance` is empty.
 
 ## 6. `manifest.json`: every plot and table of a generation
 
@@ -210,14 +340,25 @@ One row per test result, for interactive filtering. Columns:
                "fallback_metrics": [],              // metrics where the mixed model failed (RM ANOVA stars)
                "controls": ["Control", "LyoVec"], "classes": {"controls": [...], "mirna": [...]},
                "positive_control": "CL075" | null, "vehicle_check": ["LyoVec vs Control"],
-               "equivalence_margin": 0.2 },
-  "model_status": { "<metric id>": {
+               "equivalence_margin": 0.2, "classes_mode": "auto" | "two" | "user" },
+  "model_unit": "well" | "field",
+  "estimands": { "count": {"effect": "ratio of mean nuclei per field", "mean": "mean nuclei per field",
+                           "headline": "ratio" | "pp_difference"} },
+  "density_covariate": "readout_coverage" | null,
+  "n_count": 4,
+  "cell_lines": [],                                 // non-empty cell lines; >= 2 = separate all-n folders
+  "all_n_folders": [ {"cell_line": null, "path": "all_n", "n_count": 4} ],
+  "negative_control": {"treatment": null, "present": false},
+  "duplicates": {"checked": true, "images": 24, "cross_condition": 24,
+                 "affected": {"n3_2026-09-29": ["Control", "LyoVec"]}, "summary": ["..."]},
+  "model_status": { "<metric id>" (or "<cell line>/<metric id>"): {
        "status": "ok" | "fallback_rm_anova" | "not_estimable",
        "model": "class-specific n×treatment variances + well + position",
        "spec": "full" | "common" | "no_position" | "", "formula": "...", "converged": true,
        "df_rule": "...", "response": "log(count + 0.5)", "primary_test_used": "...",
-       "stars_from": "mixed" | "rm_anova", "notes": [...], "attempts": [...], "warnings": [...],
-       "optimiser": "..." } },
+       "stars_from": "mixed" | "rm_anova" | "none", "notes": [...], "attempts": [...], "warnings": [...],
+       "optimiser": "...", "unit": "well", "estimand": "...", "mean_estimand": "...", "n_count": 4,
+       "across_n_inference": true, "density_model": "...", "cell_line": null, "metric": "count" } },
   "acceptance": { "enforce": false, "n_checked": 4, "failing": [], "excluded": [],
                   "criteria": {"vehicle_within": 0.3, ...} },
   "notes": [ "..." ],
@@ -226,6 +367,7 @@ One row per test result, for interactive filtering. Columns:
        "pdf": "all_n/count_forest_vs_LyoVec.pdf",    // only for plots that also have a PDF
        "level": "treatment" | "n" | "all_n" | "generation",
        "n": "n1_2026-06-05" | null, "treatment": "CL075" | null, "metric": "count" | null,
+       "cell_line": "U251" | null,
        "kind": "absolute" | "relative" | "model" | "contrast" | "robustness" | "diagnostic" | "design"
                | "acceptance" | "data",
        "title": "All n: Nuclei per field: each treatment compared with LyoVec",
@@ -239,7 +381,9 @@ numbers (NaN) are written as `null`. Files are described from their names, so a 
 `<metric>_<what>` naming is listed automatically (with a generic description if no rule matches).
 
 ## 7. Excel workbook (`results.xlsx`)
-All previous sheets are kept. New sheets: `Model - means (absolute)`, `Model - ratios vs controls`,
+All previous sheets are kept (all-n sheets gain `metric` / `cell_line` columns). Added in this revision:
+`Density-adjusted means`, `Density-adjusted effects`, `Duplicate images` (when any); the About sheet states the
+model unit, estimands, classes, negative control, cell lines and duplicate images. Earlier sheets: `Model - means (absolute)`, `Model - ratios vs controls`,
 `Comparison families`, `Variance components`, `Robustness - stability`, `Robustness - leave-one-out`,
 `Robustness - effect per n`, `Model status`, `Acceptance`. Metrics other than intensities (readouts, densities)
 get `Other metrics - ...` sheets like the intensity ones. The About sheet states the primary test, the classes,
@@ -254,3 +398,17 @@ the model per metric and the acceptance result.
 - **Vehicle check**: only "equivalent" supports "the vehicle has no effect"; "inconclusive" means more n's are
   needed.
 - **Variance components**: the n-level variances rest on 3–4 levels; treat them as rough.
+- **Fractions**: read the percentage-point difference and the absolute % per condition; odds ratios and % of the
+  reference are secondary (meaningless near 0 %). The density-adjusted estimate is only a check; when it is flagged
+  ("conditions do not overlap in density") it extrapolates and should not be quoted.
+- **One n**: estimates only; there is no across-n test (all-n CIs, p and stars say "needs ≥ 2 n").
+- **Duplicate images** (`duplicates.csv`, acceptance `no_duplicate_images`): results for the affected conditions
+  of that n are not interpretable until the real images are identified.
+
+### Real data (4 n's, 8 conditions, 2 wells × 6 fields; g1, default settings, reference Control)
+Nuclei per field vs LyoVec, mixed model (well unit, classes "auto"): miR-132-5p 0.29 [0.16, 0.55] *,
+miR-30e-3p 0.33 [0.15, 0.70] ns (adj. p 0.058), miR-338-3p 0.41 [0.22, 0.77] ns (0.063), miR-340-3p 0.47
+[0.31, 0.72] *, miR-375-3p 0.37 [0.21, 0.64] *, CL075 0.76 ns, Control 0.91 ns. The previous default (field unit,
+two classes) gave 0.21–0.36 with ***/**** for every miRNA; ratio paired t-tests give 0.27–0.52, all ns after Holm
+(LyoVec is missing in n2). n3's Control and LyoVec images are byte-identical (duplicates.csv), so n3 fails
+`no_duplicate_images`.

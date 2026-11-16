@@ -56,12 +56,19 @@ def test_model_recovers_known_effects_and_absolute_means():
     assert res.ok and res.status == "ok"
     a, b, c = (_row(res, "vs LyoVec", f"{t} vs LyoVec") for t in ("A", "B", "C"))
     assert a.ci_low < 0.5 < a.ci_high and abs(np.log(a.estimate / 0.5)) < 0.35
-    assert b.ci_low < 0.3 < b.ci_high and b.p_adj < 0.01
+    assert b.ci_low < 0.3 < b.ci_high and b.p_adj < 0.05
     assert c.ci_low < 1 < c.ci_high
     assert a.estimate_type == "ratio" and np.isfinite(a.df) and a.df >= 1
+    assert a.estimand == "ratio of mean a.u." and res.unit == "well"
     e = res.emm.set_index("treatment")
-    assert 30 < e.loc["LyoVec", "estimate"] < 120  # absolute units (geometric mean), not log
+    assert 30 < e.loc["LyoVec", "estimate"] < 120  # absolute units (mean per field), not log
     assert e.loc["LyoVec", "ci_low"] < e.loc["LyoVec", "estimate"] < e.loc["LyoVec", "ci_high"]
+    assert set(res.varcomp["component"]) >= {"n (experiment: day, plate, passage)",
+                                             "well (residual: well-to-well within n × treatment)"}
+    # one n x treatment variance per non-control treatment (classes = "auto"), controls pooled
+    assert {"n × treatment [controls]", "n × treatment [A]", "n × treatment [CL075]"} <= set(res.varcomp["component"])
+    res = models.analyse(d, POS, _settings(model_unit="field"), positions_ok=True, leave_one_out=False)
+    assert res.ok and res.unit == "field"
     assert set(res.varcomp["component"]) >= {"n (experiment: day, plate, passage)", "well (within n × treatment)",
                                              "field position (within n)", "field (residual)"}
 
@@ -174,10 +181,13 @@ def test_one_n_and_one_well_do_not_crash():
     rng = np.random.default_rng(1)
     one_n = simulate(rng, n_n=1)
     res = models.analyse(one_n, POS, _settings(), positions_ok=True)
-    assert res.status == "not_estimable" and "only one n" in res.model
+    assert res.status == "not_estimable" and "one n" in res.model and res.descriptive and res.has_estimates
     one_well = simulate(rng, wells=1)
     res = models.analyse(one_well, POS, _settings(), positions_ok=True, leave_one_out=False)
     assert res.ok
+    w = res.varcomp.set_index("component").loc["well (residual: well-to-well within n × treatment)"]
+    assert np.isnan(w["variance"]) and "not identifiable" in w["note"]
+    res = models.analyse(one_well, POS, _settings(model_unit="field"), positions_ok=True, leave_one_out=False)
     w = res.varcomp.set_index("component").loc["well (within n × treatment)"]
     assert np.isnan(w["variance"]) and "not estimable" in w["note"]
 
@@ -285,7 +295,10 @@ def test_manifest_and_stats_long_contract(tmp_path):
     sl = pd.read_csv(out / "stats_long.csv")
     assert list(sl.columns) == manifest.STATS_LONG_COLUMNS
     assert set(sl["level"]) == {"n", "all_n"}
-    assert set(sl["estimate_type"].dropna()) <= {"ratio", "difference", "odds_ratio", "mean"}
+    assert set(sl["estimate_type"].dropna()) <= set(manifest.ESTIMATE_TYPES)
+    assert sl.loc[sl["level"] == "all_n", "estimand"].notna().any()
+    frac = sl[(sl["metric"] == "readout_frac_x") & (sl["model"] != "classical") & (sl["level"] == "all_n")]
+    assert (frac["estimate_type"] == "pp_difference").any()  # the headline for fractions
     assert (sl["family"] == "vehicle check (equivalence)").any()
     assert (sl.loc[(sl["metric"] == "readout_frac_x") & (sl["model"] != "classical"), "estimate_type"] == "odds_ratio").any()
     xl = pd.ExcelFile(out / "results.xlsx").sheet_names

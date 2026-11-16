@@ -106,10 +106,21 @@ FIELDS: dict[str, dict[str, dict]] = {
         "positive_control": dict(kind="text", label="Positive control",
                                  help="e.g. CL075. Every treatment that is not a control is also compared with it. "
                                       "Empty = none."),
-        "classes": dict(kind="table", label="Treatment classes",
-                        help='Groups of treatments whose effects may vary differently between n\'s, each with its own '
-                             'n-to-n variance in the model. TOML inline table of name = [patterns], * = wildcard, e.g. '
+        "model_unit": dict(kind="choice", options=["well", "field"], label="Model unit",
+                           help="well = each well's mean per field (pooled % for fractions) is one value: results are "
+                                "ratios of mean nuclei per field, as biologists read them; missing fields are "
+                                "position-adjusted. field = every field is one value (older model; compares geometric "
+                                "means of fields, which uneven, sparse fields pull down)."),
+        "classes": dict(kind="table", special=["auto"], label="Treatment classes",
+                        help="Groups of treatments whose effects may vary differently between n's, each with its own "
+                             "n-to-n variance in the model. auto (recommended) = every treatment that is not a control "
+                             "gets its own class, the controls share one (conservative: each comparison rests on its "
+                             "own n-to-n variability). Or a TOML inline table of name = [patterns], * = wildcard, e.g. "
                              '{ mirna = ["miR-*"] }. Empty {} = controls form one class, everything else another.'),
+        "density_covariate": dict(kind="text", label="Density covariate (fractions)",
+                                  help="For every fraction metric (% out of focus, % Ki-67-positive) a second model "
+                                       "adjusts for local crowding with this per-field column (default "
+                                       "readout_coverage). The raw estimate stays the headline. Empty = off."),
         "among_classes": dict(kind="list", label="Compare within classes",
                               help="Class names whose members are compared with each other (all pairs), e.g. mirna."),
     },
@@ -125,6 +136,9 @@ FIELDS: dict[str, dict[str, dict]] = {
                                          help="Every condition in that n needs at least this many usable images."),
         "max_low_qc_fraction": dict(kind="float", min=0, max=1, label="Maximum share of QC-low images",
                                     help="e.g. 0.5 = at most half of that n's images may have QC low."),
+        "no_duplicate_images": dict(kind="bool", label="No duplicate images",
+                                    help="An n fails if one of its raw image files is byte-identical to an image of "
+                                         "another condition (a copied folder). Listed in duplicates.csv."),
         "enforce": dict(kind="bool", label="Leave out n's that fail",
                         help="Off = only report (acceptance.csv). On = n's that fail any criterion are left out of "
                              "every all-n statistic; they are listed in the About sheet and the manifest."),
@@ -226,7 +240,8 @@ def coerce(values: dict) -> dict:
                     s = str(v).strip()
                     val = s if s in meta["special"] else _num(s)
                 elif k == "table":
-                    val = parse_table(v)
+                    sv = v.strip() if isinstance(v, str) else None
+                    val = sv.lower() if sv is not None and sv.lower() in meta.get("special", []) else parse_table(v)
                 elif k == "measure":
                     s = str(v).strip().lower()
                     val = "all" if s in ("", "all") else [_num(c, as_int=True) for c in s.replace(";", ",").split(",") if c.strip()]
@@ -271,7 +286,9 @@ def parse_table(v) -> dict:
 
 
 def table_text(v: dict) -> str:
-    """Display form of a kind "table" value."""
+    """Display form of a kind "table" value ("auto" stays a word)."""
+    if isinstance(v, str):
+        return v
     return toml_value(v or {})
 
 

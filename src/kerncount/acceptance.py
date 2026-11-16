@@ -7,6 +7,8 @@ Criteria (each may be switched off with ""):
                                (if value > 1): the positive control must show its expected effect
     min_images_per_condition   every condition in that n has at least this many usable images
     max_low_qc_fraction        at most this fraction of that n's images has QC level low
+    no_duplicate_images        (true/false) none of that n's raw image files is byte-identical to an image of another
+                               condition (duplicates.py; needs the duplicate table, else "not applicable")
 
 enforce = false: report only. enforce = true: n's failing any applicable criterion are left out of every all-n
 statistic (they keep their per-n outputs).
@@ -23,9 +25,10 @@ def _off(v) -> bool:
     return v is None or (isinstance(v, str) and v.strip() == "")
 
 
-def evaluate(used: pd.DataFrame, settings: dict) -> pd.DataFrame:
+def evaluate(used: pd.DataFrame, settings: dict, duplicates: pd.DataFrame | None = None) -> pd.DataFrame:
     """used: counts_used rows (n, treatment, image, count, excluded, qc_level). One row per n x criterion plus an
-    'overall' row per n. result is pass | fail | not applicable."""
+    'overall' row per n. result is pass | fail | not applicable. duplicates: duplicates.find() table (None = the
+    raw files were not checked)."""
     from .models import config
 
     acc = settings.get("acceptance", {})
@@ -78,6 +81,20 @@ def evaluate(used: pd.DataFrame, settings: dict) -> pd.DataFrame:
             res.append(("max_low_qc_fraction", frac, f"<= {float(v):g}", "pass" if frac <= float(v) else "fail",
                         f"{int((u['qc_level'].astype(str) == 'low').sum())} of {len(u)} images QC low"))
 
+        v = acc.get("no_duplicate_images", "")
+        if not _off(v) and v is not False:
+            if duplicates is None:
+                res.append(("no_duplicate_images", np.nan, "0", "not applicable", "raw files not checked"))
+            else:
+                dd = duplicates[(duplicates["n"].astype(str) == n) & duplicates["cross_condition"].astype(bool)]
+                k = len(dd)
+                trs = ", ".join(dict.fromkeys(dd["treatment"].astype(str)))
+                others = sorted({o.rsplit(" / ", 1)[0] for s_ in dd["shared_with"].astype(str)
+                                 for o in s_.split("; ") if o})
+                res.append(("no_duplicate_images", float(k), "0", "fail" if k else "pass",
+                            (f"{k} image(s) of {trs} identical to images of {', '.join(others)}" if k else
+                             "no raw image shared with another condition")))
+
         for crit, value, limit, result, detail in res:
             rows.append(dict(n=n, criterion=crit, value=value, limit=limit, result=result, detail=detail))
         fails = [x[0] for x in res if x[3] == "fail"]
@@ -97,4 +114,5 @@ def summary(table: pd.DataFrame, settings: dict) -> dict:
     return dict(enforce=enforce, n_checked=int(table["n"].nunique()), failing=fail,
                 excluded=fail if enforce else [],
                 criteria={c: settings.get("acceptance", {}).get(c) for c in
-                          ("vehicle_within", "positive_control_max_ratio", "min_images_per_condition", "max_low_qc_fraction")})
+                          ("vehicle_within", "positive_control_max_ratio", "min_images_per_condition", "max_low_qc_fraction",
+                           "no_duplicate_images")})

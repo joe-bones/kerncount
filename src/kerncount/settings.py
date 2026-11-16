@@ -62,7 +62,10 @@ DEFAULTS: dict = {
         "vehicle_check": "auto",  # equivalence test, e.g. "LyoVec vs Control"; "auto" = other controls vs reference; "" = off
         "equivalence_margin": 0.2,  # vehicle check: ratio must lie within [1/1.2, 1.2] to call it equivalent
         "positive_control": "",  # e.g. "CL075": every non-control treatment is also compared with it
-        "classes": {},  # treatment classes with their own n x treatment variance, e.g. { mirna = ["miR-*"] }
+        "model_unit": "well",  # all-n model unit: "well" (mean per field of each well; ratios of means) or "field"
+        "classes": "auto",  # own n x treatment variance per class: "auto" = one per non-control treatment, controls
+                            # pooled; {} = controls vs everything else; or e.g. { mirna = ["miR-*"] }
+        "density_covariate": "readout_coverage",  # fraction metrics: also a density-adjusted model; "" = off
         "among_classes": [],  # classes whose members are compared with each other (all pairs), e.g. ["mirna"]
     },
     "acceptance": {
@@ -71,6 +74,7 @@ DEFAULTS: dict = {
         "positive_control_max_ratio": "",  # positive control / reference must reach this ratio (e.g. 0.8) ("" = off)
         "min_images_per_condition": 3,  # every condition in that n needs at least this many usable images
         "max_low_qc_fraction": 0.5,  # at most this fraction of that n's images may be QC low
+        "no_duplicate_images": True,  # an n fails if one of its raw images is byte-identical to an image of another condition
         "enforce": False,  # true: n's that fail are left out of all-n statistics (listed in About and manifest)
     },
     "design": {
@@ -155,7 +159,10 @@ primary_family = ""                  # control whose comparisons are the main cl
 vehicle_check = "auto"               # equivalence test, e.g. "LyoVec vs Control"; "auto" = other controls vs reference; "" = off
 equivalence_margin = 0.2             # equivalent = ratio (90% CI) within [1/1.2, 1.2]
 positive_control = ""                # e.g. "CL075": every non-control treatment is also compared with it
-classes = {{}}                         # own n x treatment variance per class, e.g. {{ mirna = ["miR-*"] }}
+model_unit = "well"                  # model unit: "well" (well mean per field; ratios of mean nuclei per field) or "field"
+classes = "auto"                     # own n-to-n variance per class: "auto" = one per non-control treatment (controls
+                                     # pooled; conservative); {{}} = controls vs the rest; or e.g. {{ mirna = ["miR-*"] }}
+density_covariate = "readout_coverage"   # fraction metrics: extra density-adjusted estimate; "" = off
 among_classes = []                   # compare members of these classes with each other, e.g. ["mirna"]
 
 [acceptance]                         # per-n acceptance criteria (on the counts); report only unless enforce = true
@@ -163,6 +170,7 @@ vehicle_within = 0.3                 # vehicle / control in that n within 1 +- 0
 positive_control_max_ratio = ""      # e.g. 0.8: positive control / reference must reach 0.8 (>= the value if above 1); "" = off
 min_images_per_condition = 3         # every condition needs at least this many usable images
 max_low_qc_fraction = 0.5            # at most this share of the n's images may be QC low
+no_duplicate_images = true           # fail an n whose raw image is byte-identical to one of another condition
 enforce = false                      # true: failing n's are left out of all-n statistics (listed in About)
 
 [design]                  # which well / field each image is; one plate per n (see docs/design.md)

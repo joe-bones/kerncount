@@ -233,9 +233,16 @@ def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebui
     # every registered metric column (intensity_*, nuclei_per_mm2, readout_*) flows through all statistics
     reg = metrics_mod.registry(table.columns, prj.settings)
     measured = {k: m for k, m in reg.items() if m.column != "count" and m.column in table}
-    img_cols = ["n", "treatment", "image", "qc_level"] + [m.column for m in measured.values()]
-    img_table = table[[c for c in img_cols if c in table]]
+    img_cols = ["n", "treatment", "image", "qc_level", "cell_line"] + [m.column for m in measured.values()]
+    img_table = table[[c for c in dict.fromkeys(img_cols) if c in table]]
     design_table = check_design(prj, df)
+    # byte-identical raw images (e.g. a copied folder): duplicates.csv, a loud warning, acceptance criterion
+    from . import duplicates as duplicates_mod
+    try:
+        dups = duplicates_mod.check(prj.path, table, log=log)
+    except Exception as e:  # noqa: BLE001 - the check must never stop a build
+        log(f"  note: duplicate image check failed ({type(e).__name__}: {e})")
+        dups = None
     root = prj.path / "generations"
     for g in gens:
         folder = root / g["name"]
@@ -250,7 +257,7 @@ def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebui
             else:
                 log(f"  {g['name']}: up to date")
             continue
-        generations.build(prj.path, g, img_table, measured, prj.settings, design_table)
+        generations.build(prj.path, g, img_table, measured, prj.settings, design_table, duplicates=dups)
         log(f"  {g['name']}: built ({'automatic' if g['source'] == 'auto' else g['source']}, {g['changes']} manual cells)")
     extra = sorted(p.name for p in root.glob("g*") if p.is_dir() and p.name not in {g["name"] for g in gens})
     if extra:
