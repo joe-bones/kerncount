@@ -105,6 +105,24 @@ FIELDS: dict[str, dict[str, dict]] = {
         "overlay_alpha": dict(kind="float", label="Overlay transparency", help="0 = invisible, 1 = opaque."),
         "jpeg_quality": dict(kind="int", min=1, max=100, label="Review image JPEG quality"),
     },
+    "planner": {
+        "effects": dict(kind="list", label="Effects to plan for (ratios)",
+                        help="Treatment ÷ reference ratios, e.g. 0.8, 0.7, 0.5 (0.7 = 30% fewer nuclei)."),
+        "target_power": dict(kind="float", min=0.05, max=0.999, label="Target power",
+                             help="Chance of finding a real effect (p < alpha); 0.8 is usual."),
+        "alpha": dict(kind="float", min=0.0001, max=0.5, label="Significance level (alpha)", help="Usually 0.05."),
+        "cost_per_n": dict(kind="float", min=0, label="Effort per n (plate / day)",
+                           help="Seeding, transfection, staining for one independent experiment. Any unit, e.g. minutes."),
+        "cost_per_well": dict(kind="float", min=0, label="Effort per well", help="Same unit; pipetting and handling one more well."),
+        "cost_per_field": dict(kind="float", min=0, label="Effort per field (image)",
+                               help="Same unit; taking and checking one more image."),
+        "max_n": dict(kind="int", min=3, max=100, label="Largest number of n's in the tables"),
+        "plate_format": dict(kind="int", min=6, max=96, label="Plate format (wells)", help="6, 12, 24, 48 or 96."),
+        "avoid_edge": dict(kind="bool", label="Plate maps: avoid edge wells",
+                           help="Use inner wells first; edge wells (evaporation) only when the inner ones are not enough."),
+        "reference_wells": dict(kind="num_or", special=["auto"], label="Wells per reference condition",
+                                help="auto = Dunnett's rule: wells × √(number of comparisons), as far as the plate allows."),
+    },
 }
 
 SECTION_TITLES = {
@@ -112,6 +130,7 @@ SECTION_TITLES = {
     "qc": "Quality levels", "intensity": "Intensity per cell", "readouts": "Extra readouts (beyond the count)",
     "analysis": "Statistics",
     "design": "Plate design (sampling analysis)", "review": "Review images",
+    "planner": "Planning the next experiment",
 }
 
 

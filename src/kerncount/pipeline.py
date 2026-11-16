@@ -343,5 +343,9 @@ def sampling(project_dir: Path, generation: str | None = None, iterations: int =
     summary = sampling_mod.run(used[["n", "treatment", "image", "value"]], prj.settings, out, iterations=iterations,
                                project_dir=prj.path)
     log(summary.round(3).to_string(index=False))
+    from . import planner
+
+    log("Planning the next experiment (planner.json, design_forward.csv, ...)")
+    planner.run(used[["n", "treatment", "image", "value"]], prj.settings, out, project_dir=prj.path)
     log(f"\nReport: {out / 'REPORT.txt'}")
     return out

@@ -68,6 +68,19 @@ DEFAULTS: dict = {
         "overlay_alpha": 0.35,
         "jpeg_quality": 88,
     },
+    "planner": {
+        # experiment planner (`kerncount sampling` -> planner.json, `kerncount platemap`); see docs/planner.md
+        "effects": [0.8, 0.7, 0.5],  # treatment / reference ratios to plan for (0.7 = 30% fewer nuclei)
+        "target_power": 0.8,  # chance of p < alpha if the effect is real
+        "alpha": 0.05,
+        "cost_per_n": 240.0,  # effort per independent experiment (one plate, one day): seeding, treating, staining
+        "cost_per_well": 5.0,  # effort per extra well (pipetting, handling)
+        "cost_per_field": 1.0,  # effort per image (acquisition + checking); any unit, default minutes
+        "max_n": 12,  # largest number of n's in the design tables
+        "plate_format": 24,  # 6, 12, 24, 48 or 96 wells
+        "avoid_edge": True,  # plate maps: inner wells first, edge wells only when needed
+        "reference_wells": "auto",  # wells per reference condition; "auto" = Dunnett's sqrt(k) rule
+    },
 }
 
 TEMPLATE = '''# kerncount settings — edit freely; anything left out falls back to defaults.
@@ -132,6 +145,18 @@ field_positions = "fixed" # "fixed": field k is the same spot in every well (pos
 [review]
 overlay_alpha = 0.35
 jpeg_quality = 88
+
+[planner]                 # plan the next experiment (kerncount sampling -> planner; kerncount platemap); docs/planner.md
+effects = [0.8, 0.7, 0.5] # treatment / reference ratios to plan for (0.7 = 30% fewer nuclei than the reference)
+target_power = 0.8        # chance of p < alpha when the effect is real
+alpha = 0.05
+cost_per_n = 240.0        # effort per n (one plate, one day: seeding, transfection, staining); any unit, e.g. minutes
+cost_per_well = 5.0       # effort per extra well
+cost_per_field = 1.0      # effort per image (acquisition + checking)
+max_n = 12                # largest number of n's in the design tables
+plate_format = 24         # 6, 12, 24, 48 or 96 wells
+avoid_edge = true         # plate maps: inner wells first, edge wells only when needed
+reference_wells = "auto"  # wells per reference condition; "auto" = Dunnett's rule (wells x sqrt(comparisons))
 '''
 
 

@@ -141,6 +141,25 @@ def cmd_wells_template(a):
         pipeline.wells_template(prj, overwrite=a.force)
 
 
+def cmd_platemap(a):
+    from . import platemap
+
+    for prj in _projects(a):
+        print(f"\n=== {prj.name}")
+        try:
+            out = platemap.plan_project(prj, plates=a.plates, plate_format=a.format, wells=a.wells,
+                                        reference_wells=a.reference_wells, avoid_edge=True if a.avoid_edge else None,
+                                        seed=a.seed, balance=not a.no_balance)
+        except ValueError as e:
+            sys.exit(f"platemap: {e}")
+        print((out / "README.txt").read_text(encoding="utf-8"))
+        print(f"Written to {out}")
+
+
+def _ref_wells(v: str):
+    return v if v.strip().lower() == "auto" else int(v)
+
+
 def cmd_gui(a):
     from . import gui
 
@@ -181,7 +200,21 @@ def main(argv=None):
     wt.add_argument("--all", action="store_true", help="every initialised experiment")
     wt.add_argument("--force", action="store_true", help="overwrite an existing wells.csv (default: write wells.new.csv)")
     wt.set_defaults(func=cmd_wells_template)
-    g = sub.add_parser("gui", help="open the point-and-click web interface in your browser")
+    pm = sub.add_parser("platemap", help="randomised plate maps for the next experiment (one plate per n)")
+    pm.add_argument("project", nargs="?", help="experiment name, or a project folder path")
+    pm.add_argument("--all", action="store_true", help="every initialised experiment")
+    pm.add_argument("--plates", type=int, default=3, help="number of plates (= n's) to plan (default 3)")
+    pm.add_argument("--format", type=int, default=None, choices=[6, 12, 24, 48, 96],
+                    help="wells per plate (default: [planner] plate_format)")
+    pm.add_argument("--wells", type=int, default=2, help="wells per treatment condition (default 2)")
+    pm.add_argument("--reference-wells", type=_ref_wells, default=None,
+                    help='wells per reference condition, or "auto" (Dunnett sqrt(k)); default: [planner] reference_wells')
+    pm.add_argument("--avoid-edge", action="store_true",
+                    help="inner wells first (default: [planner] avoid_edge)")
+    pm.add_argument("--seed", type=int, default=None, help="random seed (default: new; printed for reuse)")
+    pm.add_argument("--no-balance", action="store_true", help="independent random plates (no rotation across plates)")
+    pm.set_defaults(func=cmd_platemap)
+    g = sub.add_parser("gui",help="open the point-and-click web interface in your browser")
     g.add_argument("workspace", nargs="?", help="workspace folder (default: found automatically)")
     g.add_argument("--port", type=int, default=8765)
     g.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
