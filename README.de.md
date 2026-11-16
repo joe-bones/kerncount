@@ -18,6 +18,7 @@ kerncount/                 (dieses Repository)
 ├── docs/technical.md      ← Algorithmen und Implementierungshinweise
 ├── src/kerncount/         ← der Code
 ├── tests/                 ← Unit-Tests (pytest)
+├── launcher/              ← Quellcode der Ein-Klick-Programme kerncount.exe / kerncount.app
 └── setup.bat / setup.command / kerncount.bat / kerncount-gui.*   ← Hilfsdateien für Installation und Start
 ```
 Ihre Bilder und Ergebnisse liegen in einem separaten **Arbeitsbereich** (Workspace), in dem Eingabe und Ausgabe getrennt sind:
@@ -70,6 +71,18 @@ data/<experiment>/                              z. B. data/my_experiment/
 
 ## 2. Installation (einmal pro Computer)
 
+### Am einfachsten: Ein-Klick-Programm (ohne Administratorrechte, ohne Python, ohne Befehle)
+Laden Sie aus dem [neuesten Release](https://github.com/joe-bones/kerncount/releases/latest) herunter:
+- **Windows:** `kerncount.exe`
+- **Mac (Apple Silicon):** `kerncount-mac.zip`. Ein Doppelklick entpackt es zu `kerncount.app`.
+
+Legen Sie es in Ihren Arbeitsbereich-Ordner (neben `data`) und doppelklicken Sie darauf. Der erste Start braucht
+Internet, einige Minuten und etwa 1 GB: Python 3.12 und alles, was kerncount benötigt, wird in Ihren Benutzerordner
+installiert. Danach öffnet jeder Start kerncount sofort im Browser. Beim ersten Mal warnt das System vor einer
+nicht signierten App: unter Windows **Weitere Informationen → Trotzdem ausführen**; am Mac **Fertig**, dann
+**Systemeinstellungen → Datenschutz & Sicherheit → Trotzdem öffnen**. Details: [launcher/README.md](launcher/README.md).
+
+### Alternativ: Installation aus diesem Repository (für die Kommandozeile)
 1. **Mac/Linux:** Installieren Sie **Python 3.12** von python.org (ab 3.11 funktioniert es; 3.12 wird für TensorFlow empfohlen).
    **Windows:** Keine Vorinstallation und keine Administratorrechte nötig: `setup.bat` holt Python 3.12 selbst
    (über [uv](https://docs.astral.sh/uv/)) in Ihren Benutzerordner (`%LOCALAPPDATA%\kc`).
@@ -90,13 +103,23 @@ Führen Sie jeden Befehl aus dem Arbeitsbereich-Ordner aus (dem Ordner, der `dat
 über ihren Ordnernamen in `data/` angesprochen.
 
 ### Ohne Befehle: die Weboberfläche
-Doppelklicken Sie auf **`kerncount-gui.bat`** (Windows) bzw. **`kerncount-gui.command`** (Mac). Im Browser öffnet
-sich eine Seite mit einer Zeile pro Experiment und Knöpfen für jeden der folgenden Schritte (**1 Set up**,
-**2 Run**, **Sampling**) sowie Knöpfen, die Layout, Einstellungen, Kontrollbilder, `counts.csv` und die
-Excel-Ergebnisse öffnen. Das Protokoll zeigt den Fortschritt live; **Stop** bricht einen Lauf ab. Lassen Sie das
-schwarze Fenster während der Arbeit offen und schließen Sie es zum Beenden. Die Seite funktioniert nur auf diesem
-Computer, und es wird nichts nach außen gesendet. Die Einstellungen unter *Options* entsprechen den
-Befehlsoptionen am Ende dieses Abschnitts. Dasselbe aus einem Terminal: `kerncount gui`.
+Doppelklicken Sie auf **`kerncount.exe`** / **`kerncount.app`** (Abschnitt 2) oder, bei einer Repository-Installation,
+auf **`kerncount-gui.bat`** (Windows) bzw. **`kerncount-gui.command`** (Mac). Dasselbe aus einem Terminal: `kerncount gui`.
+Alles Folgende geht im Browser, ohne Dateien zu bearbeiten:
+
+| Reiter | Was Sie dort tun |
+|---|---|
+| **Run** | Einrichten, Analyse starten (die Befehlsoptionen unten als Häkchen), Sampling; Live-Protokoll, **Stop** |
+| **Layout** | n- / Behandlungsnamen korrigieren, Ordner ein- oder ausschließen |
+| **Settings** | Alle Schalter aus Abschnitt 4 als Formular mit Erklärungen; oder `settings.toml` als Text bearbeiten |
+| **Review images** | Übersicht pro Behandlung, dann jedes Bild in voller Größe (← / → zum Blättern); Korrektur direkt eintragen |
+| **Corrections** | Eine Generation bearbeiten: korrigierte Zählungen oder **x** für eine Runde eintragen (`manual_1` → g2, …), Wert vorher und nachher sehen, dann die Generation **bauen** (etwa eine Minute; die Erkennung wird wiederverwendet) |
+| **Results** | Alle Plots, Tabellen und Statistiken pro Generation; `results.xlsx` herunterladen |
+| **Sampling** | Die Analyse „Wie viele Bilder?“ starten und lesen |
+| **All files** | Alles im Projektordner durchsuchen und ansehen |
+
+Lassen Sie das schwarze (Windows) bzw. Terminal-Fenster (Mac) während der Arbeit offen; schließen Sie es oder
+drücken Sie **Quit** zum Beenden. Die Seite funktioniert nur auf diesem Computer, und es wird nichts nach außen gesendet.
 
 ### Schritt 1: Projekt anlegen (einmal pro Experiment)
 ```
@@ -169,6 +192,7 @@ setzen Sie `segment` auf diesen Kanal und `[segmentation] backend = "classical"`
 | `kerncount run <experiment> --rebuild g2` | Einen bestehenden Generationsordner überschreiben (geschieht standardmäßig nie). `--rebuild all` für alle. |
 | `kerncount run <experiment> --resegment` | Cache ignorieren und jeden Kern neu erkennen |
 | `kerncount run <experiment> --no-review` | Kontrollbilder nicht erstellen (schneller) |
+| `kerncount regen <experiment> [--rebuild g2 g3]` | Generationen nur aus `counts.csv` neu bauen (schnell; nach Korrekturen) |
 | `kerncount sampling <experiment> --generation g2` | Sampling-Analyse für eine bestimmte Generation (Standard: die neueste) |
 
 Für Ordner außerhalb eines Arbeitsbereichs funktionieren auch Pfade: `kerncount init <Rohdatenordner> <Projektordner>`,

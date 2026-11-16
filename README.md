@@ -18,6 +18,7 @@ kerncount/                 (this repository)
 ├── docs/technical.md      ← algorithms and implementation notes
 ├── src/kerncount/         ← the code
 ├── tests/                 ← unit tests (pytest)
+├── launcher/              ← source of the one-click kerncount.exe / kerncount.app
 └── setup.bat / setup.command / kerncount.bat / kerncount-gui.*   ← install and launch helpers
 ```
 Your images and results live in a separate **workspace** folder, with input and output kept apart:
@@ -70,6 +71,18 @@ data/<experiment>/                              e.g. data/my_experiment/
 
 ## 2. Install (once per computer)
 
+### Easiest: one-click app (no admin rights, no Python, no commands)
+Download from the [latest release](https://github.com/joe-bones/kerncount/releases/latest):
+- **Windows:** `kerncount.exe`
+- **Mac (Apple silicon):** `kerncount-mac.zip`. Double-click to unzip; this gives `kerncount.app`.
+
+Put it in your workspace folder (next to `data`) and double-click it. The first start needs internet, takes
+a few minutes and about 1 GB: it installs Python 3.12 and everything kerncount needs into your user folder.
+After that, every start opens kerncount in your browser straight away. The first time, the system warns about an
+unsigned app: on Windows click **More info → Run anyway**; on the Mac click **Done**, then
+**System Settings → Privacy & Security → Open Anyway**. Details: [launcher/README.md](launcher/README.md).
+
+### Alternative: install from this repository (for the command line)
 1. **Mac/Linux:** install **Python 3.12** from python.org (3.11 or newer works; 3.12 is recommended for TensorFlow).
    **Windows:** nothing to install first, and no admin rights needed: `setup.bat` fetches Python 3.12 itself
    (via [uv](https://docs.astral.sh/uv/)) into your user folder (`%LOCALAPPDATA%\kc`).
@@ -90,12 +103,23 @@ Run every command from the workspace folder (the one that contains `data/`). Exp
 to by their folder name in `data/`.
 
 ### Without commands: the web interface
-Double-click **`kerncount-gui.bat`** (Windows) or **`kerncount-gui.command`** (Mac). A page opens in your
-browser with one row per experiment and buttons for every step below (**1 Set up**, **2 Run**, **Sampling**),
-plus buttons that open the layout, settings, review images, `counts.csv` and the Excel results.
-The log shows progress live; **Stop** cancels a run. Keep the black window open while you work and close it
-to quit. The page only works on this computer, and nothing is sent anywhere else. The options under *Options*
-match the command options listed at the end of this section. The same thing from a terminal: `kerncount gui`.
+Double-click **`kerncount.exe`** / **`kerncount.app`** (section 2), or, with a repository install,
+**`kerncount-gui.bat`** (Windows) / **`kerncount-gui.command`** (Mac). The same thing from a terminal: `kerncount gui`.
+Everything below can be done in the browser, without editing files:
+
+| Tab | What you do there |
+|---|---|
+| **Run** | Set up, run the analysis (with the command options below as tick boxes), sampling; live log, **Stop** |
+| **Layout** | Fix n / treatment names, include or leave out folders |
+| **Settings** | Every toggle from section 4 as a form, with explanations; or edit `settings.toml` as text |
+| **Review images** | Overview sheet per treatment, then each image full size (← / → to browse); type a correction directly |
+| **Corrections** | Edit a generation: type corrected counts or **x** for a round (`manual_1` → g2, …), see the value before and after, then **build** the generation (about a minute; detection is reused) |
+| **Results** | All plots, tables and statistics per generation; download `results.xlsx` |
+| **Sampling** | Run and read the "how many images?" analysis |
+| **All files** | Browse and preview everything in the project folder |
+
+Keep the black (Windows) or Terminal (Mac) window open while you work; close it or press **Quit** to stop.
+The page only works on this computer, and nothing is sent anywhere else.
 
 ### Step 1: create a project (once per experiment)
 ```
@@ -168,6 +192,7 @@ set `segment` to that channel and `[segmentation] backend = "classical"`.
 | `kerncount run <experiment> --rebuild g2` | Overwrite an existing generation folder (never done by default). `--rebuild all` for all. |
 | `kerncount run <experiment> --resegment` | Ignore the cache and re-detect every nucleus |
 | `kerncount run <experiment> --no-review` | Skip drawing review images (faster) |
+| `kerncount regen <experiment> [--rebuild g2 g3]` | Rebuild generations from `counts.csv` only (fast; after corrections) |
 | `kerncount sampling <experiment> --generation g2` | Sampling analysis on a particular generation (default: latest) |
 
 Paths work too, for folders outside a workspace: `kerncount init <raw folder> <project folder>`,
