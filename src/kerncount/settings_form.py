@@ -10,7 +10,11 @@ import tomllib
 
 from .settings import DEFAULTS
 
-# kind: bool | int | float | choice | multi | list | num_or (a number, or one of `special`) | measure | text
+# short names of classify.READOUTS (without "readout_"); kept here because this module must not import numpy/pandas
+READOUT_NAMES = ["frac_out_of_focus", "micronuclei_per_nucleus", "nuclear_area_median", "nuclear_area_median_um2",
+                 "nuclear_area_cv", "frac_irregular", "coverage", "nn_distance_median"]
+
+# kind: bool | int | float | choice | multi | list | num_or (a number, or one of `special`) | measure | names ("all" or some of `options`) | text
 # reseg = changing it re-detects every nucleus (the slow step, ~2-3 s per image)
 FIELDS: dict[str, dict[str, dict]] = {
     "project": {
@@ -66,6 +70,13 @@ FIELDS: dict[str, dict[str, dict]] = {
         "ring_px": dict(kind="num_or", special=["auto"], label="Ring width (px)", reseg=True, help="auto = 0.25 × nucleus diameter."),
         "subtract_background": dict(kind="bool", label="Subtract background", reseg=True, help="Median of empty areas, per image."),
     },
+    "readouts": {
+        "enabled": dict(kind="bool", label="Extra readouts",
+                        help="Per-image readouts besides the count (out-of-focus fraction, micronuclei, nuclear size and "
+                             "shape, crowding), computed from the detected nuclei. Fast: does not re-detect."),
+        "include": dict(kind="names", options=READOUT_NAMES, label="Readouts to include",
+                        help='"all", or names separated by commas: ' + ", ".join(READOUT_NAMES) + "."),
+    },
     "analysis": {
         "reference": dict(kind="text", label="Main comparison group", help="Used for the headline plots."),
         "normalise_to": dict(kind="list", label="Control groups",
@@ -90,7 +101,8 @@ FIELDS: dict[str, dict[str, dict]] = {
 
 SECTION_TITLES = {
     "project": "Project", "channels": "Channels", "segmentation": "Finding nuclei", "counting": "What counts as a nucleus",
-    "qc": "Quality levels", "intensity": "Intensity per cell", "analysis": "Statistics",
+    "qc": "Quality levels", "intensity": "Intensity per cell", "readouts": "Extra readouts (beyond the count)",
+    "analysis": "Statistics",
     "design": "Plate design (sampling analysis)", "review": "Review images",
 }
 
@@ -147,6 +159,15 @@ def coerce(values: dict) -> dict:
                 elif k == "measure":
                     s = str(v).strip().lower()
                     val = "all" if s in ("", "all") else [_num(c, as_int=True) for c in s.replace(";", ",").split(",") if c.strip()]
+                elif k == "names":  # "all", or a subset of `options` (the readout_ prefix is optional)
+                    items = v if isinstance(v, list) else str(v).replace(";", ",").split(",")
+                    items = [str(i).strip().removeprefix("readout_") for i in items if str(i).strip()]
+                    if not items or "all" in items:
+                        val = "all"
+                    else:
+                        if any(i not in meta["options"] for i in items):
+                            raise ValueError
+                        val = [o for o in meta["options"] if o in items]
                 else:
                     val = str(v).strip()
             except (ValueError, TypeError):

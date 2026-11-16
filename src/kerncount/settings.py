@@ -46,6 +46,10 @@ DEFAULTS: dict = {
         "ring_px": "auto",  # band width; "auto" = 0.25 x nucleus diameter (Fiji macro used 6 px)
         "subtract_background": True,
     },
+    "readouts": {
+        "enabled": True,  # extra per-image readouts from the classified nuclei (docs/readouts.md); no re-detection
+        "include": "all",  # "all" or a list of names, e.g. ["frac_out_of_focus", "coverage"]
+    },
     "analysis": {
         "reference": "Control",  # main comparison group (used for the headline plots)
         "normalise_to": ["Control", "LyoVec"],  # every one of these also gets its own % plots and tests
@@ -104,6 +108,10 @@ measure = "all"           # "all" or a list of channels, e.g. [2]
 regions = ["nucleus", "cell"]   # nucleus, ring, cell (= nucleus + ring, like the Fiji macro)
 ring_px = "auto"          # "auto" = 0.25 x nucleus diameter
 subtract_background = true
+
+[readouts]                # extra per-image readouts from the detected nuclei (see docs/readouts.md); fast, no re-detection
+enabled = true
+include = "all"           # "all" or a list, e.g. ["frac_out_of_focus", "micronuclei_per_nucleus", "coverage"]
 
 [analysis]
 reference = "Control"               # main comparison group (headline plots)
