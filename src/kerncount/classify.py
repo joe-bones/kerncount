@@ -137,7 +137,57 @@ def classify(objects: pd.DataFrame, info: dict, ref: FolderRef, settings: dict) 
 # fast and never invalidate the segmentation cache. Units are relative wherever possible (fractions, multiples of
 # the nucleus diameter) so images taken at different magnifications stay comparable. See docs/readouts.md.
 
-READOUTS: dict[str, dict] = {
+class _Readouts(dict):
+    """The static readouts below, plus per-channel intensity columns whose names contain the channel
+    (docs/intensity.md): `READOUTS.get(column)` answers for them too, so metrics.registry labels them correctly.
+    Iterating lists only the static readouts (the ones `readouts.include` selects from)."""
+
+    def get(self, key, default=None):
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        info = channel_metric_info(str(key))
+        return info if info is not None else default
+
+
+def channel_metric_info(col: str) -> dict | None:
+    """Label / kind / unit for the per-channel intensity columns written by intensity.process, else None."""
+    import re
+
+    pats = [
+        (r"readout_frac_positive_p90_(.+)", lambda c: dict(
+            label=f"% {c}-positive nuclei (90th percentile)", kind="fraction", unit="fraction",
+            description=f"Share of measurable nuclei whose 90th-percentile {c} signal (minus local background, "
+                        "flat-field corrected) exceeds the cut-off: picks up dotted / nucleolar staining that the mean "
+                        "dilutes. Same cut-off rule as the primary readout (see intensity/cutoffs.csv).",
+            min_nuclei=5)),
+        (r"readout_frac_positive_(.+)", lambda c: dict(
+            label=f"% {c}-positive nuclei", kind="fraction", unit="fraction",
+            description=f"Share of measurable nuclei (counted, not saturated) whose mean {c} signal minus the local "
+                        "background, divided by the flat field, exceeds the positivity cut-off. Its rule (negative "
+                        "control, locked manual value or limit of detection) is in intensity/cutoffs.csv; without "
+                        "negative-control wells 'positive' means detectably stained above background.",
+            min_nuclei=5)),
+        (r"intensity_(.+)_nucleus_mean_bgsub", lambda c: dict(
+            label=f"{c} per nucleus (median, background-subtracted)", kind="positive", unit="intensity (a.u., corrected)",
+            description=f"Median over the image's measurable nuclei of the mean {c} inside the shrunk nucleus outline "
+                        "minus the local background, divided by the flat field.")),
+        (r"intensity_(.+)_positive_mean_bgsub", lambda c: dict(
+            label=f"{c} in positive nuclei (mean)", kind="positive", unit="intensity (a.u., corrected)",
+            description=f"Mean background-subtracted, flat-field-corrected {c} of the positive nuclei only: how "
+                        "strongly the positive cells stain.")),
+        (r"intensity_(.+)_fiji_cell", lambda c: dict(
+            label=f"{c} mean, nucleus + 6 px (Fiji legacy)", kind="positive", unit="intensity (a.u.)",
+            description=f"Legacy readout of the old Fiji macro: mean {c} of the nucleus enlarged by fiji_ring_px, minus "
+                        "the image background, averaged over counted nuclei. No flat-field correction.")),
+    ]
+    for pat, make in pats:
+        m = re.fullmatch(pat, col)
+        if m:
+            return make(m.group(1))
+    return None
+
+
+READOUTS: dict[str, dict] = _Readouts({
     "readout_frac_out_of_focus": dict(
         label="Out-of-focus fraction", kind="fraction", unit="fraction",
         description="Share of nuclei lying outside the focal plane (rounded-up, floating or detaching cells): "
@@ -179,7 +229,7 @@ READOUTS: dict[str, dict] = {
         description="Median distance from each counted nucleus to its closest neighbour, in multiples of the median "
                     "nucleus diameter: small = crowded or clustered, large = sparse.",
         min_nuclei=5),
-}
+})
 
 IRREGULAR_SOLIDITY = 0.9  # same convexity cut-off the classifier uses for suspected merges
 MICRONUCLEUS_MAX_AREA_FRAC = 1 / 9  # micronucleus diameter <= 1/3 of the main nucleus (Fenech criteria)

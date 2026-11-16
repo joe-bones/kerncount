@@ -123,6 +123,11 @@ suspected merges are left out of size and shape statistics, because their outlin
   even when the debris itself is unchanged, so it would make toxic treatments look "dirty". The micronucleus rule
   above keeps only the debris that hugs nuclei.
 
+## Marker channels (% positive, e.g. Ki-67)
+
+Readouts from a second (marker) channel, `readout_frac_positive_<channel>` and friends, are described in
+`docs/intensity.md`. They are computed from per-nucleus intensities, not from the shapes above.
+
 ## Not yet: readouts that need intensity calibration
 
 Intensity calibration is still pending, so no readout uses brightness, absolute or relative to the other nuclei in

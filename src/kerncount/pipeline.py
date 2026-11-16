@@ -40,8 +40,23 @@ class Project:
         return p if p.is_absolute() else (self.path / p).resolve()
 
     def channel_name(self, c: int) -> str:
-        names = self.settings["channels"]["names"]
-        return names[c] if c < len(names) else f"C{c + 1}"
+        return settings_mod.channel_names(self.settings, c + 1)[c]
+
+    def seg_channel(self, n_channels: int) -> int:
+        """0-based index of the nuclear (segmentation) channel; [channels] segment is a number or a name."""
+        try:
+            return settings_mod.channel_index(self.settings, self.settings["channels"]["segment"], n_channels)
+        except ValueError as e:
+            raise SystemExit(f"settings.toml [channels] segment: {e}") from None
+
+    def seg_hash(self) -> str:
+        # pixel size only converts units, and settings added later (per-nucleus intensity) are measured outside
+        # the detection cache: neither may invalidate cached segmentations (settings.seg_hash_input)
+        hashable = settings_mod.seg_hash_input(self.settings)
+        return settings_mod.section_hash(hashable, "segmentation", "channels", "intensity") + f"v{MEASURE_VERSION}"
+
+    def records(self, layout: pd.DataFrame):
+        return discover.records(layout, self.raw_dir(), self.settings)
 
 
 # ---------------------------------------------------------------- segmentation cache
@@ -57,13 +72,25 @@ def _source_sig(p: Path) -> dict:
     return {"source": str(p), "size": st.st_size, "mtime": st.st_mtime_ns}
 
 
+def _record_sig(rec) -> dict:
+    """Source signature of a field. Single file: exactly as before; interleaved: plus every file of the field."""
+    sig = _source_sig(rec.path)
+    if rec.paths:
+        sig["sources"] = [_source_sig(p) for p in rec.paths]
+    return sig
+
+
 def _cached(prj: Project, rec, seg_hash: str) -> bool:
     lab, obj, meta = _cache_paths(prj, rec)
     if not (lab.exists() and obj.exists() and meta.exists()):
         return False
     m = json.loads(meta.read_text())
-    sig = _source_sig(rec.path)
-    return m.get("seg_hash") == seg_hash and m.get("size") == sig["size"] and m.get("mtime") == sig["mtime"]
+    sig = _record_sig(rec)
+    ok = m.get("seg_hash") == seg_hash and m.get("size") == sig["size"] and m.get("mtime") == sig["mtime"]
+    if rec.paths:
+        ok = ok and [(x.get("source"), x.get("size"), x.get("mtime")) for x in m.get("sources", [])] == \
+            [(x["source"], x["size"], x["mtime"]) for x in sig["sources"]]
+    return ok
 
 
 def _segment_folder(prj: Project, recs: list, seg_hash: str, force: bool, counter: list[int], total: int):
@@ -72,7 +99,7 @@ def _segment_folder(prj: Project, recs: list, seg_hash: str, force: bool, counte
         counter[0] += len(recs)
         return
     s = prj.settings
-    seg_ch = int(s["channels"]["segment"]) - 1
+    seg_ch = prj.seg_channel(settings_mod.n_channels_expected(s) or imageio.read_record(todo[0]).data.shape[0])
     folder_meta = prj.work / _slug(recs[0].n) / _slug(recs[0].treatment) / "folder.json"
     folder_meta.parent.mkdir(parents=True, exist_ok=True)
     diameter = None
@@ -81,7 +108,7 @@ def _segment_folder(prj: Project, recs: list, seg_hash: str, force: bool, counte
         if fm.get("seg_hash") == seg_hash and len(todo) < len(recs):
             diameter = fm["diameter"]
         else:
-            ests = [segment.estimate_diameter(imageio.read(r.path).data[seg_ch]) for r in recs]
+            ests = [segment.estimate_diameter(imageio.read_record(r).data[seg_ch]) for r in recs]
             ests = [e for e in ests if e]
             diameter = float(np.median(ests)) if ests else None
             folder_meta.write_text(json.dumps({"seg_hash": seg_hash, "diameter": diameter, "per_image": ests}))
@@ -91,7 +118,10 @@ def _segment_folder(prj: Project, recs: list, seg_hash: str, force: bool, counte
         if id(r) not in done_ids:
             continue
         t0 = time.time()
-        im = imageio.read(r.path)
+        try:
+            im = imageio.read_record(r)
+        except ValueError as e:
+            raise SystemExit(str(e)) from None
         if seg_ch >= im.data.shape[0]:
             raise SystemExit(f"{r.path}: has {im.data.shape[0]} channel(s) but settings ask for channel {seg_ch + 1}")
         res = segment.run(im.data, im.max_value, seg_ch, s, diameter)
@@ -99,7 +129,10 @@ def _segment_folder(prj: Project, recs: list, seg_hash: str, force: bool, counte
         tifffile.imwrite(lab, res.labels.astype(np.uint16 if res.labels.max() < 65535 else np.int32), compression="zlib")
         res.objects.to_csv(obj, index=False)
         info = {k: v for k, v in res.info.items()}
-        info.update(_source_sig(r.path), seg_hash=seg_hash, pixel_size_um=im.pixel_size_um, n_channels=int(im.data.shape[0]))
+        info.update(_record_sig(r), seg_hash=seg_hash, pixel_size_um=im.pixel_size_um, n_channels=int(im.data.shape[0]),
+                    max_value=float(im.max_value))
+        if r.paths:
+            info["file_numbers"] = list(r.numbers)
         meta.write_text(json.dumps(info, default=float))
         log(f"  [{counter[0]:>4}/{total}] {r.n} / {r.treatment} / {r.image:02d}: {len(res.objects)} objects "
             f"(diam {res.info['diameter_used']:.0f}px, {time.time() - t0:.1f}s)")
@@ -131,13 +164,11 @@ def run(project_dir: Path, rebuild: list[str] | None = None, resegment: bool = F
     if not layout_path.exists():
         raise SystemExit(f"{layout_path} not found - run 'kerncount init' first")
     layout = discover.read_table(layout_path)
-    recs, warns = discover.records(layout, prj.raw_dir())
+    recs, warns = prj.records(layout)
     for w in warns:
         log(f"  note: {w}")
     imaged = [r for r in recs if r.path is not None]
-    # pixel size only converts units; it must not invalidate cached segmentations
-    hashable = {**s, "segmentation": {**s["segmentation"], "pixel_size_um": ""}}
-    seg_hash = settings_mod.section_hash(hashable, "segmentation", "channels", "intensity") + f"v{MEASURE_VERSION}"
+    seg_hash = prj.seg_hash()
 
     # 1. segmentation (cached)
     groups: dict[tuple, list] = {}
@@ -150,7 +181,7 @@ def run(project_dir: Path, rebuild: list[str] | None = None, resegment: bool = F
 
     # 2. classify + QC + intensity + review images
     log("Classifying nuclei, scoring quality, drawing review images...")
-    rows, cells = [], []
+    rows, cells, fields = [], [], []
     alpha = float(s["review"]["overlay_alpha"])
     legacy_fiji = _fiji_counts(layout, prj.raw_dir())
     for key in sorted(groups):
@@ -166,9 +197,10 @@ def run(project_dir: Path, rebuild: list[str] | None = None, resegment: bool = F
             cobjs, summ = classify.classify(objs, info, ref, s)
             row = dict(n=r.n, treatment=r.treatment, image=r.image, **summ,
                        diameter_px=round(info.get("diameter_used", np.nan), 1), stardist_scale=round(info.get("scale", 1), 3),
-                       fiji_count=legacy_fiji.get((r.n, r.treatment, r.image)), source_file=str(r.path))
+                       fiji_count=legacy_fiji.get((r.n, r.treatment, r.image)),
+                       source_file="; ".join(str(p) for p in r.paths) if r.paths else str(r.path))
             row.update(_intensity(prj, cobjs, info))
-            px = s["segmentation"]["pixel_size_um"] or info.get("pixel_size_um")
+            px = settings_mod.pixel_size_um(s) or info.get("pixel_size_um")
             h, w = tifffile.TiffFile(lab).pages[0].shape[:2]
             if s["readouts"]["enabled"]:
                 ro, cobjs = classify.compute_readouts(cobjs, (h, w), float(px) if px else None, s["readouts"]["include"])
@@ -176,6 +208,7 @@ def run(project_dir: Path, rebuild: list[str] | None = None, resegment: bool = F
             if px:
                 row["nuclei_per_mm2"] = summ["auto_count"] / (h * w * float(px) ** 2 / 1e6)
             rows.append(row)
+            fields.append((r, lab, cobjs, info, row))
             if len(cobjs):
                 cells.append(cobjs.assign(n=r.n, treatment=r.treatment, image=r.image))
             if not no_review:
@@ -185,6 +218,12 @@ def run(project_dir: Path, rebuild: list[str] | None = None, resegment: bool = F
         if sheet and not no_review:
             overlay.contact_sheet(sheet, prj.review / _slug(key[0]) / f"{_slug(key[1])}_overview.jpg",
                                   title=f"{key[0]}  |  {key[1]}   (border: green = QC high, orange = medium, red = low)")
+
+    # 2b. marker intensity per nucleus, flat field, % positive (docs/intensity.md); adds columns to the rows in place.
+    # Single-channel projects have no marker channel: nothing is measured and nothing is written.
+    from . import intensity as intensity_mod
+
+    intensity_mod.process(prj, fields, log)
 
     for r in recs:
         if r.path is None:
@@ -292,11 +331,11 @@ def _review_image(prj: Project, r, lab_path: Path, objs: pd.DataFrame, summ: dic
     if out.exists() and sig_path.exists() and sig_path.read_text() == sig:
         return out
     out.parent.mkdir(parents=True, exist_ok=True)
-    im = imageio.read(r.path)
+    im = imageio.read_record(r)
     labels = tifffile.imread(lab_path).astype(np.int32)
     title = f"{r.n} | {r.treatment} | image {r.image:02d}    count {summ['auto_count']} (plausible {summ['count_low']}-{summ['count_high']})    QC {summ['qc_level']}"
     sub = summ["qc_flags"] or "no issues flagged"
-    img = overlay.render(im.data[int(prj.settings["channels"]["segment"]) - 1], labels, objs, title, sub, alpha)
+    img = overlay.render(im.data[prj.seg_channel(im.data.shape[0])], labels, objs, title, sub, alpha)
     img.save(out, quality=int(prj.settings["review"]["jpeg_quality"]))
     sig_path.write_text(sig)
     return out

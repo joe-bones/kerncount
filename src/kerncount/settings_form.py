@@ -26,9 +26,50 @@ FIELDS: dict[str, dict[str, dict]] = {
         "csv_delimiter": dict(kind="choice", options=[",", ";"], label="CSV delimiter",
                               help='Use ";" if Excel (German/European locale) shows CSVs in one column.'),
     },
+    "experiment": {
+        "cell_line": dict(kind="text", label="Cell line",
+                          help="e.g. LN229. Experiments (n's) of different cell lines are never pooled. Override per n "
+                               "or condition with a cell_line column in layout.csv."),
+        "magnification": dict(kind="num_or", special=[""], label="Objective magnification",
+                              help="e.g. 20 for a 20x objective. With the camera pixel size it gives the pixel size."),
+        "camera_pixel_um": dict(kind="num_or", special=[""], label="Camera pixel size (µm)",
+                                help="Physical size of one camera pixel, e.g. 6.5. Pixel size in the image = this ÷ "
+                                     "magnification (used when 'Pixel size (µm)' under Finding nuclei is empty)."),
+        "seeding_density": dict(kind="num_or", special=[""], label="Seeding density",
+                                help="Cells seeded, e.g. 30000. Override per n or condition in layout.csv."),
+        "seeding_unit": dict(kind="text", label="Seeding unit", help='e.g. "cells/well" or "cells/cm²".'),
+        "stain": dict(kind="text", label="Stain / antibodies",
+                      help="e.g. Ki-67 (rabbit) + anti-rabbit AF488, DAPI. For the record only."),
+        "notes": dict(kind="text", label="Notes", help="Anything worth knowing about this experiment."),
+        "negative_control": dict(kind="text", label="Negative-control condition",
+                                 help="Name of the condition with negative-control wells (stained without the specific "
+                                      "signal). If present in an n, its nuclei set that n's positivity cut-off and it is "
+                                      "left out of the statistics. Empty = no control wells."),
+        "negative_control_type": dict(kind="choice", options=["secondary_only", "isotype", "unstained"],
+                                      label="Negative-control type",
+                                      help="secondary_only = secondary antibody without the primary (indirect "
+                                           "staining); isotype = non-binding antibody of the same isotype; unstained "
+                                           "= no antibody (only autofluorescence)."),
+    },
     "channels": {
-        "names": dict(kind="list", label="Channel names", help='e.g. DAPI, marker. Empty = C1, C2, ...', reseg=True),
-        "segment": dict(kind="int", min=1, label="Channel used to find nuclei", help="1 = first channel.", reseg=True),
+        "names": dict(kind="list", label="Channel names",
+                      help='e.g. DAPI, marker. Empty = C1, C2, ... (separate files: empty = the file order below).',
+                      reseg=True),
+        "segment": dict(kind="text", label="Channel used to find nuclei",
+                        help='A number (1 = first channel) or a channel name, e.g. DAPI.', reseg=True),
+        "files": dict(kind="choice", options=["single", "interleaved"], label="How channels are saved", reseg=True,
+                      help="single = all channels inside one file per image; interleaved = one file per channel, "
+                           "alternating in file order (e.g. 1 = Ki67, 2 = DAPI, 3 = Ki67, 4 = DAPI, ...). Gaps in the "
+                           "numbering are ignored. Run init again (--force-layout) after changing it."),
+        "file_order": dict(kind="list", label="Channel order of the files",
+                           help="Interleaved only: channel names in file order, e.g. Ki67, DAPI.", reseg=True),
+        "align": dict(kind="choice", options=["check", "correct", "off"], label="Channel alignment",
+                      help="Interleaved only: check = measure the shift between the files of a field and flag big "
+                           "ones; correct = also shift the marker back (whole pixels, up to the limit below); off."),
+        "align_warn_px": dict(kind="float", min=0, label="Alignment warning above (px)",
+                              help="Fields whose channels are shifted by more than this are flagged."),
+        "align_max_correct_px": dict(kind="float", min=0, label="Correct shifts up to (px)",
+                                     help="Bigger shifts are not corrected (they suggest mis-paired files) but flagged."),
     },
     "segmentation": {
         "backend": dict(kind="choice", options=["stardist", "classical"], label="Detector", reseg=True,
@@ -66,10 +107,35 @@ FIELDS: dict[str, dict[str, dict]] = {
     "intensity": {
         "enabled": dict(kind="bool", label="Measure intensities", reseg=True, help="Per-cell mean intensity (replaces the Mean-intensity macros)."),
         "measure": dict(kind="measure", label="Channels to measure", reseg=True, help='"all", or channel numbers, e.g. 2 or 2, 3.'),
-        "regions": dict(kind="multi", options=["nucleus", "ring", "cell"], label="Regions", reseg=True,
-                        help="ring = band around the nucleus (cytoplasm); cell = nucleus + ring (Fiji's 'enlarge')."),
+        "regions": dict(kind="multi", options=["nucleus", "ring", "cell", "fiji_cell"], label="Regions", reseg=True,
+                        help="ring = band around the nucleus (cytoplasm); cell = nucleus + ring; fiji_cell = nucleus "
+                             "enlarged by the Fiji ring width below (the old macro's 'Enlarge 6 px'). Changing only "
+                             "fiji_cell does not re-detect."),
         "ring_px": dict(kind="num_or", special=["auto"], label="Ring width (px)", reseg=True, help="auto = 0.25 × nucleus diameter."),
         "subtract_background": dict(kind="bool", label="Subtract background", reseg=True, help="Median of empty areas, per image."),
+        "per_nucleus": dict(kind="text", label="Marker channels measured per nucleus",
+                            help='auto = every channel except the nuclear one; or names, e.g. Ki67; off = none. '
+                                 "Per nucleus: mean, total, 90th percentile, local background. Does not re-detect."),
+        "erode_px": dict(kind="num_or", special=["auto"], label="Shrink nucleus outline by (px)",
+                         help="Measured inside the outline shrunk by this much, so the blurry rim and neighbours' "
+                              "light are left out. auto = 1 px, 2 px for nuclei at least 16 px across."),
+        "bg_gap_px": dict(kind="int", min=0, label="Background: gap around nuclei (px)",
+                          help="The local background ring starts this far outside the nucleus and keeps this far "
+                               "from every other nucleus."),
+        "bg_ring_px": dict(kind="num_or", special=["auto"], label="Background ring width (px)",
+                           help="auto = half a nucleus diameter. The median of the ring is the nucleus' background."),
+        "bg_min_px": dict(kind="int", min=1, label="Background: minimum ring pixels",
+                          help="Crowded nuclei with fewer ring pixels get a wider ring, then the image background."),
+        "fiji_ring_px": dict(kind="int", min=1, label="Fiji ring width (px)",
+                             help="Region fiji_cell = nucleus enlarged by this (the old macro used 6 px)."),
+        "flatfield": dict(kind="text", label="Flat-field correction",
+                          help="Uneven illumination (e.g. darker edges). auto = estimated per n and channel from all "
+                               "of that n's images; off = none; or a folder of reference images (uniform slide; "
+                               "files named with the channel; 'dark' in the name = dark frames). Intensities only, "
+                               "never counts."),
+        "flatfield_dark": dict(kind="bool", label="Flat field: remove background pattern first",
+                               help="Estimate and remove the additive background (camera offset, autofluorescence) "
+                                    "pattern before estimating the illumination."),
     },
     "readouts": {
         "enabled": dict(kind="bool", label="Extra readouts",
@@ -77,6 +143,24 @@ FIELDS: dict[str, dict[str, dict]] = {
                              "shape, crowding), computed from the detected nuclei. Fast: does not re-detect."),
         "include": dict(kind="names", options=READOUT_NAMES, label="Readouts to include",
                         help='"all", or names separated by commas: ' + ", ".join(READOUT_NAMES) + "."),
+    },
+    "positivity": {
+        "enabled": dict(kind="bool", label="% positive nuclei",
+                        help="Classify each nucleus as positive or negative for the marker; per image the % positive "
+                             "(primary readout) and the same with the 90th percentile."),
+        "channels": dict(kind="text", label="Channels", help="auto = every per-nucleus channel; or names, e.g. Ki67."),
+        "control_percentile": dict(kind="float", min=50, max=100, label="Negative control: percentile",
+                                   help="With negative-control wells in an n: cut-off = this percentile of their nuclei "
+                                        "(99 = 1% of control nuclei would be called positive)."),
+        "manual_cutoff": dict(kind="text", label="Manual cut-off",
+                              help="A fixed cut-off (corrected intensity units), used when there are no control wells. "
+                                   "Empty = the value locked in the tuning view (cutoffs.json), else the automatic "
+                                   "rule. Fix it before looking at the statistics."),
+        "lod_k": dict(kind="float", min=0.5, max=20, label="Automatic rule: k x noise",
+                      help="Limit of detection: a nucleus is positive when its signal exceeds k x the background "
+                           "noise expected for its size. 3 = about 1 false positive in 700 unstained nuclei."),
+        "min_nuclei": dict(kind="int", min=1, label="Minimum nuclei per image",
+                           help="Images with fewer measurable nuclei get no % positive."),
     },
     "analysis": {
         "reference": dict(kind="text", label="Main comparison group", help="Used for the headline plots."),
@@ -168,8 +252,9 @@ FIELDS: dict[str, dict[str, dict]] = {
 }
 
 SECTION_TITLES = {
-    "project": "Project", "channels": "Channels", "segmentation": "Finding nuclei", "counting": "What counts as a nucleus",
-    "qc": "Quality levels", "intensity": "Intensity per cell", "readouts": "Extra readouts (beyond the count)",
+    "project": "Project", "experiment": "Experiment (cell line, imaging, controls)", "channels": "Channels", "segmentation": "Finding nuclei", "counting": "What counts as a nucleus",
+    "qc": "Quality levels", "intensity": "Intensity per cell / nucleus",
+    "positivity": "% positive nuclei (e.g. Ki-67)", "readouts": "Extra readouts (beyond the count)",
     "analysis": "Statistics", "acceptance": "Acceptance criteria per n",
     "design": "Plate design (wells, fields, positions)", "review": "Review images",
     "planner": "Planning the next experiment",

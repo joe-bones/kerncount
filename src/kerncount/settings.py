@@ -13,9 +13,26 @@ DEFAULTS: dict = {
         "date_order": "DMY",  # how dates in n-folder names are written (05.06.26 = 5 June 2026)
         "csv_delimiter": ",",  # use ";" if your Excel is set to German/European locale
     },
+    "experiment": {
+        # descriptive metadata (docs/intensity.md); per-n / per-condition overrides: same-named columns in layout.csv
+        "cell_line": "",  # e.g. "LN229"; n's of different cell lines are never pooled
+        "magnification": "",  # objective, e.g. 20 (for 20x)
+        "camera_pixel_um": "",  # camera pixel size in µm; pixel size = camera_pixel_um / magnification
+        "seeding_density": "",  # e.g. 30000
+        "seeding_unit": "cells/well",
+        "stain": "",  # e.g. "Ki-67 (rabbit) + anti-rabbit AF488; DAPI"
+        "notes": "",
+        "negative_control": "",  # treatment name of the negative-control wells ("" = none on the plate)
+        "negative_control_type": "secondary_only",  # secondary_only | isotype | unstained
+    },
     "channels": {
-        "names": [],  # e.g. ["DAPI", "marker"]; empty = C1, C2, ...
-        "segment": 1,  # 1-based channel used to find nuclei
+        "names": [],  # e.g. ["DAPI", "marker"]; empty = C1, C2, ... (interleaved: empty = file_order)
+        "segment": 1,  # channel used to find nuclei: 1-based number or a channel name (e.g. "DAPI")
+        "files": "single",  # "single": all channels inside one file; "interleaved": one file per channel, alternating
+        "file_order": [],  # interleaved: channel names in file order, e.g. ["Ki67", "DAPI"]
+        "align": "check",  # interleaved: "check" (report shifts), "correct" (also shift small offsets back), "off"
+        "align_warn_px": 2.0,  # warn when the channels of a field are shifted by more than this
+        "align_max_correct_px": 10.0,  # "correct" only fixes shifts up to this (bigger = suspicious, flagged instead)
     },
     "segmentation": {
         "backend": "stardist",  # "stardist" (deep learning, recommended) or "classical"
@@ -45,10 +62,27 @@ DEFAULTS: dict = {
         "regions": ["nucleus", "cell"],  # nucleus, ring (cytoplasm band), cell (nucleus + ring)
         "ring_px": "auto",  # band width; "auto" = 0.25 x nucleus diameter (Fiji macro used 6 px)
         "subtract_background": True,
+        # per-nucleus measurement of marker channels (docs/intensity.md); never changes detection or counts
+        "per_nucleus": "auto",  # channels measured per nucleus: "auto" = every channel except the nuclear one; list; "off"
+        "erode_px": "auto",  # shrink the nucleus outline before measuring: "auto" = 1 px, 2 px for nuclei >= 16 px across
+        "bg_gap_px": 3,  # local background starts this far outside the nucleus and avoids this margin around every nucleus
+        "bg_ring_px": "auto",  # width of the local background ring; "auto" = 0.5 x nucleus diameter
+        "bg_min_px": 40,  # fewer ring pixels than this: wider ring, then the image-level background
+        "fiji_ring_px": 6,  # legacy region "fiji_cell" = nucleus enlarged by this many px (the Fiji macro)
+        "flatfield": "auto",  # "auto" (estimated per n and channel from that n's images), "off", or a folder of reference images
+        "flatfield_dark": True,  # remove the additive background pattern (camera offset, autofluorescence) before estimating
     },
     "readouts": {
         "enabled": True,  # extra per-image readouts from the classified nuclei (docs/readouts.md); no re-detection
         "include": "all",  # "all" or a list of names, e.g. ["frac_out_of_focus", "coverage"]
+    },
+    "positivity": {
+        "enabled": True,  # % positive nuclei per marker channel (docs/intensity.md)
+        "channels": "auto",  # "auto" = every per-nucleus channel, or a list of names
+        "control_percentile": 99.0,  # with negative-control wells: cut-off = this percentile of their nuclei
+        "manual_cutoff": "",  # a number (all channels) or { Ki67 = 1200 }; "" = cutoffs.json lock, else the LoD rule
+        "lod_k": 3.0,  # limit-of-detection rule: positive when signal > k x background noise SD for the nucleus area
+        "min_nuclei": 5,  # fewer measurable nuclei in an image: the image's % positive is left empty
     },
     "analysis": {
         "reference": "Control",  # main comparison group (used for the headline plots)
@@ -106,9 +140,25 @@ raw_dir = "{raw_dir}"   # raw images; relative paths are relative to this folder
 date_order = "DMY"        # n-folder dates: 05.06.26 = 5 June 2026
 csv_delimiter = ","       # set to ";" if Excel (German/European locale) shows everything in one column
 
+[experiment]              # what was imaged; per-n / per-condition overrides: same-named columns in layout.csv
+cell_line = ""            # e.g. "LN229"; different cell lines are never pooled
+magnification = ""        # objective, e.g. 20
+camera_pixel_um = ""      # camera pixel size (µm); pixel size = camera_pixel_um / magnification
+seeding_density = ""      # e.g. 30000
+seeding_unit = "cells/well"
+stain = ""                # e.g. "Ki-67 + secondary AF488; DAPI"
+notes = ""
+negative_control = ""     # treatment name of negative-control wells ("" = none): sets the positivity cut-off
+negative_control_type = "secondary_only"   # secondary_only | isotype | unstained
+
 [channels]
-names = []                # e.g. ["DAPI", "marker"]; empty = C1, C2, ...
-segment = 1               # channel (1-based) used to find nuclei
+names = []                # e.g. ["DAPI", "marker"]; empty = C1, C2, ... (interleaved: empty = file_order)
+segment = 1               # channel used to find nuclei: number (1-based) or name, e.g. "DAPI"
+files = "single"          # "single": channels inside one file; "interleaved": one file per channel, alternating
+file_order = []           # interleaved: channel names in file order, e.g. ["Ki67", "DAPI"]
+align = "check"           # interleaved: "check" shifts between the files of a field, "correct" small ones, "off"
+align_warn_px = 2.0       # warn above this shift (px)
+align_max_correct_px = 10.0   # "correct" fixes shifts up to this; larger ones are only flagged
 
 [segmentation]
 backend = "stardist"      # "stardist" (recommended) or "classical" (Fiji-like threshold + watershed)
@@ -135,13 +185,29 @@ max_saturated_frac = 0.02
 [intensity]
 enabled = true
 measure = "all"           # "all" or a list of channels, e.g. [2]
-regions = ["nucleus", "cell"]   # nucleus, ring, cell (= nucleus + ring, like the Fiji macro)
+regions = ["nucleus", "cell"]   # nucleus, ring, cell (= nucleus + ring), fiji_cell (= nucleus + fiji_ring_px, the old macro)
 ring_px = "auto"          # "auto" = 0.25 x nucleus diameter
 subtract_background = true
+per_nucleus = "auto"      # marker channels measured per nucleus: "auto" = all except the nuclear channel; "off" = none
+erode_px = "auto"         # shrink outlines before measuring: 1 px, 2 px for nuclei >= 16 px across
+bg_gap_px = 3             # local background ring starts this far out and avoids this margin around all nuclei
+bg_ring_px = "auto"       # ring width; "auto" = 0.5 x nucleus diameter
+bg_min_px = 40            # too few ring pixels: wider ring, then the image background
+fiji_ring_px = 6          # region "fiji_cell" = nucleus enlarged by 6 px (the old Fiji macro)
+flatfield = "auto"        # uneven illumination: "auto" (estimated per n), "off", or a folder of reference images
+flatfield_dark = true     # remove the additive background pattern before estimating the flat field
 
 [readouts]                # extra per-image readouts from the detected nuclei (see docs/readouts.md); fast, no re-detection
 enabled = true
 include = "all"           # "all" or a list, e.g. ["frac_out_of_focus", "micronuclei_per_nucleus", "coverage"]
+
+[positivity]              # % positive nuclei per marker channel (docs/intensity.md)
+enabled = true
+channels = "auto"         # "auto" = every per-nucleus channel
+control_percentile = 99.0 # negative-control wells present: cut-off = this percentile of their nuclei
+manual_cutoff = ""        # a number, or {{ Ki67 = 1200 }}; "" = locked value from the tuning view, else automatic
+lod_k = 3.0               # automatic: signal > 3 x background noise SD for the nucleus area
+min_nuclei = 5            # fewer measurable nuclei in an image: its % positive is left empty
 
 [analysis]
 reference = "Control"               # main comparison group (headline plots)
@@ -223,3 +289,75 @@ def write_template(project_dir: Path, raw_dir: Path) -> None:
 def section_hash(settings: dict, *sections: str) -> str:
     blob = json.dumps({s: settings.get(s) for s in sections}, sort_keys=True, default=str)
     return hashlib.sha1(blob.encode()).hexdigest()[:12]
+
+
+def pixel_size_um(settings: dict) -> float | None:
+    """[segmentation] pixel_size_um if set, else [experiment] camera_pixel_um / magnification, else None."""
+    v = settings.get("segmentation", {}).get("pixel_size_um", "")
+    if v not in ("", None):
+        return float(v)
+    e = settings.get("experiment", {})
+    try:
+        cam, mag = float(e.get("camera_pixel_um") or 0), float(str(e.get("magnification") or 0).lower().rstrip("x"))
+    except ValueError:
+        return None
+    return cam / mag if cam > 0 and mag > 0 else None
+
+
+# ---------------------------------------------------------------- channels
+
+# Keys that existed before per-nucleus intensity / interleaved files. Only these enter the segmentation hash for
+# single-file projects, so adding new settings never invalidates cached detections.
+_LEGACY_SEG_KEYS = {"channels": ("names", "segment"),
+                    "intensity": ("enabled", "measure", "regions", "ring_px", "subtract_background")}
+
+
+def interleaved(settings: dict) -> bool:
+    return str(settings.get("channels", {}).get("files", "single")).strip().lower() == "interleaved"
+
+
+def channel_names(settings: dict, n_channels: int) -> list[str]:
+    """Names of the channels of a field stack: channels.names, else (interleaved) file_order, else C1, C2, ..."""
+    ch = settings.get("channels", {})
+    names = [str(x) for x in (ch.get("names") or [])]
+    if not names and interleaved(settings):
+        names = [str(x) for x in (ch.get("file_order") or [])]
+    return [names[i] if i < len(names) and names[i] else f"C{i + 1}" for i in range(n_channels)]
+
+
+def channel_index(settings: dict, ref, n_channels: int) -> int:
+    """0-based index of a channel given as a 1-based number ("2", 2) or a name ("DAPI", case-insensitive)."""
+    names = channel_names(settings, n_channels)
+    s = str(ref).strip()
+    if s.lstrip("-").isdigit():
+        i = int(s) - 1
+    else:
+        low = [n.lower() for n in names]
+        if s.lower() not in low:
+            raise ValueError(f"channel {s!r} not found; channels are {', '.join(names)}")
+        i = low.index(s.lower())
+    if not 0 <= i < n_channels:
+        raise ValueError(f"channel {s} does not exist (the images have {n_channels} channel(s): {', '.join(names)})")
+    return i
+
+
+def n_channels_expected(settings: dict) -> int | None:
+    """Number of channels of a field when it is known from the settings alone (interleaved), else None."""
+    if interleaved(settings):
+        return max(len(settings["channels"].get("file_order") or []), 1)
+    return None
+
+
+def seg_hash_input(settings: dict) -> dict:
+    """The settings that decide the detection result (and cached per-object measurements). Single-file projects
+    hash exactly the keys they always had; interleaved projects add their file layout."""
+    out = {"segmentation": {**settings["segmentation"], "pixel_size_um": ""}}
+    for sec, keys in _LEGACY_SEG_KEYS.items():
+        d = settings.get(sec, {})
+        out[sec] = {k: d[k] for k in keys if k in d}
+    regions = out["intensity"].get("regions")
+    if isinstance(regions, list):  # the legacy fiji_cell region is measured later, outside the detection cache
+        out["intensity"]["regions"] = [r for r in regions if r != "fiji_cell"]
+    if interleaved(settings):
+        out["channels"].update(files="interleaved", file_order=list(settings["channels"].get("file_order") or []))
+    return out

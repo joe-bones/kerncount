@@ -56,7 +56,7 @@ def resolve_project(arg: str, must_exist: bool = True) -> Path:
              + " - create it with `kerncount init`")
 
 
-def _init_one(raw: Path, prj: Path, force: bool):
+def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False):
     from . import discover, settings
 
     prj.mkdir(parents=True, exist_ok=True)
@@ -65,14 +65,30 @@ def _init_one(raw: Path, prj: Path, force: bool):
     else:
         settings.write_template(prj, raw)
     s = settings.load(prj)
-    layout = discover.scan(raw, s["project"]["date_order"])
+    inter = settings.interleaved(s)
+    layout = discover.scan(raw, s["project"]["date_order"], files=s["channels"]["files"],
+                           n_channels=settings.n_channels_expected(s) or 1)
     lp = prj / "layout.csv"
-    if lp.exists() and not force:
+    if lp.exists() and not (force or force_layout):
         lp = prj / "layout.new.csv"
         print(f"layout.csv already exists (kept); fresh scan written to {lp.name} for comparison.")
     discover.write_layout(layout, lp, s["project"]["csv_delimiter"])
     with __import__("pandas").option_context("display.width", 200, "display.max_colwidth", 60, "display.max_rows", 500):
         print(layout[["n", "treatment", "treatment_folder", "images", "note"]].to_string(index=False))
+    if inter:
+        print(f"\nChannels are separate files ({', '.join(s['channels']['file_order'])} in file order): "
+              "'images' counts fields (file groups).")
+    else:
+        try:
+            det = discover.detect_interleaved(raw)
+        except Exception:  # detection is only a hint
+            det = {"interleaved": False}
+        if det["interleaved"]:
+            first, second = ("marker", "DAPI") if det["bright_position"] == 1 else ("DAPI", "marker")
+            print("\nHint: the files look like ONE channel each, alternating dim / bright (e.g. marker, DAPI, marker, "
+                  "DAPI, ...).\nIf so, set in settings.toml and run `kerncount init` again with --force-layout:\n"
+                  f"  [channels]\n  files = \"interleaved\"\n  file_order = [\"{first}\", \"{second}\"]   "
+                  "# your channel names, in file order\n  segment = \"DAPI\"")
     ws = workspace_root()
     target = prj.name if ws and prj.resolve().parent == (ws / ANALYSIS).resolve() else str(prj)
     print(f"\nWrote {lp}\nCheck the n / treatment names (edit the CSV if needed), then run:  kerncount run \"{target}\"")
@@ -83,7 +99,7 @@ def cmd_init(a):
         ws = workspace_root() or sys.exit("--all needs a workspace: run from a folder that contains data/")
         for exp in _experiments(ws):
             print(f"\n=== {exp}")
-            _init_one(ws / DATA / exp, ws / ANALYSIS / exp, a.force)
+            _init_one(ws / DATA / exp, ws / ANALYSIS / exp, a.force, a.force_layout)
         return
     if not a.raw_dir:
         sys.exit("give an experiment name (from data/), a raw folder, or --all")
@@ -92,8 +108,10 @@ def cmd_init(a):
         prj = Path(a.project_dir).resolve()
     else:
         ws = workspace_root()
-        prj = (ws / ANALYSIS / raw.name) if ws and raw.parent == (ws / DATA).resolve() else raw.parent.parent / ANALYSIS / raw.name
-    _init_one(raw, prj, a.force)
+        # data/<name> may be a symlink to a folder elsewhere: the project still belongs in this workspace
+        in_ws = ws and (raw.parent == (ws / DATA).resolve() or (ws / DATA / raw.name).resolve() == raw)
+        prj = (ws / ANALYSIS / raw.name) if in_ws else raw.parent.parent / ANALYSIS / raw.name
+    _init_one(raw, prj, a.force, a.force_layout)
 
 
 def _projects(a) -> list[Path]:
@@ -149,7 +167,8 @@ def cmd_platemap(a):
         try:
             out = platemap.plan_project(prj, plates=a.plates, plate_format=a.format, wells=a.wells,
                                         reference_wells=a.reference_wells, avoid_edge=True if a.avoid_edge else None,
-                                        seed=a.seed, balance=not a.no_balance)
+                                        seed=a.seed, balance=not a.no_balance, negative_control=a.negative_control,
+                                        negative_control_wells=a.control_wells)
         except ValueError as e:
             sys.exit(f"platemap: {e}")
         print((out / "README.txt").read_text(encoding="utf-8"))
@@ -174,6 +193,8 @@ def main(argv=None):
     i.add_argument("project_dir", nargs="?", help="optional; default analysis/<experiment>")
     i.add_argument("--all", action="store_true", help="every experiment in data/")
     i.add_argument("--force", action="store_true", help="overwrite settings.toml and layout.csv")
+    i.add_argument("--force-layout", action="store_true",
+                   help="keep settings.toml, rewrite layout.csv (e.g. after setting [channels] files = \"interleaved\")")
     i.set_defaults(func=cmd_init)
     r = sub.add_parser("run", help="count, check, and analyse (safe to re-run any time)")
     r.add_argument("project", nargs="?", help="experiment name, or a project folder path")
@@ -213,6 +234,11 @@ def main(argv=None):
                     help="inner wells first (default: [planner] avoid_edge)")
     pm.add_argument("--seed", type=int, default=None, help="random seed (default: new; printed for reuse)")
     pm.add_argument("--no-balance", action="store_true", help="independent random plates (no rotation across plates)")
+    pm.add_argument("--negative-control", default=None, metavar="NAME",
+                    help='reserve wells for a negative-control condition (e.g. "secondary only"); '
+                         'default: [experiment] negative_control; "" = none')
+    pm.add_argument("--control-wells", type=int, default=2, choices=[1, 2],
+                    help="wells per plate for the negative control (default 2)")
     pm.set_defaults(func=cmd_platemap)
     g = sub.add_parser("gui",help="open the point-and-click web interface in your browser")
     g.add_argument("workspace", nargs="?", help="workspace folder (default: found automatically)")

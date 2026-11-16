@@ -186,6 +186,8 @@ def assign(table: pd.DataFrame, settings: dict, project_dir: Path | None = None,
     if out.empty:
         for c, dt in zip(COLUMNS, ("int64", "int64", "object")):
             out[c] = pd.Series(dtype=dt)
+        for c in metadata_columns():
+            out[c] = pd.Series(dtype="object")
         out.attrs["design"] = dict(spec=sp, conditions={})
         return out
     images = out["image"].astype("int64")
@@ -230,14 +232,65 @@ def assign(table: pd.DataFrame, settings: dict, project_dir: Path | None = None,
     out["well"] = pd.Series(wells, index=out.index)
     out["position"] = pd.Series(pos, index=out.index)
 
-    tps = timepoints(layout if layout is not None else _read_layout(project_dir))
+    lay = layout if layout is not None else _read_layout(project_dir)
+    tps = timepoints(lay)
     if tps or "timepoint" not in out:
         prev = out["timepoint"].fillna("").astype(str) if "timepoint" in out else pd.Series("", index=out.index)
         out["timepoint"] = [tps.get(str(n)) or p for n, p in zip(out["n"], prev)]
     else:
         out["timepoint"] = out["timepoint"].fillna("").astype(str)
+    _add_metadata(out, settings, lay)
     out.attrs["design"] = dict(spec=sp, conditions=conds)
     return out
+
+
+# ---------------------------------------------------------------- experiment metadata
+
+META_KEYS = ["magnification", "camera_pixel_um", "seeding_density", "seeding_unit", "stain", "negative_control",
+             "negative_control_type"]  # each becomes a meta_<key> column; cell_line has its own column
+
+
+def metadata_columns() -> list[str]:
+    """Metadata columns added by `assign` after well / position / timepoint, in this order."""
+    return ["cell_line"] + [f"meta_{k}" for k in META_KEYS]
+
+
+def output_columns(assigned: pd.DataFrame) -> list[str]:
+    """Every design + metadata column `assign` added (for merging into per-field tables such as counts_used.csv)."""
+    return [c for c in COLUMNS + metadata_columns() if c in assigned]
+
+
+def _text(v) -> str:
+    s = "" if v is None else str(v).strip()
+    if s.lower() == "nan":
+        return ""
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
+
+def metadata(settings: dict, layout: pd.DataFrame | None) -> tuple[dict, dict[tuple[str, str], dict]]:
+    """(experiment defaults, {(n, treatment): overrides}) for cell_line + META_KEYS. Overrides come from
+    same-named columns in layout.csv; a blank cell keeps the experiment value. A layout row is one n x treatment
+    folder, so put a value in every row of an n to override it for the whole n."""
+    e = settings.get("experiment", {}) or {}
+    base = {k: _text(e.get(k, "")) for k in ["cell_line"] + META_KEYS}
+    over: dict[tuple[str, str], dict] = {}
+    if layout is not None and len(layout) and {"n", "treatment"} <= set(layout.columns):
+        cols = [k for k in base if k in layout.columns]
+        for _, r in layout.iterrows():
+            vals = {k: _text(r[k]) for k in cols if _text(r[k])}
+            if vals:
+                over.setdefault((str(r["n"]), str(r["treatment"])), {}).update(vals)
+    return base, over
+
+
+def _add_metadata(out: pd.DataFrame, settings: dict, layout: pd.DataFrame | None) -> None:
+    base, over = metadata(settings, layout)
+    keys = list(zip(out["n"].astype(str), out["treatment"].astype(str)))
+    for k in ["cell_line"] + META_KEYS:
+        col = "cell_line" if k == "cell_line" else f"meta_{k}"
+        out[col] = [over.get(key, {}).get(k, base[k]) for key in keys]
 
 
 # ---------------------------------------------------------------- describe

@@ -109,7 +109,8 @@ def _score(assign, plate_format, cum, conds, edge_frac):
 
 
 def generate(conditions, plate_format: int = 24, wells_per_condition=2, n_plates: int = 1, avoid_edge: bool = False,
-             seed: int | None = None, balance: bool = True, candidates: int = 400) -> list[pd.DataFrame]:
+             seed: int | None = None, balance: bool = True, candidates: int = 400,
+             negative_control: str | None = None, negative_control_wells: int = 2) -> list[pd.DataFrame]:
     """One randomised plate map per plate (n).
 
     conditions           condition names, in the order used for colours and the legend
@@ -122,11 +123,23 @@ def generate(conditions, plate_format: int = 24, wells_per_condition=2, n_plates
     balance              choose each plate (from `candidates` random layouts) so that conditions rotate through
                          edge / inner wells, rows and columns across plates and replicates are not neighbours;
                          False = every plate is an independent random permutation
+    negative_control     name of a negative-control condition (secondary-only / isotype / unstained) that gets
+                         `negative_control_wells` (1 or 2) wells on every plate; it is added to `conditions` if missing.
+                         Its wells set that plate's positivity cut-off (docs/intensity.md).
     Returns one DataFrame per plate with columns plate, plate_well ("B3"), row ("B"), col (1-based), condition
     ("" = empty, medium only), replicate (1.. per condition, 0 for empty), edge (bool); every well of the plate
     is listed. attrs: conditions, seed, plate_format, n_plates, avoid_edge, balance, notes.
     Raises ValueError if the wells do not fit."""
     conditions = list(conditions)
+    if negative_control:
+        nw = int(negative_control_wells)
+        if not 1 <= nw <= 2:
+            raise ValueError("negative_control_wells must be 1 or 2")
+        if not isinstance(wells_per_condition, dict):
+            wells_per_condition = {c: int(wells_per_condition) for c in conditions}
+        wells_per_condition = {**wells_per_condition, negative_control: nw}
+        if negative_control not in conditions:
+            conditions.append(negative_control)
     info = check_fits(conditions, plate_format, wells_per_condition)
     counts = info["counts"]
     need = info["wells_needed"]
@@ -361,10 +374,13 @@ def reference_wells_auto(wells: int, n_conditions: int) -> int:
 
 def plan_project(project_dir: Path, plates: int = 3, plate_format: int | None = None, wells: int = 2,
                  reference_wells=None, avoid_edge: bool | None = None, seed: int | None = None,
-                 balance: bool = True, conditions: list[str] | None = None) -> Path:
+                 balance: bool = True, conditions: list[str] | None = None, negative_control: str | None = None,
+                 negative_control_wells: int = 2) -> Path:
     """Write analysis/<experiment>/plans/platemap_<timestamp>/ with plate_K.csv/.png/.pdf, all_plates.csv,
     edge_usage.csv and README.txt. reference_wells: int, "auto" (Dunnett sqrt(k), reduced until the plate fits)
-    or None ([planner] reference_wells). Returns the folder."""
+    or None ([planner] reference_wells). negative_control: name of the negative-control condition to reserve
+    negative_control_wells wells for on every plate; None = [experiment] negative_control ("" = none).
+    Returns the folder."""
     from . import settings as settings_mod
     from .planner import options
 
@@ -376,6 +392,9 @@ def plan_project(project_dir: Path, plates: int = 3, plate_format: int | None = 
     conds = conditions or project_conditions(project_dir, s)
     if not conds:
         raise ValueError("no conditions found (counts.csv / layout.csv); pass them explicitly")
+    nc = (s.get("experiment", {}).get("negative_control") or "") if negative_control is None else negative_control
+    nc = str(nc).strip()
+    conds = [c for c in conds if c != nc]
     a = s["analysis"]
     refs = [r for r in dict.fromkeys([a["reference"]] + list(a["normalise_to"])) if r in conds]
     rw = opt["reference_wells"] if reference_wells is None else reference_wells
@@ -383,12 +402,18 @@ def plan_project(project_dir: Path, plates: int = 3, plate_format: int | None = 
     auto = isinstance(rw, str) and rw.lower() == "auto"
     if auto:
         rw = reference_wells_auto(wells, len(conds))
-        while rw > wells and (len(conds) - len(refs)) * wells + len(refs) * rw > fmt:
+        while rw > wells and (len(conds) - len(refs)) * wells + len(refs) * rw + (negative_control_wells if nc else 0) > fmt:
             rw -= 1
         notes.append(f"reference wells: Dunnett's sqrt(k) rule ({wells} x sqrt({len(conds) - 1}) = "
                      f"{wells * math.sqrt(max(len(conds) - 1, 1)):.1f}), {rw} after fitting the {fmt}-well plate")
     counts = {c: (int(rw) if c in refs else wells) for c in conds}
-    maps = generate(conds, fmt, counts, plates, avoid, seed, balance)
+    if nc:
+        notes.append(f"negative control '{nc}': {negative_control_wells} well(s) per plate; it sets each plate's "
+                     "positivity cut-off and is left out of the statistics")
+    maps = generate(conds, fmt, counts, plates, avoid, seed, balance, negative_control=nc or None,
+                    negative_control_wells=negative_control_wells)
+    counts = {**counts, **({nc: int(negative_control_wells)} if nc else {})}
+    conds = maps[0].attrs["conditions"]
     seed = maps[0].attrs["seed"]
     out = project_dir / "plans" / f"platemap_{time.strftime('%Y%m%d-%H%M%S')}"
     out.mkdir(parents=True, exist_ok=False)
@@ -415,6 +440,7 @@ def plan_project(project_dir: Path, plates: int = 3, plate_format: int | None = 
           "Re-create exactly the same maps with the same seed:",
           f"  kerncount platemap {project_dir.name} --plates {plates} --format {fmt} --wells {wells} "
           f"--reference-wells {rw}{' --avoid-edge' if avoid else ''} --seed {seed}"
+          f"{f' --negative-control {chr(34)}{nc}{chr(34)} --control-wells {negative_control_wells}' if nc else ''}"
           f"{'' if balance else ' --no-balance'}",
           "",
           "Why randomise: plate position effects (edge evaporation, temperature, imaging order) then spread over",

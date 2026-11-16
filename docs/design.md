@@ -122,7 +122,12 @@ out = design.assign(table, settings, project_dir=None, layout=None)
 ```
 
 `table` needs `n`, `treatment`, `image` (int). Returns a copy with `well` (int, 1-based), `position`
-(int, 1-based) and `timepoint` (str, `""` if unknown) added (replaced if present). Rows are never dropped
+(int, 1-based) and `timepoint` (str, `""` if unknown) added (replaced if present), followed by the experiment
+metadata: `cell_line` (str, `""` = unknown) and `meta_magnification`, `meta_camera_pixel_um`,
+`meta_seeding_density`, `meta_seeding_unit`, `meta_stain`, `meta_negative_control`, `meta_negative_control_type`
+(all str) from `[experiment]`, overridden per n / condition by same-named `layout.csv` columns (blank = experiment
+value; see `docs/intensity.md`). `design.metadata_columns()` lists them, `design.output_columns(assigned)` gives
+every design + metadata column to merge into per-field tables. Rows are never dropped
 or reordered; the index is kept. `project_dir` is where `wells.csv` and `layout.csv` are read; `layout`
 (a layout DataFrame) overrides `layout.csv` for timepoints. Without either, an existing `timepoint`
 column is kept. Raises `ValueError` for invalid settings or a missing/broken `wells.csv`.
