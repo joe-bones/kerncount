@@ -13,7 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from . import analysis
+from . import analysis, design
 
 README = """Generation {name}
 ==============
@@ -76,7 +76,9 @@ def _fields_plot(sub: pd.DataFrame, out: Path, title: str):
     plt.close(fig)
 
 
-def build(project: Path, gen: dict, image_table: pd.DataFrame, intensity_metrics: dict[str, str], settings: dict) -> Path:
+def build(project: Path, gen: dict, image_table: pd.DataFrame, intensity_metrics: dict[str, str], settings: dict,
+          design_table: pd.DataFrame | None = None) -> Path:
+    """design_table: n, treatment, image, well, position, timepoint from design.assign (computed here if None)."""
     out = project / "generations" / gen["name"]
     if out.exists():
         shutil.rmtree(out)
@@ -89,7 +91,13 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, intensity_metrics
         drop = (t["qc_level"] == "low") & (t["source"] == "auto")
         t.loc[drop, "excluded"] = True
         t.loc[drop, "source"] = "auto (excluded: QC low)"
-    used_cols = ["n", "treatment", "image", "count", "source", "excluded", "qc_level"]
+    if design_table is None:
+        design_table = design.assign(t[["n", "treatment", "image"]], settings, project)
+    dcols = ["well", "position", "timepoint"]
+    t = t.drop(columns=[c for c in dcols if c in t]).merge(
+        design_table[["n", "treatment", "image"] + dcols].astype({"image": int}).drop_duplicates(["n", "treatment", "image"]),
+        on=["n", "treatment", "image"], how="left")
+    used_cols = ["n", "treatment", "image", "count", "source", "excluded", "qc_level"] + dcols
     t[used_cols].to_csv(out / "counts_used.csv", index=False)
 
     metrics = {"count": "Nuclei per field"} | intensity_metrics

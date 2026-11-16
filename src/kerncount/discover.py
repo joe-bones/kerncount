@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-LAYOUT_COLUMNS = ["n_folder", "treatment_folder", "n", "date", "treatment", "include", "images", "note"]
+LAYOUT_COLUMNS = ["n_folder", "treatment_folder", "n", "date", "timepoint", "treatment", "include", "images", "note"]
 IMAGE_EXT = {".tif", ".tiff"}
 
 
@@ -50,6 +50,22 @@ def parse_date(name: str, order: str = "DMY") -> date | None:
         return date(y, mo, d)
     except ValueError:
         return None
+
+
+_TP_HOURS = re.compile(r"(?<![A-Za-z0-9.])(\d+(?:[.,]\d+)?)\s*(?:h|hr|hrs|hour|hours)(?![a-z])", re.I)
+_TP_DAYS = re.compile(r"(?<![A-Za-z0-9.])(?:days?\s*(\d+)|d(\d+)|(\d+)\s*(?:days?|d))(?![a-z\d])", re.I)
+
+
+def parse_timepoint(name: str) -> str:
+    """Timepoint in an n-folder name, normalised: '72h', '48 h', '24hr', '72 hrs' -> '72h' etc.;
+    'day 3', 'd3', '3 days' -> 'd3'. '' if there is none."""
+    m = _TP_HOURS.search(name)
+    if m:
+        return m.group(1).replace(",", ".") + "h"
+    m = _TP_DAYS.search(name)
+    if m:
+        return "d" + next(g for g in m.groups() if g)
+    return ""
 
 
 def canonical_treatment(folder: str) -> tuple[str, str]:
@@ -110,7 +126,8 @@ def scan(raw_dir: Path, date_order: str = "DMY") -> pd.DataFrame:
     rows = []
     for i, (dt, d) in enumerate(n_info, start=1):
         n_label = f"n{i}" + (f"_{dt.isoformat()}" if dt else "")
-        n_note = "72h" if re.search(r"\b72\s*h", d.name, re.I) else ""
+        tp = parse_timepoint(d.name)
+        n_note = tp
         for t in sorted(p for p in d.iterdir() if p.is_dir() and not p.name.startswith(".")):
             name, note = canonical_treatment(t.name)
             imgs = _raw_images(t)
@@ -125,7 +142,7 @@ def scan(raw_dir: Path, date_order: str = "DMY") -> pd.DataFrame:
                 else:
                     notes.append("no images found")
             rows.append(dict(n_folder=d.name, treatment_folder=t.name, n=n_label,
-                             date=dt.isoformat() if dt else "", treatment=name, include="yes",
+                             date=dt.isoformat() if dt else "", timepoint=tp, treatment=name, include="yes",
                              images=len(numbered), note=" | ".join(notes)))
     df = pd.DataFrame(rows, columns=LAYOUT_COLUMNS)
 

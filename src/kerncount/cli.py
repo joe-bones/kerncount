@@ -133,6 +133,14 @@ def cmd_sampling(a):
         pipeline.sampling(prj, a.generation, a.iterations)
 
 
+def cmd_wells_template(a):
+    from . import pipeline
+
+    for prj in _projects(a):
+        print(f"\n=== {prj.name}")
+        pipeline.wells_template(prj, overwrite=a.force)
+
+
 def cmd_gui(a):
     from . import gui
 
@@ -168,6 +176,11 @@ def main(argv=None):
     m.add_argument("--generation", default=None, help="e.g. g2 (default: latest)")
     m.add_argument("--iterations", type=int, default=1000)
     m.set_defaults(func=cmd_sampling)
+    wt = sub.add_parser("wells-template", help="write wells.csv (which well / field each image is) to edit by hand")
+    wt.add_argument("project", nargs="?", help="experiment name, or a project folder path")
+    wt.add_argument("--all", action="store_true", help="every initialised experiment")
+    wt.add_argument("--force", action="store_true", help="overwrite an existing wells.csv (default: write wells.new.csv)")
+    wt.set_defaults(func=cmd_wells_template)
     g = sub.add_parser("gui", help="open the point-and-click web interface in your browser")
     g.add_argument("workspace", nargs="?", help="workspace folder (default: found automatically)")
     g.add_argument("--port", type=int, default=8765)

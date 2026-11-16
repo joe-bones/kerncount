@@ -54,10 +54,11 @@ DEFAULTS: dict = {
         "exclude_low_qc": False,  # g1 is fully automatic; set true to drop QC=low images from stats
     },
     "design": {
-        # one plate per n; each condition sits in `wells` wells, each imaged `fields_per_well` times
-        "wells": 2,  # wells imaged per condition per n
-        "fields_per_well": 6,
-        "well_layout": "consecutive",  # "consecutive": images 1-6 = well 1, 7-12 = well 2; or "alternating"
+        # one plate per n; each condition sits in `wells` wells, each imaged `fields_per_well` times (docs/design.md)
+        "wells": 2,  # wells imaged per condition per n; "auto" = from wells.csv if present, else 2
+        "fields_per_well": "auto",  # "auto" = per condition ceil(highest image number / wells); or a fixed number
+        "well_layout": "consecutive",  # "consecutive" (1-6 = well 1, 7-12 = well 2), "alternating" (odd/even), "file"
+        "field_positions": "fixed",  # "fixed": field k is the same spot in every well; "random": position means nothing
     },
     "review": {
         "overlay_alpha": 0.35,
@@ -112,10 +113,13 @@ two_way_anova = true                 # extra: two-way ANOVA + Tukey all-pairs (p
 treatment_order = ["Control", "LyoVec", "CL075"]
 exclude_low_qc = false
 
-[design]                  # used by `kerncount sampling` (how many images are needed?); one plate per n
-wells = 2                 # wells per condition per n
-fields_per_well = 6       # images (fields) per well
-well_layout = "consecutive"    # images 1-6 = well 1, 7-12 = well 2; or "alternating" (odd/even)
+[design]                  # which well / field each image is; one plate per n (see docs/design.md)
+wells = 2                 # wells per condition per n; "auto" = take them from wells.csv if it exists, else 2
+fields_per_well = "auto"  # "auto": per condition, highest image number / wells (rounded up), so 11 images = 6 + 5
+                          # and 18 images = 9 + 9; or a fixed number (images above wells x fields are flagged)
+well_layout = "consecutive"    # "consecutive": images 1-6 = well 1, 7-12 = well 2; "alternating" (odd/even);
+                               # "file": read wells.csv (columns image, well, position, optional n, treatment)
+field_positions = "fixed" # "fixed": field k is the same spot in every well (position is used); "random": it is not
 
 [review]
 overlay_alpha = 0.35

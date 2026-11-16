@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import tifffile
 
-from . import classify, discover, generations, imageio, master, overlay, segment
+from . import classify, design, discover, generations, imageio, master, overlay, segment
 from . import settings as settings_mod
 
 MEASURE_VERSION = 2  # bump when per-object measurements change, so cached results are recomputed
@@ -229,6 +229,7 @@ def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebui
              for c in table.columns if c.startswith("intensity_")}
     img_cols = ["n", "treatment", "image", "qc_level"] + list(inten)
     img_table = table[[c for c in img_cols if c in table]]
+    design_table = check_design(prj, df)
     root = prj.path / "generations"
     for g in gens:
         folder = root / g["name"]
@@ -243,11 +244,39 @@ def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebui
             else:
                 log(f"  {g['name']}: up to date")
             continue
-        generations.build(prj.path, g, img_table, inten, prj.settings)
+        generations.build(prj.path, g, img_table, inten, prj.settings, design_table)
         log(f"  {g['name']}: built ({'automatic' if g['source'] == 'auto' else g['source']}, {g['changes']} manual cells)")
     extra = sorted(p.name for p in root.glob("g*") if p.is_dir() and p.name not in {g["name"] for g in gens})
     if extra:
         log(f"  note: {', '.join(extra)} exist but no longer have a matching manual column (left untouched)")
+
+
+def check_design(prj: Project, df: pd.DataFrame) -> pd.DataFrame:
+    """Assign well / position / timepoint to every image in counts.csv once, write design_check.csv, log a summary."""
+    keys = df[["n", "treatment", "image"]].astype({"image": int}).drop_duplicates()
+    try:
+        assigned = design.assign(keys, prj.settings, prj.path)
+    except ValueError as e:
+        raise SystemExit(f"Plate design: {e}") from None
+    desc = design.describe(assigned)
+    desc.to_csv(prj.path / "design_check.csv", index=False, sep=prj.delim)
+    for note in design.spec(prj.settings).notes:
+        log(f"  note: {note}")
+    log(design.summary_line(desc, prj.settings))
+    return assigned
+
+
+def wells_template(project_dir: Path, overwrite: bool = False) -> Path:
+    """Write wells.csv (wells.new.csv if one exists) reproducing the current assignment of the images in counts.csv."""
+    prj = Project(project_dir)
+    counts = prj.path / "counts.csv"
+    if not counts.exists():
+        raise SystemExit("counts.csv not found - run the analysis first (the template lists the images it found)")
+    df = discover.read_table(counts)
+    keys = df[["n", "treatment", "image"]].astype({"image": int}).drop_duplicates()
+    path = design.write_wells_template(prj.path, keys, prj.settings, overwrite=overwrite)
+    log(f"Wrote {path}. Edit well / position, rename it to wells.csv if needed, and set [design] well_layout = \"file\".")
+    return path
 
 
 def _review_image(prj: Project, r, lab_path: Path, objs: pd.DataFrame, summ: dict, alpha: float) -> Path:
@@ -308,7 +337,8 @@ def sampling(project_dir: Path, generation: str | None = None, iterations: int =
     used = used[~used["excluded"].astype(bool)].assign(value=lambda d: d["count"])
     out = prj.path / "sampling" / g.name
     log(f"Sampling analysis on {g.name} ({iterations} subsamples per design)...")
-    summary = sampling_mod.run(used[["n", "treatment", "image", "value"]], prj.settings, out, iterations=iterations)
+    summary = sampling_mod.run(used[["n", "treatment", "image", "value"]], prj.settings, out, iterations=iterations,
+                               project_dir=prj.path)
     log(summary.round(3).to_string(index=False))
     log(f"\nReport: {out / 'REPORT.txt'}")
     return out

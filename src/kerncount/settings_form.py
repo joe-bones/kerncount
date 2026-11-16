@@ -77,10 +77,18 @@ FIELDS: dict[str, dict[str, dict]] = {
                                help="Images with QC low (and no manual value) are left out of the statistics."),
     },
     "design": {
-        "wells": dict(kind="int", min=1, label="Wells per condition per n", help="Used by the sampling analysis."),
-        "fields_per_well": dict(kind="int", min=1, label="Fields (images) per well"),
-        "well_layout": dict(kind="choice", options=["consecutive", "alternating"], label="Well layout",
-                            help="consecutive = images 1-6 well 1, 7-12 well 2; alternating = odd/even."),
+        "wells": dict(kind="num_or", special=["auto"], label="Wells per condition per n",
+                      help="Usually 2. auto = take the wells from wells.csv in the project folder if it exists, else 2."),
+        "fields_per_well": dict(kind="num_or", special=["auto"], label="Fields (images) per well",
+                                help="auto = per condition, highest image number ÷ wells, rounded up (11 images = 6 + 5, "
+                                     "18 images = 9 + 9). A number fixes it; images beyond wells × fields are flagged."),
+        "well_layout": dict(kind="choice", options=["consecutive", "alternating", "file"], label="Well layout",
+                            help="consecutive = images 1-6 well 1, 7-12 well 2; alternating = odd/even; "
+                                 "file = wells.csv in the project folder (columns image, well, position; optional n, treatment)."),
+        "field_positions": dict(kind="choice", options=["fixed", "random"], label="Field positions",
+                                help="fixed = field 1 of every well is the same spot (e.g. centre), so position can "
+                                     "explain differences between fields; random = fields were taken anywhere, "
+                                     "position is ignored."),
     },
     "review": {
         "overlay_alpha": dict(kind="float", label="Overlay transparency", help="0 = invisible, 1 = opaque."),

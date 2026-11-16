@@ -334,11 +334,12 @@ def per_n(df: pd.DataFrame, metric: str, label: str, n: str, out_dir: Path, sett
         stem = metric if i == 0 else f"{metric}_vs_{ref}"
         _bar_plot(order, groups, "SD", label, title, out_dir / stem,
                   sig=significance_marks(st, ref, f"Dunnett vs {ref} ("), ref=ref, footer=foot)
-    if a.get("two_way_anova", True) and "image" in sub:
-        from .sampling import design, well_of  # local import: sampling imports this module
-        W, K, layout, _ = design(settings)
-        if W >= 2:
-            sw = sub.assign(well=[f"well {well_of(int(i), K, W, layout)}" for i in sub["image"]])
+    if a.get("two_way_anova", True) and ("well" in sub or "image" in sub):
+        if "well" not in sub:  # callers normally pass the well from design.assign; fall back to the settings alone
+            from . import design
+            sub = sub.assign(well=design.assign(sub, settings)["well"])
+        if sub["well"].nunique() >= 2:
+            sw = sub.assign(well=[f"well {int(w)}" for w in sub["well"]])
             _write_two_way(sw, "well", order, metric, label, f"{n}: {label}, two-way ANOVA (treatment x well)",
                            out_dir, b_label="well", note=" Describes this experiment only.")
     return st.assign(n=n)
