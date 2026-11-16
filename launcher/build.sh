@@ -44,11 +44,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 if command -v codesign >/dev/null 2>&1; then
+  xattr -cr "$APP"                          # no extended attributes: they become ._ files in the zip
   codesign --force --deep --sign - "$APP"   # ad-hoc signature (Apple silicon refuses unsigned code)
 fi
 cd ../dist
 if command -v ditto >/dev/null 2>&1; then
-  ditto -c -k --keepParent kerncount.app kerncount-mac.zip
+  # no resource forks / attributes, so any unzip tool (not only Finder) gives a validly signed app
+  ditto -c -k --norsrc --noextattr --noacl --keepParent kerncount.app kerncount-mac.zip
 else
   zip -qr kerncount-mac.zip kerncount.app
 fi
