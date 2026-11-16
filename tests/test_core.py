@@ -122,3 +122,131 @@ def test_workspace_init_by_name(tmp_path, monkeypatch):
     assert cli.resolve_project("expA") == prj.resolve()
     cli.main(["init", "--all"])
     assert (tmp_path / "analysis" / "expB" / "settings.toml").exists()
+
+
+def _sampling_settings(**design):
+    from kerncount import settings
+    s = settings.load(Path("/nonexistent"))
+    s["design"].update(design)
+    return s
+
+
+def test_sampling_design_accepts_old_plate_names():
+    from kerncount import sampling
+    s = _sampling_settings()
+    assert sampling.design(s)[:3] == (2, 6, "consecutive") and not sampling.design(s)[3]
+    s["design"].update(plates=3, fields_per_plate=4, plate_layout="alternating")
+    w, k, lay, notes = sampling.design(s)
+    assert (w, k, lay) == (3, 4, "alternating") and len(notes) == 3
+    assert [sampling.well_of(i, 6, 2, "consecutive") for i in (1, 6, 7, 12)] == [1, 1, 2, 2]
+    assert [sampling.well_of(i, 6, 2, "alternating") for i in (1, 2, 3)] == [1, 2, 1]
+
+
+def test_sampling_batch_checks_and_missing_reference(tmp_path):
+    from kerncount import sampling
+    rng = np.random.default_rng(1)
+    rows = []
+    for n, strength in [("n1", 0.5), ("n2", 0.5), ("n3", 0.15), ("n4", 0.5)]:
+        for t, base in [("Control", 80), ("LyoVec", 80), ("miR-a", 80 * strength), ("miR-b", 80 * strength)]:
+            if n == "n2" and t == "LyoVec":
+                continue  # reference missing in one n
+            for img in range(1, 13):
+                f = 4.0 if (n == "n4" and t == "miR-a" and img > 6) else 1.0  # one odd well
+                rows.append(dict(n=n, treatment=t, image=img, value=max(base * f * rng.lognormal(0, 0.15), 1)))
+    df = pd.DataFrame(rows)
+    s = _sampling_settings()
+    summary = sampling.run(df, s, tmp_path, iterations=20)
+    assert set(summary["reference"]) == {"LyoVec", "Control"}
+    eff = pd.read_csv(tmp_path / "effects.csv")
+    assert eff.loc[eff["reference"] == "LyoVec", "n_pairs"].max() == 3  # n2 left out vs LyoVec ...
+    assert eff.loc[eff["reference"] == "Control", "n_pairs"].max() == 4  # ... but kept vs Control
+    by_n = pd.read_csv(tmp_path / "batch_by_n.csv").set_index("n")
+    assert by_n.loc["n2", "missing_references"] == "LyoVec"
+    assert by_n.loc["n3", "shift_vs_Control_flag"] == "check" and by_n.loc["n3", "shift_vs_Control"] < 1
+    cond = pd.read_csv(tmp_path / "batch_by_condition.csv").fillna("")
+    flagged = cond[cond["well_flag"] == "check"][["n", "treatment"]].values.tolist()
+    assert ["n4", "miR-a"] in flagged
+    rep = (tmp_path / "REPORT.txt").read_text()
+    assert "n2 has no LyoVec" in rep and "plate" not in rep.replace("one plate per n", "").replace(
+        "within a plate", "").replace("plate, day", "").replace("Plate-wide", "")
+
+
+def test_default_reference_is_control_and_both_controls_get_tests(tmp_path):
+    from kerncount import settings as st_mod
+    s = st_mod.DEFAULTS
+    assert analysis.control_groups(s["analysis"])[:2] == ["Control", "LyoVec"]
+    rng = np.random.default_rng(1)
+    rows = [dict(n=n, treatment=t, image=i, value=rng.normal(mu, 5))
+            for n in ["n1", "n2", "n3"] for t, mu in [("Control", 100), ("LyoVec", 80), ("X", 40)] for i in range(1, 13)]
+    df = pd.DataFrame(rows)
+    st = analysis.per_n(df, "count", "nuclei", "n1", tmp_path, s)
+    assert {"Dunnett vs Control (fields, descriptive)", "Dunnett vs LyoVec (fields, descriptive)"} <= set(st["test"])
+    assert (tmp_path / "count.png").exists() and (tmp_path / "count_vs_LyoVec.png").exists()
+    assert (tmp_path / "count_twoway.png").exists()  # treatment x well
+    _, st_all = analysis.all_n(df, "count", "nuclei", tmp_path, s)
+    assert st_all["test"].str.contains("vs Control (", regex=False).any() and st_all["test"].str.contains("vs LyoVec (", regex=False).any()
+    aov = pd.read_csv(tmp_path / "count_twoway_anova.csv")
+    assert list(aov["source"]) == ["treatment", "n", "treatment x n (interaction)", "residual"]
+
+
+def test_two_way_one_block_matches_scipy_tukey():
+    from scipy import stats
+    rng = np.random.default_rng(2)
+    groups = {"A": rng.normal(10, 2, 6), "B": rng.normal(12, 2, 8), "C": rng.normal(15, 2, 7)}
+    df = pd.DataFrame([dict(treatment=t, blk="b1", value=v) for t, vs in groups.items() for v in vs])
+    anova, pairs, _ = analysis.two_way(df, "blk", ["A", "B", "C"])
+    f, p = stats.f_oneway(*groups.values())
+    assert anova.loc[anova["source"] == "treatment", "F"].iloc[0] == pytest.approx(f)
+    ref = stats.tukey_hsd(*groups.values())
+    got = pairs.set_index("comparison")["p_adj"]
+    assert got["A vs B"] == pytest.approx(ref.pvalue[0, 1], abs=1e-4)
+    assert got["A vs C"] == pytest.approx(ref.pvalue[0, 2], abs=1e-4)
+    assert got["B vs C"] == pytest.approx(ref.pvalue[1, 2], abs=1e-4)
+
+
+def test_two_way_handles_missing_group_and_interaction():
+    rng = np.random.default_rng(3)
+    rows = []
+    for n, shift in [("n1", 0), ("n2", 20), ("n3", -10)]:
+        for t, mu in [("Control", 100), ("LyoVec", 100), ("X", 60)]:
+            if n == "n2" and t == "LyoVec":
+                continue  # this n has no LyoVec
+            rows += [dict(treatment=t, n=n, value=v) for v in rng.normal(mu + shift, 5, 12)]
+    anova, pairs, cm = analysis.two_way(pd.DataFrame(rows), "n", ["Control", "LyoVec", "X"])
+    p = pairs.set_index("comparison")
+    assert p.at["Control vs LyoVec", "matched_levels"] == 2 and p.at["Control vs X", "matched_levels"] == 3
+    assert p.at["Control vs X", "p_adj"] < 1e-4 and p.at["Control vs LyoVec", "p_adj"] > 0.05
+    assert anova.loc[anova["source"] == "treatment", "p"].iloc[0] < 1e-4
+    assert cm.loc["LyoVec"].isna().sum() == 1
+
+
+def test_dunnett_matches_scipy():
+    from scipy import stats
+    rng = np.random.default_rng(4)
+    k, n = 5, 6
+    ctrl = rng.normal(10, 2, n)
+    others = [rng.normal(10 + d, 2, n) for d in (0, 1, 2.5, 4)]
+    ref = stats.dunnett(*others, control=ctrl)
+    mse = np.mean([np.var(g, ddof=1) for g in [ctrl] + others])
+    t = np.array([(g.mean() - ctrl.mean()) / np.sqrt(2 * mse / n) for g in others])
+    R = np.full((4, 4), 0.5) + 0.5 * np.eye(4)
+    padj, _ = analysis._dunnett_padj(t, R, k * n - k)
+    assert padj == pytest.approx(ref.pvalue, abs=2e-3)
+
+
+def test_all_n_prism_standard_drives_stars(tmp_path):
+    from kerncount import settings as st_mod
+    rng = np.random.default_rng(6)
+    rows = []
+    for n, day in [("n1", 1.0), ("n2", 1.5), ("n3", 0.7), ("n4", 1.2)]:
+        for t, mu in [("Control", 100), ("LyoVec", 100), ("Drop", 50), ("Null", 100)]:
+            if n == "n2" and t == "LyoVec":
+                continue
+            rows += [dict(n=n, treatment=t, image=i, value=v) for i, v in enumerate(rng.normal(mu * day, 6, 12), 1)]
+    _, st = analysis.all_n(pd.DataFrame(rows), "count", "nuclei", tmp_path, st_mod.DEFAULTS)
+    d = st[st["test"].str.startswith("Dunnett vs Control")].set_index("comparison")
+    assert d.at["Drop vs Control", "p_adj"] < 0.05 and d.at["Null vs Control", "p_adj"] > 0.05
+    assert d.at["LyoVec vs Control", "N"] == 3  # n2 has no LyoVec but still counts for the others
+    assert st["test"].str.startswith("Dunnett vs LyoVec").any()
+    assert st["test"].str.contains("ratio paired t-test", regex=False).any()
+    assert "Drop" in analysis.significance_marks(st, "Control", "Dunnett vs Control (")

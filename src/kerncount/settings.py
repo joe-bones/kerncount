@@ -47,15 +47,17 @@ DEFAULTS: dict = {
         "subtract_background": True,
     },
     "analysis": {
-        "reference": "LyoVec",  # group every treatment is tested against
-        "normalise_to": ["LyoVec", "Control"],
+        "reference": "Control",  # main comparison group (used for the headline plots)
+        "normalise_to": ["Control", "LyoVec"],  # every one of these also gets its own % plots and tests
+        "two_way_anova": True,  # extra two-way ANOVA + all-pairs Tukey (per n: treatment x well; all n: treatment x n)
         "treatment_order": ["Control", "LyoVec", "CL075"],  # remaining treatments follow alphabetically
         "exclude_low_qc": False,  # g1 is fully automatic; set true to drop QC=low images from stats
     },
     "design": {
-        "plates": 2,  # plates (wells) imaged per condition per n
-        "fields_per_plate": 6,
-        "plate_layout": "consecutive",  # "consecutive": images 1-6 = plate 1, 7-12 = plate 2; or "alternating"
+        # one plate per n; each condition sits in `wells` wells, each imaged `fields_per_well` times
+        "wells": 2,  # wells imaged per condition per n
+        "fields_per_well": 6,
+        "well_layout": "consecutive",  # "consecutive": images 1-6 = well 1, 7-12 = well 2; or "alternating"
     },
     "review": {
         "overlay_alpha": 0.35,
@@ -104,15 +106,16 @@ ring_px = "auto"          # "auto" = 0.25 x nucleus diameter
 subtract_background = true
 
 [analysis]
-reference = "LyoVec"
-normalise_to = ["LyoVec", "Control"]
+reference = "Control"               # main comparison group (headline plots)
+normalise_to = ["Control", "LyoVec"] # each also gets % plots and its own tests (vs Control AND vs LyoVec)
+two_way_anova = true                 # extra: two-way ANOVA + Tukey all-pairs (per n: treatment x well; all n: treatment x n)
 treatment_order = ["Control", "LyoVec", "CL075"]
 exclude_low_qc = false
 
-[design]                  # used by `kerncount sampling` (how many images are needed?)
-plates = 2
-fields_per_plate = 6
-plate_layout = "consecutive"   # images 1-6 = plate 1, 7-12 = plate 2; or "alternating" (odd/even)
+[design]                  # used by `kerncount sampling` (how many images are needed?); one plate per n
+wells = 2                 # wells per condition per n
+fields_per_well = 6       # images (fields) per well
+well_layout = "consecutive"    # images 1-6 = well 1, 7-12 = well 2; or "alternating" (odd/even)
 
 [review]
 overlay_alpha = 0.35

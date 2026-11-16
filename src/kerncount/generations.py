@@ -31,8 +31,18 @@ Layout
 Prism import: *_prism*.csv are Column tables (one column per treatment). In Prism use
 File > Import, or open the CSV and paste into a Column table.
 
-Statistics: see the header of each *_stats.csv. Within one n, fields are technical replicates
-(descriptive only). Across n, each n is one biological replicate.
+Statistics: every control group (reference + normalise_to; default Control, then LyoVec) gets its own
+tests. Within one n, fields are technical replicates (descriptive only): Dunnett vs each control,
+<metric>.png = vs the first control present, <metric>_vs_<control>.png = vs the others. Across n, each n is
+one biological replicate. Stars (Prism standard): repeated-measures one-way ANOVA with n as the matched
+replicate, then Dunnett vs each control using the pooled error; shown on <metric>.png (main control) and
+<metric>_pct_of_<control>.png. Ratio paired t-tests (one test per pair, Holm) are kept in *_stats.csv as a
+more conservative check.
+
+Two-way ANOVA (extra): <metric>_twoway.png / _twoway_anova.csv / _twoway_pairs.csv.
+Within one n: treatment x well; across n: treatment x n. Fields are the replicates, Type II sums of
+squares, Tukey all-pairs comparisons (matched within well / n). Across n this treats fields as
+replicates, so its p-values are more optimistic than the RM ANOVA + Dunnett, which remains the main result.
 """
 
 
@@ -122,9 +132,10 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, intensity_metrics
         about = pd.DataFrame({"": [f"Generation {gen['name']}", f"Source: {gen['source']}",
                                    f"Manual changes in this step: {gen['changes']}",
                                    f"Built {datetime.now():%Y-%m-%d %H:%M}",
-                                   f"Reference group: {a['reference']}",
-                                   "Within-n stats treat fields as technical replicates (descriptive).",
-                                   "All-n stats: each n = one biological replicate; ratio paired t-tests vs reference, Holm-adjusted."]})
+                                   f"Control groups (main first): {', '.join(analysis.control_groups(a))}",
+                                   "Within-n stats treat fields as technical replicates (descriptive); Dunnett vs each control.",
+                                   "All-n stats: each n = one biological replicate; RM one-way ANOVA + Dunnett vs each control (Prism standard, drives the stars); ratio paired t-tests (Holm) kept as a check.",
+                                   "Two-way ANOVA (extra): per n treatment x well, all n treatment x n; fields = replicates; Tukey all pairs."]})
         about.to_excel(xw, sheet_name="About", index=False, header=False)
         t[used_cols].to_excel(xw, sheet_name="Counts used", index=False)
         if "count" in all_summ:
@@ -139,6 +150,24 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, intensity_metrics
             pd.concat([all_stats[m].assign(metric=m) for m in inten]).to_excel(xw, sheet_name="Intensity - stats all n", index=False)
             pd.concat([pd.concat(per_n_summ[m]).assign(metric=m) for m in inten if m in per_n_summ]).to_excel(
                 xw, sheet_name="Intensity - per n", index=False)
+        for level, files in (("all n", sorted(ad.glob("*_twoway_anova.csv"))),
+                             ("per n", sorted(out.glob("*/*_twoway_anova.csv")))):
+            files = [f for f in files if f.parent != ad] if level == "per n" else files
+            if not files:
+                continue
+            for kind in ("anova", "pairs"):
+                tabs = []
+                for f in files:
+                    m = f.name[: -len("_twoway_anova.csv")]
+                    g = f.with_name(f"{m}_twoway_{kind}.csv")
+                    if g.exists():
+                        tab = pd.read_csv(g)
+                        tab.insert(0, "metric", m)
+                        if level == "per n":
+                            tab.insert(0, "n", f.parent.name)
+                        tabs.append(tab)
+                if tabs:
+                    pd.concat(tabs).to_excel(xw, sheet_name=f"Two-way {kind} - {level}", index=False)
         _autosize(xw)
 
     src = "fully automatic (auto_count)" if gen["source"] == "auto" else \
