@@ -153,7 +153,7 @@ class State:
             prj = ws / ANALYSIS / d.name
             out.append(dict(name=d.name, initialised=(prj / "settings.toml").exists(),
                             counted=(prj / "counts.csv").exists(), generations=generations(prj),
-                            sampling=sorted((p.name for p in (prj / "sampling").glob("g*") if p.is_dir()), key=gen_key)))
+                            sampling=gen_dirs(prj / "sampling")))
         return out
 
     def project(self, exp: str) -> Path:
@@ -162,9 +162,13 @@ class State:
         return self.workspace / ANALYSIS / exp
 
 
-def generations(prj: Path) -> list[str]:
-    root = prj / "generations"
+def gen_dirs(root: Path) -> list[str]:
+    """Sub-folders named g1, g2, ... (anything else is ignored)."""
     return sorted((g.name for g in root.glob("g*") if g.is_dir() and _GEN.match(g.name)), key=gen_key) if root.is_dir() else []
+
+
+def generations(prj: Path) -> list[str]:
+    return gen_dirs(prj / "generations")
 
 
 def inside(root: Path, rel: str) -> Path:
@@ -228,7 +232,7 @@ def project_info(prj: Path) -> dict:
     return dict(
         path=str(prj), settings=s, settings_text=st.read_text(encoding="utf-8") if st.exists() else "",
         schema=settings_form.schema(), generations=gens,
-        sampling=sorted((p.name for p in (prj / "sampling").glob("g*") if p.is_dir()), key=gen_key),
+        sampling=gen_dirs(prj / "sampling"),
         files={n: (prj / n).exists() for n in ("layout.csv", "layout.new.csv", "counts.csv", "qc_details.csv",
                                                 "fiji_comparison.csv", "review", "_work/cells.csv")})
 

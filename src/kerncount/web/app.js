@@ -560,7 +560,7 @@ async function renderResults(b) {
   const top = F.filter(f => !rel(f).includes("/")), alln = F.filter(f => rel(f).startsWith("all_n/"));
   const nDirs = [...new Set(F.map(rel).filter(p => p.includes("/") && !p.startsWith("all_n/")).map(p => p.split("/")[0]))];
   const png = l => l.filter(f => f.name.endsWith(".png")), csvs = l => l.filter(f => !f.name.endsWith(".png"));
-  b.innerHTML = `<div class="bar"><div class="pills">${gens.map(x => `<button class="pill ${x.name === S.gen ? "active" : ""}" onclick="S.gen='${x.name}';render()">${x.name}</button>`).join("")}</div>
+  b.innerHTML = `<div class="bar"><div class="pills">${gens.map(x => `<button class="pill ${x.name === S.gen ? "active" : ""}" onclick='S.gen=${esc(JSON.stringify(x.name))};render()'>${esc(x.name)}</button>`).join("")}</div>
       <span class="spacer"></span><a class="btn" href="${fileUrl(base + "/results.xlsx", 1)}">Download results.xlsx</a>
       <button onclick="openSys(null,'${base}/results.xlsx')">Open in Excel</button>
       <button onclick="viewTable('${base}/counts_used.csv')">Counts used</button><button onclick="viewText('${base}/README.txt')">How to read this</button></div>
@@ -581,7 +581,7 @@ async function renderSampling(b) {
   if (!S.samp || !done.includes(S.samp)) S.samp = done[done.length - 1] || null;
   let html = `<p class="muted" style="margin-top:0">How many images per condition are needed? Splits the variation into field / well / n,
       estimates power for other designs, and subsamples your data. Uses the plate design from <b>Settings</b>.</p>
-    <div class="card row"><label>Generation <select id="sGen">${gens.map(g => `<option ${g === gens[gens.length - 1] ? "selected" : ""}>${g}</option>`).join("")}</select></label>
+    <div class="card row"><label>Generation <select id="sGen">${gens.map(g => `<option ${g === gens[gens.length - 1] ? "selected" : ""}>${esc(g)}</option>`).join("")}</select></label>
       <label>Subsamples per design <input id="sIt" value="1000" size="6"></label>
       <button class="primary" ${S.running || !gens.length ? "disabled" : ""} onclick="startJob('sampling',{generation:$('sGen').value,iterations:$('sIt').value})">Run sampling analysis</button></div>`;
   if (!done.length) { b.innerHTML = html + `<div class="muted">No sampling results yet.</div>`; return; }
@@ -589,7 +589,7 @@ async function renderSampling(b) {
   const files = (await get("/api/files", { exp: S.exp, dir: base, recursive: "1" })).filter(f => !f.dir);
   const rep = files.find(f => f.name === "REPORT.txt");
   const report = rep ? (await get("/api/text", { exp: S.exp, path: rep.path })).text : "";
-  html += `<div class="bar"><span class="muted">Results for</span><div class="pills">${done.map(g => `<button class="pill ${g === S.samp ? "active" : ""}" onclick="S.samp='${g}';render()">${g}</button>`).join("")}</div></div>
+  html += `<div class="bar"><span class="muted">Results for</span><div class="pills">${done.map(g => `<button class="pill ${g === S.samp ? "active" : ""}" onclick='S.samp=${esc(JSON.stringify(g))};render()'>${esc(g)}</button>`).join("")}</div></div>
     ${plotGrid(files.filter(f => f.name.endsWith(".png")))}
     ${report ? `<h2>Report</h2><pre class="text">${esc(report)}</pre>` : ""}
     <h2>Tables and files</h2>${fileTable(files.filter(f => !f.name.endsWith(".png")), base)}`;
