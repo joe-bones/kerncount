@@ -52,6 +52,22 @@ DEFAULTS: dict = {
         "two_way_anova": True,  # extra two-way ANOVA + all-pairs Tukey (per n: treatment x well; all n: treatment x n)
         "treatment_order": ["Control", "LyoVec", "CL075"],  # remaining treatments follow alphabetically
         "exclude_low_qc": False,  # g1 is fully automatic; set true to drop QC=low images from stats
+        # all-n statistics (docs/statistics.md)
+        "primary_test": "mixed",  # drives the stars: "mixed" (hierarchical model, log scale) or "rm_anova" (Prism standard)
+        "primary_family": "",  # control whose comparisons are the main claim; "" = `reference`
+        "vehicle_check": "auto",  # equivalence test, e.g. "LyoVec vs Control"; "auto" = other controls vs reference; "" = off
+        "equivalence_margin": 0.2,  # vehicle check: ratio must lie within [1/1.2, 1.2] to call it equivalent
+        "positive_control": "",  # e.g. "CL075": every non-control treatment is also compared with it
+        "classes": {},  # treatment classes with their own n x treatment variance, e.g. { mirna = ["miR-*"] }
+        "among_classes": [],  # classes whose members are compared with each other (all pairs), e.g. ["mirna"]
+    },
+    "acceptance": {
+        # per-n acceptance criteria (count metric); report only unless enforce = true
+        "vehicle_within": 0.3,  # vehicle / control ratio in that n must lie within 1 +- this ("" = off)
+        "positive_control_max_ratio": "",  # positive control / reference must reach this ratio (e.g. 0.8) ("" = off)
+        "min_images_per_condition": 3,  # every condition in that n needs at least this many usable images
+        "max_low_qc_fraction": 0.5,  # at most this fraction of that n's images may be QC low
+        "enforce": False,  # true: n's that fail are left out of all-n statistics (listed in About and manifest)
     },
     "design": {
         # one plate per n; each condition sits in `wells` wells, each imaged `fields_per_well` times (docs/design.md)
@@ -112,6 +128,21 @@ normalise_to = ["Control", "LyoVec"] # each also gets % plots and its own tests 
 two_way_anova = true                 # extra: two-way ANOVA + Tukey all-pairs (per n: treatment x well; all n: treatment x n)
 treatment_order = ["Control", "LyoVec", "CL075"]
 exclude_low_qc = false
+# all-n statistics (see docs/statistics.md)
+primary_test = "mixed"               # what drives the stars: "mixed" (hierarchical model on the log scale) or "rm_anova"
+primary_family = ""                  # control whose comparisons are the main claim, e.g. "LyoVec"; "" = reference
+vehicle_check = "auto"               # equivalence test, e.g. "LyoVec vs Control"; "auto" = other controls vs reference; "" = off
+equivalence_margin = 0.2             # equivalent = ratio (90% CI) within [1/1.2, 1.2]
+positive_control = ""                # e.g. "CL075": every non-control treatment is also compared with it
+classes = {{}}                         # own n x treatment variance per class, e.g. {{ mirna = ["miR-*"] }}
+among_classes = []                   # compare members of these classes with each other, e.g. ["mirna"]
+
+[acceptance]                         # per-n acceptance criteria (on the counts); report only unless enforce = true
+vehicle_within = 0.3                 # vehicle / control in that n within 1 +- 0.3; "" = off
+positive_control_max_ratio = ""      # e.g. 0.8: positive control / reference must reach 0.8 (>= the value if above 1); "" = off
+min_images_per_condition = 3         # every condition needs at least this many usable images
+max_low_qc_fraction = 0.5            # at most this share of the n's images may be QC low
+enforce = false                      # true: failing n's are left out of all-n statistics (listed in About)
 
 [design]                  # which well / field each image is; one plate per n (see docs/design.md)
 wells = 2                 # wells per condition per n; "auto" = take them from wells.csv if it exists, else 2
