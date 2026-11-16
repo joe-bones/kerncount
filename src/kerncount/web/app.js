@@ -70,8 +70,15 @@ function parseHash() {
   const h = location.hash.slice(1), [path, query] = h.split("?");
   const [exp, sec] = path.split("/").map(decodeURIComponent);
   const params = {};
-  if (query) for (const kv of query.split("&")) { const [k, v = ""] = kv.split("="); if (k) params[decodeURIComponent(k)] = decodeURIComponent(v.replace(/\+/g, " ")); }
-  return { exp: exp || null, sec: OLD_TABS[sec] || sec || "home", params };
+  // values from the URL are untrusted (a link can be crafted): drop anything that could break out of HTML/attributes
+  const safe = x => typeof x === "string" && !/[<>"'`\\]/.test(x);
+  if (query) for (const kv of query.split("&")) {
+    const [k, v = ""] = kv.split("=");
+    let key, val;
+    try { key = decodeURIComponent(k); val = decodeURIComponent(v.replace(/\+/g, " ")); } catch (e) { continue; }
+    if (key && safe(key) && safe(val)) params[key] = val;
+  }
+  return { exp: safe(exp) ? exp || null : null, sec: OLD_TABS[sec] || sec || "home", params };
 }
 function nav(sec, params = {}, exp = S.exp) {
   if (S.sec === "corrections" && sec !== "corrections" && Object.keys(S.pending).length) {
@@ -89,7 +96,7 @@ async function applyHash() {
   const h = parseHash();
   if (h.exp !== S.exp) resetExp();
   S.exp = h.exp; S.sec = SEC_TITLE[h.sec] ? h.sec : "home"; S.params = h.params;
-  if (S.sec === "review" && h.params.q) S.reviewQ = h.params.q;
+  if (S.sec === "review" && ["all", "low", "medium", "high"].includes(h.params.q)) S.reviewQ = h.params.q;
   await refreshState();
   render();
 }
@@ -694,7 +701,7 @@ RENDER.review = async function (b, e) {
         ${markers.length ? `Fluorescence experiments: open a field and press <b>Show ${esc(markers[0])} positivity</b> to see which nuclei are counted as positive.` : ""}</p>
       <div class="gallery">${N.treatments.map(t => `<div class="thumb" onclick='S.reviewT=${js(t.treatment)};render()'>
         ${t.overview ? `<img loading="lazy" src="${fileUrl(t.overview)}">` : `<div class="muted" style="padding:30px">no overview sheet</div>`}
-        <div class="cap"><b>${esc(t.treatment)}</b><span>${tally(t.images)}</span>${S.reviewQ !== "all" ? `<span class="small muted">${ofQ(t.images)} QC ${S.reviewQ}</span>` : ""}</div></div>`).join("")}</div>`;
+        <div class="cap"><b>${esc(t.treatment)}</b><span>${tally(t.images)}</span>${S.reviewQ !== "all" ? `<span class="small muted">${ofQ(t.images)} QC ${esc(S.reviewQ)}</span>` : ""}</div></div>`).join("")}</div>`;
   } else {
     const imgs = T.images.filter(i => S.reviewQ === "all" || i.qc === S.reviewQ);
     S.lbList = imgs.map(i => ({ ...i, n: N.n, treatment: T.treatment }));
