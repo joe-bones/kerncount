@@ -250,6 +250,11 @@ async function useNewLayout() {
 
 // ---------------------------------------------------------------- Settings tab
 
+function tomlTable(v) {  // kind "table": { name = ["a", "b"] } shown as TOML inline-table text
+  if (typeof v === "string") return v;
+  const keys = Object.keys(v || {});
+  return keys.length ? `{ ${keys.map(k => `${k} = [${[].concat(v[k]).map(x => JSON.stringify(x)).join(", ")}]`).join(", ")} }` : "{}";
+}
 function fieldInput(sec, f, v) {
   const id = `f_${sec}_${f.key}`;
   switch (f.kind) {
@@ -261,6 +266,7 @@ function fieldInput(sec, f, v) {
     case "num_or": return `<input type="text" id="${id}" value="${esc(v)}" size="12" placeholder="${esc(f.special.filter(Boolean).join(" / ") || "empty")}">
       ${f.special.filter(Boolean).map(s => `<button class="small" type="button" onclick="$('${id}').value='${s}';$('${id}').dispatchEvent(new Event('input',{bubbles:true}))">${s}</button>`).join("")}`;
     case "int": case "float": return `<input type="text" id="${id}" value="${esc(v)}" size="10" inputmode="decimal">`;
+    case "table": return `<input type="text" id="${id}" value="${esc(tomlTable(v))}" style="width:100%" placeholder='{ mirna = ["miR-*"] }'>`;
     default: return `<input type="text" id="${id}" value="${esc(v)}" style="width:100%">`;
   }
 }

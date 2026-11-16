@@ -15,6 +15,7 @@ READOUT_NAMES = ["frac_out_of_focus", "micronuclei_per_nucleus", "nuclear_area_m
                  "nuclear_area_cv", "frac_irregular", "coverage", "nn_distance_median"]
 
 # kind: bool | int | float | choice | multi | list | num_or (a number, or one of `special`) | measure | names ("all" or some of `options`) | text
+# | table (TOML inline table of name = [strings], e.g. { mirna = ["miR-*"] }; shown and edited as text)
 # reseg = changing it re-detects every nucleus (the slow step, ~2-3 s per image)
 FIELDS: dict[str, dict[str, dict]] = {
     "project": {
@@ -86,6 +87,47 @@ FIELDS: dict[str, dict[str, dict]] = {
         "treatment_order": dict(kind="list", label="Treatment order", help="Order in tables and plots; others follow alphabetically."),
         "exclude_low_qc": dict(kind="bool", label="Leave out QC-low images",
                                help="Images with QC low (and no manual value) are left out of the statistics."),
+        "primary_test": dict(kind="choice", options=["mixed", "rm_anova"], label="Test behind the stars",
+                             help="mixed = hierarchical model on the log scale (fields in wells in n; each treatment "
+                                  "class gets its own n-to-n variability; results as ratios). rm_anova = Prism-style "
+                                  "repeated-measures ANOVA + Dunnett on the per-n means. Both are always computed; this "
+                                  "only decides which one draws the stars. If the model cannot be fitted, rm_anova is "
+                                  "used and the plot says so."),
+        "primary_family": dict(kind="text", label="Main claim: compare with",
+                               help="The control whose comparisons are the main result (headline stars), e.g. LyoVec. "
+                                    "Empty = the main comparison group above."),
+        "vehicle_check": dict(kind="text", label="Vehicle check (equivalence test)",
+                              help='e.g. "LyoVec vs Control": tests whether the vehicle has NO meaningful effect '
+                                   "(equivalence, not just 'not significant'). auto = every other control group vs the "
+                                   "main comparison group; empty = off. Several: separate with ;"),
+        "equivalence_margin": dict(kind="float", min=0.01, max=1, label="Equivalence margin",
+                                   help="0.2 = the vehicle counts as equivalent if its ratio to the control (90% CI) "
+                                        "lies entirely within 1/1.2 to 1.2 (about ±20%)."),
+        "positive_control": dict(kind="text", label="Positive control",
+                                 help="e.g. CL075. Every treatment that is not a control is also compared with it. "
+                                      "Empty = none."),
+        "classes": dict(kind="table", label="Treatment classes",
+                        help='Groups of treatments whose effects may vary differently between n\'s, each with its own '
+                             'n-to-n variance in the model. TOML inline table of name = [patterns], * = wildcard, e.g. '
+                             '{ mirna = ["miR-*"] }. Empty {} = controls form one class, everything else another.'),
+        "among_classes": dict(kind="list", label="Compare within classes",
+                              help="Class names whose members are compared with each other (all pairs), e.g. mirna."),
+    },
+    "acceptance": {
+        "vehicle_within": dict(kind="num_or", special=[""], label="Vehicle within ± (ratio)",
+                               help="Per n, the vehicle / control ratio of nuclei per field must lie within 1 ± this "
+                                    "(0.3 = 0.7 to 1.3). Uses the vehicle check pair. Empty = off."),
+        "positive_control_max_ratio": dict(kind="num_or", special=[""], label="Positive control must reach (ratio)",
+                                           help="Per n, positive control / main comparison group must be at most this "
+                                                "ratio (e.g. 0.8 = at least 20% fewer nuclei); a value above 1 means "
+                                                "at least this ratio. Needs a positive control. Empty = off."),
+        "min_images_per_condition": dict(kind="int", min=0, label="Minimum images per condition",
+                                         help="Every condition in that n needs at least this many usable images."),
+        "max_low_qc_fraction": dict(kind="float", min=0, max=1, label="Maximum share of QC-low images",
+                                    help="e.g. 0.5 = at most half of that n's images may have QC low."),
+        "enforce": dict(kind="bool", label="Leave out n's that fail",
+                        help="Off = only report (acceptance.csv). On = n's that fail any criterion are left out of "
+                             "every all-n statistic; they are listed in the About sheet and the manifest."),
     },
     "design": {
         "wells": dict(kind="num_or", special=["auto"], label="Wells per condition per n",
@@ -128,8 +170,8 @@ FIELDS: dict[str, dict[str, dict]] = {
 SECTION_TITLES = {
     "project": "Project", "channels": "Channels", "segmentation": "Finding nuclei", "counting": "What counts as a nucleus",
     "qc": "Quality levels", "intensity": "Intensity per cell", "readouts": "Extra readouts (beyond the count)",
-    "analysis": "Statistics",
-    "design": "Plate design (sampling analysis)", "review": "Review images",
+    "analysis": "Statistics", "acceptance": "Acceptance criteria per n",
+    "design": "Plate design (wells, fields, positions)", "review": "Review images",
     "planner": "Planning the next experiment",
 }
 
@@ -183,6 +225,8 @@ def coerce(values: dict) -> dict:
                 elif k == "num_or":
                     s = str(v).strip()
                     val = s if s in meta["special"] else _num(s)
+                elif k == "table":
+                    val = parse_table(v)
                 elif k == "measure":
                     s = str(v).strip().lower()
                     val = "all" if s in ("", "all") else [_num(c, as_int=True) for c in s.replace(";", ",").split(",") if c.strip()]
@@ -203,6 +247,34 @@ def coerce(values: dict) -> dict:
     return out
 
 
+def parse_table(v) -> dict:
+    """kind "table": a TOML inline table of name = [strings] (dict or its text form, e.g. '{ mirna = ["miR-*"] }')."""
+    if isinstance(v, dict):
+        t = v
+    else:
+        s = str(v).strip()
+        if not s:
+            return {}
+        if not s.startswith("{"):
+            s = "{ " + s + " }"
+        t = tomllib.loads(f"x = {s}")["x"]
+    if not isinstance(t, dict):
+        raise ValueError
+    out = {}
+    for name, pats in t.items():
+        if isinstance(pats, str):
+            pats = [pats]
+        if not isinstance(pats, list) or not all(isinstance(p, str) for p in pats):
+            raise ValueError
+        out[str(name)] = [p.strip() for p in pats if p.strip()]
+    return out
+
+
+def table_text(v: dict) -> str:
+    """Display form of a kind "table" value."""
+    return toml_value(v or {})
+
+
 def toml_value(v) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
@@ -210,6 +282,11 @@ def toml_value(v) -> str:
         return repr(v)
     if isinstance(v, list):
         return "[" + ", ".join(toml_value(i) for i in v) + "]"
+    if isinstance(v, dict):
+        if not v:
+            return "{}"
+        keys = [k if re.fullmatch(r"[A-Za-z0-9_\-]+", k) else json.dumps(k) for k in v]
+        return "{ " + ", ".join(f"{k} = {toml_value(x)}" for k, x in zip(keys, v.values())) + " }"
     return json.dumps(str(v), ensure_ascii=False)  # a JSON string is a valid TOML basic string
 
 

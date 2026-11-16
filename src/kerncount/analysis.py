@@ -412,7 +412,11 @@ def rm_anova_dunnett(means: pd.DataFrame, order: list[str], ref: str) -> tuple[d
     return anova, rows
 
 
-def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: dict, stars_by_ref: dict | None = None,
+          main_ref: str | None = None, star_note: str = "") -> tuple[pd.DataFrame, pd.DataFrame]:
+    """stars_by_ref: {control: (marks, footer)} replaces the RM ANOVA stars on the plots of that control (the
+    primary test decides; see models.py). main_ref: the control of the headline plot (default: first control
+    present). star_note: text put in front of the RM ANOVA footers (e.g. why the mixed model was not used)."""
     a = settings["analysis"]
     ns = sorted(df["n"].unique())
     order = treatment_order(df["treatment"], a["treatment_order"])
@@ -489,21 +493,29 @@ def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: di
         anova = st[st["test"].str.startswith("RM one-way ANOVA")]
         a_txt = (f"RM one-way ANOVA p={anova['p'].iloc[0]:.2g} ({stars(anova['p'].iloc[0])}). "
                  if len(anova) and not np.isnan(anova["p"].iloc[0]) else "")
-        return (f"{a_txt}Stars: Dunnett vs {ref_} after RM one-way ANOVA (n = matched replicate, pooled error). "
-                "* p<0.05  ** p<0.01  *** p<0.001  **** p<0.0001; no mark = not significant.")
+        if stars_by_ref and ref_ in stars_by_ref:
+            return stars_by_ref[ref_][1]
+        return (f"{star_note}{a_txt}Stars: Dunnett vs {ref_} after RM one-way ANOVA (n = matched replicate, pooled "
+                "error). * p<0.05  ** p<0.01  *** p<0.001  **** p<0.0001; no mark = not significant.")
+
+    def marks_for(ref_):
+        if stars_by_ref and ref_ in stars_by_ref:
+            return stars_by_ref[ref_][0]
+        return significance_marks(st, ref_, f"Dunnett vs {ref_} (")
 
     vals = {t: means[t].tolist() for t in order}
     colour = lambda t: [ncol[n] for n in means.index if not np.isnan(means.at[n, t])]
-    main_ref = next((r_ for r_ in refs if r_ in means), None)
+    if main_ref not in means:
+        main_ref = next((r_ for r_ in refs if r_ in means), None)
     _bar_plot(order, vals, "SEM", label, f"All n: {label} (mean of n ± SEM; dots = n)", out_dir / metric, colour, legend=ncol,
-              sig=significance_marks(st, main_ref, f"Dunnett vs {main_ref} (") if main_ref else None, ref=main_ref,
+              sig=marks_for(main_ref) if main_ref else None, ref=main_ref,
               footer=foot_for(main_ref) if main_ref else "")
     for ref_, pct in norms.items():
         pv = {t: pct[t].tolist() for t in order}
         colour_p = lambda t, pct=pct: [ncol[n] for n in pct.index if not np.isnan(pct.at[n, t])]
         _bar_plot(order, pv, "SEM", f"{label} (% of {ref_})", f"All n: % of {ref_} (mean ± SEM)",
                   out_dir / f"{metric}_pct_of_{ref_}", colour_p, ref_line=100, legend=ncol,
-                  sig=significance_marks(st, ref_, f"Dunnett vs {ref_} ("), ref=ref_, footer=foot_for(ref_))
+                  sig=marks_for(ref_), ref=ref_, footer=foot_for(ref_))
     if a.get("two_way_anova", True) and len(ns) >= 2:
         _write_two_way(df, "n", order, metric, label, f"All n: {label}, two-way ANOVA (treatment x n)", out_dir,
                        colours=ncol, b_label="n",

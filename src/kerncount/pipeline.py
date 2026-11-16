@@ -218,9 +218,10 @@ def regenerate(project_dir: Path, rebuild: list[str] | None = None) -> None:
     df = discover.read_table(counts)
     table = discover.read_table(details)
     table["image"] = table["image"].astype(int)
-    for c in table.columns:
-        if c.startswith("intensity_"):
-            table[c] = pd.to_numeric(table[c], errors="coerce")
+    from . import metrics as metrics_mod
+    for m in metrics_mod.registry(table.columns, prj.settings).values():
+        if m.column in table and m.column != "count":
+            table[m.column] = pd.to_numeric(table[m.column], errors="coerce")
     log("Rebuilding generations from counts.csv (detection results are reused unchanged)...")
     build_generations(prj, df, table, rebuild or [])
     log("Done.")
@@ -228,9 +229,11 @@ def regenerate(project_dir: Path, rebuild: list[str] | None = None) -> None:
 
 def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebuild: list[str]):
     gens = master.chain(df)
-    inten = {c: c.replace("intensity_", "").replace("_", " ") + " mean intensity"
-             for c in table.columns if c.startswith("intensity_")}
-    img_cols = ["n", "treatment", "image", "qc_level"] + list(inten)
+    from . import metrics as metrics_mod
+    # every registered metric column (intensity_*, nuclei_per_mm2, readout_*) flows through all statistics
+    reg = metrics_mod.registry(table.columns, prj.settings)
+    measured = {k: m for k, m in reg.items() if m.column != "count" and m.column in table}
+    img_cols = ["n", "treatment", "image", "qc_level"] + [m.column for m in measured.values()]
     img_table = table[[c for c in img_cols if c in table]]
     design_table = check_design(prj, df)
     root = prj.path / "generations"
@@ -247,7 +250,7 @@ def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebui
             else:
                 log(f"  {g['name']}: up to date")
             continue
-        generations.build(prj.path, g, img_table, inten, prj.settings, design_table)
+        generations.build(prj.path, g, img_table, measured, prj.settings, design_table)
         log(f"  {g['name']}: built ({'automatic' if g['source'] == 'auto' else g['source']}, {g['changes']} manual cells)")
     extra = sorted(p.name for p in root.glob("g*") if p.is_dir() and p.name not in {g["name"] for g in gens})
     if extra:
