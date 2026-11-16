@@ -169,8 +169,11 @@ def run(project_dir: Path, rebuild: list[str] | None = None, resegment: bool = F
                        fiji_count=legacy_fiji.get((r.n, r.treatment, r.image)), source_file=str(r.path))
             row.update(_intensity(prj, cobjs, info))
             px = s["segmentation"]["pixel_size_um"] or info.get("pixel_size_um")
+            h, w = tifffile.TiffFile(lab).pages[0].shape[:2]
+            if s["readouts"]["enabled"]:
+                ro, cobjs = classify.compute_readouts(cobjs, (h, w), float(px) if px else None, s["readouts"]["include"])
+                row.update(ro)
             if px:
-                h, w = tifffile.TiffFile(lab).pages[0].shape[:2]
                 row["nuclei_per_mm2"] = summ["auto_count"] / (h * w * float(px) ** 2 / 1e6)
             rows.append(row)
             if len(cobjs):
