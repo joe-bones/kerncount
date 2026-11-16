@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 KINDS = ("count", "positive", "fraction")
+DENOMINATORS = ("count", "count_plus_fraction")
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,10 @@ class Metric:
     unit: str
     kind: str  # count | positive | fraction
     description: str = ""
+    # fractions only: the nuclei the fraction is taken of, from the field's counted nuclei c and the fraction f:
+    # "count" (N = c, e.g. % Ki-67-positive of counted nuclei) or "count_plus_fraction" (N = c / (1 - f), when the
+    # fraction's own nuclei are not counted, e.g. out of focus / (counted + out of focus))
+    denominator: str = "count"
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -65,8 +70,9 @@ def describe_column(col: str) -> Metric | None:
         if kind not in KINDS:
             kind = "fraction" if col.startswith("readout_frac_") else "positive"
         unit = info.get("unit") or ("fraction" if kind == "fraction" else "")
+        den = str(info.get("denominator") or ("count_plus_fraction" if col == "readout_frac_out_of_focus" else "count"))
         return Metric(col, col, str(info.get("label") or _pretty(col[len("readout_"):])), str(unit), kind,
-                      str(info.get("description", "")))
+                      str(info.get("description", "")), den if den in DENOMINATORS else "count")
     return None
 
 
@@ -89,5 +95,19 @@ def normalise(metrics) -> dict[str, Metric]:
             out[k] = v
         else:
             m = describe_column(k) or Metric(k, k, str(v), "", "positive")
-            out[k] = Metric(m.id, m.column, str(v) if v else m.label, m.unit, m.kind, m.description)
+            out[k] = Metric(m.id, m.column, str(v) if v else m.label, m.unit, m.kind, m.description, m.denominator)
     return out
+
+
+def estimand(metric: Metric, unit: str = "well", what: str = "effect") -> str:
+    """Plain-language estimand of the all-n model for a metric (`what` = effect | mean).
+    unit "well": count/positive -> ratio of mean <unit>; fraction -> difference in percentage points.
+    unit "field": geometric means of fields (the older field-level model)."""
+    u = metric.unit or metric.label
+    if metric.kind == "fraction":
+        if what == "mean":
+            return "% of nuclei (pooled per well; typical well, logit model)"
+        return "difference in percentage points (pooled per well; logit model)"
+    if unit == "field":
+        return f"geometric mean {u}" if what == "mean" else f"ratio of geometric means of fields ({u})"
+    return f"mean {u}" if what == "mean" else f"ratio of mean {u}"

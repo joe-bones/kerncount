@@ -24,11 +24,15 @@ class Group:
     y: np.ndarray
     X: np.ndarray
     M: list[np.ndarray]  # one (N, q_k) matrix per random term (q_k may be 0)
+    known: np.ndarray | None = None  # known extra residual variance per row (e.g. binomial sampling variance), added to V
 
 
 class REML:
-    def __init__(self, groups: list[Group], names: list[str]):
+    def __init__(self, groups: list[Group], names: list[str], fix_residual: float | None = None):
+        """fix_residual: hold the residual variance at this value (e.g. a tiny value when the residual is not
+        identifiable because every n x treatment cell has a single observation and its own variance term)."""
         self.groups = groups
+        self.fix_residual = fix_residual
         self.names = list(names) + ["residual"]  # theta order: random terms, then residual
         self.K = len(names)
         self.p = groups[0].X.shape[1]
@@ -42,6 +46,8 @@ class REML:
     # ------------------------------------------------------------ core pieces
     def _V(self, g: Group, theta) -> np.ndarray:
         V = theta[-1] * np.eye(len(g.y))
+        if g.known is not None:
+            V += np.diag(g.known)
         for t, M in zip(theta[:-1], g.M):
             if M.size and t > 0:
                 V += t * (M @ M.T)
@@ -103,15 +109,20 @@ class REML:
         K = self.K
         out = [np.r_[np.full(K, 0.1 * v), 0.5 * v], np.r_[np.full(K, v / (K + 1)), v / (K + 1)],
                np.r_[np.full(K, 0.01 * v), 0.9 * v]]
+        if self.fix_residual is not None:
+            out = [np.r_[o[:-1], self.fix_residual] for o in out]
         for e in extra or []:
             e = np.asarray(e, float)
             if e.shape == (K + 1,) and np.all(np.isfinite(e)):
-                out.insert(0, np.clip(e, 0, None) + np.r_[np.zeros(K), 1e-9])
+                e = np.clip(e, 0, None) + np.r_[np.zeros(K), 1e-9]
+                if self.fix_residual is not None:
+                    e[-1] = self.fix_residual
+                out.insert(0, e)
         return out
 
     def fit(self, extra_starts: list | None = None, n_default: int | None = None) -> "REMLFit":
         lo = 1e-8 * self.var_y
-        bounds = [(0.0, None)] * self.K + [(lo, None)]
+        bounds = [(0.0, None)] * self.K + [(lo, None) if self.fix_residual is None else (self.fix_residual,) * 2]
         best = None
         tried = self.starts(extra_starts)
         if n_default is not None:
@@ -138,6 +149,8 @@ class REML:
         ll, gr = self.loglike(theta, grad=True)
         # projected gradient: zero on interior parameters, non-positive (pointing outward) at the boundary
         pg = np.where(theta > 0, gr, np.maximum(gr, 0))
+        if self.fix_residual is not None:
+            pg[-1] = 0.0
         converged = bool(best.success or np.max(np.abs(pg) * np.maximum(theta, self.var_y)) < 1e-3)
         return REMLFit(self, theta, ll, converged, str(best.message))
 
@@ -191,6 +204,8 @@ class REMLFit:
     def theta_cov(self) -> tuple[np.ndarray, np.ndarray]:
         """(mask of parameters not on the boundary, inverse expected information for those)."""
         keep = self.theta > 0
+        if self.model.fix_residual is not None:
+            keep[-1] = False  # held fixed: not estimated
         return keep, np.linalg.pinv(self.info[np.ix_(keep, keep)])
 
     def satterthwaite(self, L: np.ndarray) -> float:
