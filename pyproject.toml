@@ -31,4 +31,4 @@ kerncount = "kerncount.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-kerncount = ["models/**/*"]
+kerncount = ["models/**/*", "web/*"]

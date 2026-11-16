@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kerncount</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <div class="brand">kerncount</div>
+  <div class="ws" id="wsLabel" title="Workspace folder"></div>
+  <div class="spacer"></div>
+  <button class="ghost" onclick="go(null)">Workspace</button>
+  <button class="ghost" onclick="quitApp()">Quit</button>
+</header>
+<div id="app">
+  <nav id="side">
+    <div class="side-title">Experiments</div>
+    <div id="expList"></div>
+    <div class="side-new">
+      <input id="newExp" placeholder="new experiment name">
+      <button onclick="newExperiment()">+ Add</button>
+    </div>
+  </nav>
+  <main id="main"></main>
+</div>
+<div id="toast"></div>
+<section id="logDock" class="collapsed">
+  <div class="log-head" onclick="toggleLog(event)">
+    <span id="jobLabel">Log</span>
+    <span class="spacer"></span>
+    <button id="stopBtn" class="danger small" onclick="stopJob(event)" disabled>Stop</button>
+    <span class="chev" id="logChev">▲</span>
+  </div>
+  <pre id="log"></pre>
+</section>
+<div id="modal" class="hidden" onclick="if(event.target===this)closeModal()"><div class="modal-box" id="modalBox"></div></div>
+<script>const TOKEN = "__TOKEN__";</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -117,6 +117,14 @@ def cmd_run(a):
         pipeline.run(prj, rebuild=a.rebuild, resegment=a.resegment, no_review=a.no_review)
 
 
+def cmd_regen(a):
+    from . import pipeline
+
+    for prj in _projects(a):
+        print(f"\n=== {prj.name}")
+        pipeline.regenerate(prj, rebuild=a.rebuild)
+
+
 def cmd_sampling(a):
     from . import pipeline
 
@@ -148,6 +156,12 @@ def main(argv=None):
     r.add_argument("--resegment", action="store_true", help="ignore cached segmentations")
     r.add_argument("--no-review", action="store_true", help="skip drawing review images (faster)")
     r.set_defaults(func=cmd_run)
+    rg = sub.add_parser("regen", help="rebuild generations from counts.csv only (fast; after manual corrections)")
+    rg.add_argument("project", nargs="?", help="experiment name, or a project folder path")
+    rg.add_argument("--all", action="store_true", help="every initialised experiment")
+    rg.add_argument("--rebuild", nargs="+", metavar="gN", default=[],
+                    help="overwrite existing generation folders, e.g. --rebuild g2 g3  or  --rebuild all")
+    rg.set_defaults(func=cmd_regen)
     m = sub.add_parser("sampling", help="how many images per condition are needed? (variance + power + subsampling)")
     m.add_argument("project", nargs="?", help="experiment name, or a project folder path")
     m.add_argument("--all", action="store_true", help="every initialised experiment")

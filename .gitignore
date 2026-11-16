@@ -19,3 +19,6 @@ src/kerncount/models/
 *.csv
 _work/
 .DS_Store
+
+# launcher build
+launcher/app.zip

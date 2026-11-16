@@ -1,28 +1,94 @@
-"""Point-and-click front end: a small local web page that runs the kerncount commands.
+"""Point-and-click front end: a local web app that runs, configures and reviews kerncount projects.
 
-Standard library only. Listens on 127.0.0.1 (this computer only); every action needs a per-session
-token embedded in the page, so other websites cannot trigger runs. Commands run as a subprocess
-(`python -m kerncount.cli ...`) in the workspace folder, one at a time, with the log streamed to the page.
+Standard library only, so it starts instantly. Listens on 127.0.0.1 (this computer only). Every API call needs a
+per-session token embedded in the page, and requests must be addressed to 127.0.0.1/localhost (blocks other
+websites and DNS rebinding). Long commands (init, run, regen, sampling) run as a subprocess
+(`python -m kerncount.cli ...`) one at a time, with the log streamed to the page. Small edits (settings,
+layout, manual corrections) are written directly, with the same validation the command line uses.
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
+import mimetypes
 import os
 import re
 import secrets
 import subprocess
 import sys
 import threading
+import tomllib
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
+from . import settings as settings_mod
+from . import settings_form
 from .cli import ANALYSIS, DATA, workspace_root
 
 CONFIG = Path.home() / ".kerncount_gui.json"
 TOKEN = secrets.token_urlsafe(16)
+WEB = Path(__file__).with_name("web")
 _GEN = re.compile(r"^g\d+$")
+_MANUAL = re.compile(r"^manual_(\d+)$", re.I)
+MAX_ROWS = 20000
+EXCLUDE_TOKENS = {"x", "exclude", "excl", "excluded", "-", "na", "n/a"}  # = master.EXCLUDE_TOKENS
+mimetypes.add_type("text/plain", ".toml")
+mimetypes.add_type("text/plain", ".csv")
+mimetypes.add_type("text/plain", ".md")
 
+
+def slug(s: str) -> str:  # = pipeline._slug (folder names of review images and generation outputs)
+    return re.sub(r"[^\w.\-]+", "_", s).strip("_")
+
+
+def gen_key(name: str) -> int:
+    return int(name[1:]) if _GEN.match(name) else -1
+
+
+# ---------------------------------------------------------------- CSV helpers (stdlib; Excel-saved files too)
+
+def read_csv(path: Path) -> tuple[list[str], list[list[str]], str]:
+    text = path.read_text(encoding="utf-8-sig")
+    first = text.splitlines()[0] if text else ""
+    try:
+        delim = csv.Sniffer().sniff(first, delimiters=",;\t").delimiter
+    except csv.Error:
+        delim = ","
+    rows = list(csv.reader(io.StringIO(text), delimiter=delim))
+    return (rows[0] if rows else []), rows[1:], delim
+
+
+def write_csv(path: Path, columns: list[str], rows: list[list[str]], delim: str):
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=delim, lineterminator=os.linesep)
+    w.writerow(columns)
+    w.writerows(rows)
+    try:
+        path.write_text(buf.getvalue(), encoding="utf-8", newline="")
+    except PermissionError:
+        raise ValueError(f"cannot write {path.name}: is it open in Excel? Close it and try again.") from None
+
+
+def parse_manual(v: str, where: str):
+    """Same rules as master._parse: '' = no change, x = exclude, else a whole number >= 0."""
+    s = str(v).strip()
+    if s == "":
+        return None
+    if s.lower() in EXCLUDE_TOKENS:
+        return "exclude"
+    try:
+        f = float(s.replace(",", "."))
+    except ValueError:
+        raise ValueError(f"{where}: cannot read '{s}' (use a whole number, or x to exclude)") from None
+    if f < 0 or f != int(f):
+        raise ValueError(f"{where}: '{s}' must be a whole number >= 0")
+    return int(f)
+
+
+# ---------------------------------------------------------------- jobs
 
 class Job:
     def __init__(self, label: str, args: list[str], cwd: Path):
@@ -45,11 +111,38 @@ class Job:
         return self.returncode is None
 
 
+def build_args(action: str, exp: str, o: dict) -> list[str]:
+    gens = [g for g in re.split(r"[\s,;]+", str(o.get("rebuild", ""))) if _GEN.match(g) or g == "all"]
+    if action == "init":
+        return ["init", exp] + (["--force"] if o.get("force") else [])
+    if action == "run":
+        args = ["run", exp]
+        if o.get("no_review"):
+            args.append("--no-review")
+        if o.get("resegment"):
+            args.append("--resegment")
+        return args + (["--rebuild", *gens] if gens else [])
+    if action == "regen":
+        return ["regen", exp] + (["--rebuild", *gens] if gens else [])
+    if action == "sampling":
+        gen = str(o.get("generation", "")).strip()
+        args = ["sampling", exp] + (["--generation", gen] if _GEN.match(gen) else [])
+        it = str(o.get("iterations", "")).strip()
+        return args + (["--iterations", it] if it.isdigit() and int(it) > 0 else [])
+    raise ValueError(f"unknown action {action}")
+
+
+# ---------------------------------------------------------------- workspace / project state
+
 class State:
     def __init__(self, workspace: Path | None):
         self.lock = threading.Lock()
         self.job: Job | None = None
         self.workspace = workspace
+        self.httpd: ThreadingHTTPServer | None = None
+
+    def busy(self) -> bool:
+        return bool(self.job and self.job.running)
 
     def experiments(self) -> list[dict]:
         ws = self.workspace
@@ -58,12 +151,28 @@ class State:
         out = []
         for d in sorted(p for p in (ws / DATA).iterdir() if p.is_dir() and not p.name.startswith(".")):
             prj = ws / ANALYSIS / d.name
-            gens = sorted((g.name for g in (prj / "generations").glob("g*") if _GEN.match(g.name)),
-                          key=lambda g: int(g[1:])) if (prj / "generations").is_dir() else []
             out.append(dict(name=d.name, initialised=(prj / "settings.toml").exists(),
-                            counted=(prj / "counts.csv").exists(), generations=gens,
-                            sampling=(prj / "sampling").is_dir()))
+                            counted=(prj / "counts.csv").exists(), generations=generations(prj),
+                            sampling=sorted((p.name for p in (prj / "sampling").glob("g*") if p.is_dir()), key=gen_key)))
         return out
+
+    def project(self, exp: str) -> Path:
+        if not exp or exp not in {e["name"] for e in self.experiments()}:
+            raise ValueError(f"unknown experiment: {exp}")
+        return self.workspace / ANALYSIS / exp
+
+
+def generations(prj: Path) -> list[str]:
+    root = prj / "generations"
+    return sorted((g.name for g in root.glob("g*") if g.is_dir() and _GEN.match(g.name)), key=gen_key) if root.is_dir() else []
+
+
+def inside(root: Path, rel: str) -> Path:
+    """Resolve a relative path and make sure it stays inside root."""
+    p = (root / rel).resolve()
+    if p != root.resolve() and root.resolve() not in p.parents:
+        raise ValueError("path outside the project")
+    return p
 
 
 def default_workspace(arg: str | None) -> Path | None:
@@ -91,35 +200,165 @@ def open_path(p: Path):
         subprocess.Popen(["xdg-open", str(p)])
 
 
-def build_args(action: str, exp: str, o: dict) -> list[str]:
-    if action == "init":
-        return ["init", exp] + (["--force"] if o.get("force") else [])
-    if action == "run":
-        args = ["run", exp]
-        if o.get("no_review"):
-            args.append("--no-review")
-        if o.get("resegment"):
-            args.append("--resegment")
-        rebuild = [g for g in str(o.get("rebuild", "")).replace(",", " ").split() if _GEN.match(g) or g == "all"]
-        if rebuild:
-            args += ["--rebuild", *rebuild]
-        return args
-    if action == "sampling":
-        gen = str(o.get("generation", "")).strip()
-        return ["sampling", exp] + (["--generation", gen] if _GEN.match(gen) else [])
-    raise ValueError(f"unknown action {action}")
+def pick_folder(start: str) -> str:
+    """Native folder picker, in a subprocess (Tk must own the main thread on macOS)."""
+    code = ("import sys,tkinter as t,tkinter.filedialog as f;r=t.Tk();r.withdraw();r.attributes('-topmost',True);"
+            "print(f.askdirectory(initialdir=sys.argv[1] or None,title='Choose the kerncount workspace folder'))")
+    try:
+        r = subprocess.run([sys.executable, "-c", code, start], capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        return ""
+    if r.returncode != 0:
+        raise ValueError("no folder picker available here - type or paste the path instead")
+    return r.stdout.strip()
 
+
+# ---------------------------------------------------------------- project data for the page
+
+def project_info(prj: Path) -> dict:
+    s = settings_mod.load(prj)
+    st = prj / "settings.toml"
+    gens = []
+    for g in generations(prj):
+        meta = prj / "generations" / g / "generation.json"
+        try:
+            gens.append({**json.loads(meta.read_text(encoding="utf-8")), "name": g})
+        except (OSError, ValueError):
+            gens.append(dict(name=g))
+    return dict(
+        path=str(prj), settings=s, settings_text=st.read_text(encoding="utf-8") if st.exists() else "",
+        schema=settings_form.schema(), generations=gens,
+        sampling=sorted((p.name for p in (prj / "sampling").glob("g*") if p.is_dir()), key=gen_key),
+        files={n: (prj / n).exists() for n in ("layout.csv", "layout.new.csv", "counts.csv", "qc_details.csv",
+                                                "fiji_comparison.csv", "review", "_work/cells.csv")})
+
+
+def review_index(prj: Path) -> list[dict]:
+    """n -> treatment -> images, from qc_details.csv (count, QC, flags) joined with the review JPEGs on disk."""
+    det = prj / "qc_details.csv"
+    if not det.exists():
+        return []
+    cols, rows, _ = read_csv(det)
+    ix = {c: i for i, c in enumerate(cols)}
+    get = lambda r, c: r[ix[c]] if c in ix and ix[c] < len(r) else ""  # noqa: E731
+    out: dict[str, dict[str, list]] = {}
+    for r in rows:
+        n, t, img = get(r, "n"), get(r, "treatment"), get(r, "image")
+        if not img.isdigit():
+            continue
+        rel = f"review/{slug(n)}/{slug(t)}/{int(img):02d}.jpg"
+        out.setdefault(n, {}).setdefault(t, []).append(dict(
+            image=int(img), count=get(r, "auto_count"), low=get(r, "count_low"), high=get(r, "count_high"),
+            qc=get(r, "qc_level"), flags=get(r, "qc_flags"), path=rel if (prj / rel).exists() else None))
+    res = []
+    for n, ts in out.items():
+        res.append(dict(n=n, treatments=[dict(
+            treatment=t, images=imgs,
+            overview=(f"review/{slug(n)}/{slug(t)}_overview.jpg" if (prj / "review" / slug(n) / f"{slug(t)}_overview.jpg").exists() else None))
+            for t, imgs in ts.items()]))
+    return res
+
+
+def save_layout(prj: Path, rows: list[dict]):
+    path = prj / "layout.csv"
+    cols, old, delim = read_csv(path)
+    ix = {c: i for i, c in enumerate(cols)}
+    if len(rows) != len(old):
+        raise ValueError("layout.csv changed on disk - reload the page")
+    for r, new in zip(old, rows):
+        if (r[ix["n_folder"]], r[ix["treatment_folder"]]) != (new.get("n_folder"), new.get("treatment_folder")):
+            raise ValueError("layout.csv changed on disk - reload the page")
+        for c in ("n", "treatment", "include", "date"):
+            if c in ix and c in new:
+                v = str(new[c]).strip()
+                if c in ("n", "treatment") and not v:
+                    raise ValueError(f"{r[ix['n_folder']]} / {r[ix['treatment_folder']]}: {c} cannot be empty")
+                r[ix[c]] = v
+    write_csv(path, cols, old, delim)
+
+
+def save_counts(prj: Path, changes: list[dict], mtime: float | None) -> dict:
+    """Apply in-browser corrections to counts.csv. A completely new manual_k column (next round) is added if needed,
+    and one empty manual column is always kept at the end (as `kerncount run` does)."""
+    path = prj / "counts.csv"
+    if mtime is not None and abs(path.stat().st_mtime - mtime) > 1e-3:
+        raise ValueError("counts.csv was changed by another program since this page loaded it "
+                         "(Excel? a run?). Reload the corrections tab and enter your changes again.")
+    cols, rows, delim = read_csv(path)
+    n_i, t_i, i_i = cols.index("n"), cols.index("treatment"), cols.index("image")
+    key = {(r[n_i], r[t_i], str(int(r[i_i])) if r[i_i].strip().isdigit() else r[i_i]): r for r in rows}
+    for ch in changes:
+        col = str(ch.get("col", ""))
+        if not _MANUAL.match(col):
+            raise ValueError(f"only manual_N columns can be edited, not {col}")
+        if col not in cols:
+            k = int(_MANUAL.match(col).group(1))
+            have = [int(_MANUAL.match(c).group(1)) for c in cols if _MANUAL.match(c)]
+            if k != max(have, default=0) + 1:
+                raise ValueError(f"cannot create {col}")
+            cols.append(col)
+            for r in rows:
+                r.append("")
+        r = key.get((str(ch.get("n")), str(ch.get("treatment")), str(ch.get("image"))))
+        if r is None:
+            raise ValueError(f"no row {ch.get('n')} / {ch.get('treatment')} / image {ch.get('image')} in counts.csv")
+        where = f"{ch.get('n')} / {ch.get('treatment')} / image {ch.get('image')}"
+        v = parse_manual(ch.get("value", ""), where)
+        while len(r) < len(cols):
+            r.append("")
+        r[cols.index(col)] = "" if v is None else ("x" if v == "exclude" else str(v))
+    mcols = sorted((c for c in cols if _MANUAL.match(c)), key=lambda c: int(c[7:]))
+    if mcols and any(len(r) > cols.index(mcols[-1]) and r[cols.index(mcols[-1])].strip() for r in rows):
+        cols.append(f"manual_{int(mcols[-1][7:]) + 1}")
+        for r in rows:
+            r.append("")
+    write_csv(path, cols, rows, delim)
+    return dict(mtime=path.stat().st_mtime)
+
+
+def counts_data(prj: Path) -> dict:
+    path = prj / "counts.csv"
+    if not path.exists():
+        return dict(columns=[], rows=[], mtime=None)
+    cols, rows, _ = read_csv(path)
+    return dict(columns=cols, rows=rows, mtime=path.stat().st_mtime, generations=generations(prj))
+
+
+def table_data(path: Path) -> dict:
+    cols, rows, _ = read_csv(path)
+    return dict(columns=cols, rows=rows[:MAX_ROWS], total=len(rows), truncated=len(rows) > MAX_ROWS)
+
+
+def list_files(root: Path, rel: str, recursive: bool) -> list[dict]:
+    d = inside(root, rel)
+    if not d.is_dir():
+        raise ValueError(f"not a folder: {rel}")
+    it = d.rglob("*") if recursive else d.iterdir()
+    out = []
+    for p in it:
+        if p.name.startswith(".") or p.suffix in (".sig",):
+            continue
+        out.append(dict(path=p.relative_to(root).as_posix(), name=p.name, dir=p.is_dir(),
+                        size=p.stat().st_size if p.is_file() else None))
+    return sorted(out, key=lambda f: (not f["dir"], f["path"].lower()))
+
+
+# ---------------------------------------------------------------- HTTP
 
 def make_handler(state: State):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # keep the console quiet
             pass
 
-        def _send(self, code: int, body, ctype="application/json"):
-            data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
+        def _send(self, code: int, body, ctype="application/json", extra: dict | None = None):
+            data = body if isinstance(body, bytes) else body.encode() if isinstance(body, str) else json.dumps(body, default=str).encode()
             self.send_response(code)
-            self.send_header("Content-Type", ctype + "; charset=utf-8")
+            self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith(("text/", "application/json")) else ""))
+            self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(data)
 
@@ -133,73 +372,165 @@ def make_handler(state: State):
                 return False
             return True
 
+        def _token_ok(self, q: dict) -> bool:
+            return secrets.compare_digest(self.headers.get("X-Token") or q.get("t", [""])[0], TOKEN)
+
         def do_GET(self):
             if not self._local():
                 return
-            if self.path == "/":
-                return self._send(200, PAGE.replace("__TOKEN__", TOKEN), "text/html")
-            if self.path == "/api/state":
+            u = urlparse(self.path)
+            q = parse_qs(u.query)
+            if u.path == "/":
+                html = (WEB / "index.html").read_text(encoding="utf-8").replace("__TOKEN__", TOKEN)
+                return self._send(200, html, "text/html")
+            if u.path.startswith("/static/"):
+                f = WEB / u.path.removeprefix("/static/")
+                if f.parent == WEB and f.is_file():
+                    return self._send(200, f.read_bytes(), mimetypes.guess_type(f.name)[0] or "application/octet-stream")
+                return self._send(404, {"error": "not found"})
+            if not self._token_ok(q):
+                return self._send(403, {"error": "bad token - reload the page"})
+            arg = lambda k, d="": q.get(k, [d])[0]  # noqa: E731
+            try:
+                if u.path == "/file":
+                    p = inside(state.project(arg("exp")), arg("path"))
+                    if not p.is_file():
+                        return self._send(404, {"error": "not found"})
+                    extra = {"Content-Disposition": f'attachment; filename="{p.name}"'} if arg("dl") else {}
+                    return self._send(200, p.read_bytes(), mimetypes.guess_type(p.name)[0] or "application/octet-stream", extra)
+                return self._send(200, self._get(u.path, arg))
+            except Exception as e:
+                return self._send(400, {"error": str(e)})
+
+        def _get(self, path, arg):
+            if path == "/api/state":
                 j = state.job
-                return self._send(200, dict(
-                    workspace=str(state.workspace or ""), experiments=state.experiments(),
-                    job=j and dict(label=j.label, running=j.running, returncode=j.returncode)))
-            if self.path.startswith("/api/log"):
-                since = int(self.path.partition("since=")[2] or 0)
+                return dict(workspace=str(state.workspace or ""), experiments=state.experiments(),
+                            job=j and dict(label=j.label, running=j.running, returncode=j.returncode))
+            if path == "/api/log":
+                since = int(arg("since", "0") or 0)
                 j = state.job
                 lines = j.log[since:] if j else []
-                return self._send(200, dict(lines=lines, next=since + len(lines)))
-            self._send(404, {"error": "not found"})
+                return dict(lines=lines, next=since + len(lines))
+            prj = state.project(arg("exp"))
+            if path == "/api/project":
+                return project_info(prj)
+            if path == "/api/review":
+                return review_index(prj)
+            if path == "/api/counts":
+                return counts_data(prj)
+            if path == "/api/table":
+                p = inside(prj, arg("path"))
+                return table_data(p) if p.exists() else dict(columns=[], rows=[], total=0)
+            if path == "/api/text":
+                p = inside(prj, arg("path"))
+                return dict(text=p.read_text(encoding="utf-8-sig", errors="replace")[:500_000] if p.is_file() else "")
+            if path == "/api/files":
+                return list_files(prj, arg("dir"), arg("recursive") == "1")
+            raise ValueError(f"unknown request {path}")
 
         def do_POST(self):
             if not self._local():
                 return
-            if self.headers.get("X-Token") != TOKEN:
+            if not self._token_ok({}):
                 return self._send(403, {"error": "bad token - reload the page"})
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-                msg = self._post(self.path, body)
-                self._send(200, {"ok": True, "message": msg})
+                res = self._post(urlparse(self.path).path, body)
+                self._send(200, res if isinstance(res, dict) else {"ok": True, "message": res})
             except Exception as e:  # report every problem on the page
                 self._send(400, {"error": str(e)})
 
-        def _exp(self, body) -> str:
-            name = body.get("experiment", "")
-            if name not in {e["name"] for e in state.experiments()}:
-                raise ValueError(f"unknown experiment: {name}")
-            return name
+        def _idle(self):
+            if state.busy():
+                raise ValueError("a job is running - wait for it to finish (or press Stop) before changing files")
 
         def _post(self, path, body):
             if path == "/api/workspace":
-                p = Path(body.get("path", "").strip().strip('"')).expanduser()
+                p = Path(str(body.get("path", "")).strip().strip('"')).expanduser()
+                if body.get("create"):
+                    if not p.is_absolute():
+                        raise ValueError("give a full folder path")
+                    (p / DATA).mkdir(parents=True, exist_ok=True)
                 if not (p / DATA).is_dir():
-                    raise ValueError(f"{p} has no data folder inside it")
+                    raise ValueError(f"{p} has no 'data' folder inside it (tick 'create' to make one)")
                 state.workspace = p.resolve()
                 CONFIG.write_text(json.dumps({"workspace": str(state.workspace)}))
                 return "workspace set"
+            if path == "/api/browse":
+                return dict(path=pick_folder(str(state.workspace or "")))
+            if path == "/api/new_experiment":
+                name = str(body.get("name", "")).strip()
+                if not state.workspace or not name or name in (".", "..") or re.search(r'[\\/:*?"<>|]', name):
+                    raise ValueError("give a simple folder name (no / \\ : * ? \" < > |)")
+                d = state.workspace / DATA / name
+                d.mkdir(parents=True, exist_ok=True)
+                open_path(d)
+                return f"created data/{name} - copy one folder per n into it (opened in your file browser), then press Set up"
             if path == "/api/stop":
-                if state.job and state.job.running:
+                if state.busy():
                     state.job.proc.terminate()
                 return "stopping"
+            if path == "/api/quit":
+                if state.busy():
+                    state.job.proc.terminate()
+                threading.Thread(target=state.httpd.shutdown, daemon=True).start()
+                return "kerncount has stopped - you can close this tab"
             if path == "/api/start":
-                exp = self._exp(body)
+                exp = body.get("experiment", "")
+                state.project(exp)
                 args = build_args(body.get("action", ""), exp, body.get("options", {}))
                 with state.lock:
-                    if state.job and state.job.running:
+                    if state.busy():
                         raise ValueError("another job is still running - wait or press Stop")
                     state.job = Job(f"{args[0]} {exp}", args, state.workspace)
                 return "started"
+            prj = state.project(body.get("experiment", ""))
             if path == "/api/open":
-                prj = state.workspace / ANALYSIS / self._exp(body)
                 what = body.get("what")
-                gens = sorted((prj / "generations").glob("g*"), key=lambda g: int(g.name[1:]) if _GEN.match(g.name) else -1)
-                target = {"folder": prj, "counts": prj / "counts.csv", "settings": prj / "settings.toml",
-                          "layout": prj / "layout.csv", "review": prj / "review",
-                          "results": gens[-1] / "results.xlsx" if gens else None,
-                          "data": state.workspace / DATA / body["experiment"]}.get(what)
+                gens = generations(prj)
+                target = {"folder": prj, "data": state.workspace / DATA / body["experiment"]}.get(what)
+                if target is None and what == "results" and gens:
+                    target = prj / "generations" / gens[-1] / "results.xlsx"
+                if target is None and body.get("path"):
+                    target = inside(prj, body["path"])
                 if target is None or not target.exists():
-                    raise ValueError(f"not there yet: {what} (run the earlier steps first)")
+                    raise ValueError("not there yet (run the earlier steps first)")
                 open_path(target)
                 return f"opened {target.name}"
+            if path == "/api/settings":
+                self._idle()
+                st = prj / "settings.toml"
+                if "text" in body:
+                    text = str(body["text"])
+                    try:
+                        tomllib.loads(text)
+                    except tomllib.TOMLDecodeError as e:
+                        raise ValueError(f"settings.toml is not valid: {e}") from None
+                else:
+                    text = settings_form.update_text(st.read_text(encoding="utf-8"), settings_form.coerce(body.get("values", {})))
+                st.write_text(text, encoding="utf-8")
+                return "settings saved"
+            if path == "/api/settings_reset":
+                self._idle()
+                raw = settings_mod.load(prj)["project"]["raw_dir"]
+                raw_abs = Path(raw) if Path(raw).is_absolute() else (prj / raw)
+                settings_mod.write_template(prj, raw_abs)
+                return "settings reset to defaults"
+            if path == "/api/layout":
+                self._idle()
+                save_layout(prj, body.get("rows", []))
+                return "layout saved"
+            if path == "/api/layout_use_new":
+                self._idle()
+                new = prj / "layout.new.csv"
+                if not new.exists():
+                    raise ValueError("there is no fresh scan (layout.new.csv)")
+                new.replace(prj / "layout.csv")
+                return "layout.csv replaced by the fresh scan"
+            if path == "/api/counts":
+                self._idle()
+                return dict(ok=True, message="corrections saved", **save_counts(prj, body.get("changes", []), body.get("mtime")))
             raise ValueError(f"unknown request {path}")
 
     return Handler
@@ -213,8 +544,10 @@ def serve(workspace: str | None = None, port: int = 8765, open_browser: bool = T
             break
         except OSError:
             continue
+    state.httpd = httpd
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
-    print(f"kerncount is open in your browser at {url}\nKeep this window open while you work; close it to quit.", flush=True)
+    print(f"kerncount is open in your browser at {url}\n"
+          "Keep this window open while you work; close it (or press Quit on the page) to stop.", flush=True)
     if open_browser:
         threading.Timer(0.5, webbrowser.open, (url,)).start()
     try:
@@ -222,84 +555,5 @@ def serve(workspace: str | None = None, port: int = 8765, open_browser: bool = T
     except KeyboardInterrupt:
         pass
     finally:
-        if state.job and state.job.running:
+        if state.busy():
             state.job.proc.terminate()
-
-
-PAGE = r"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>kerncount</title>
-<style>
- body{font:15px system-ui,sans-serif;max-width:1100px;margin:24px auto;padding:0 16px;color:#222}
- h1{font-size:22px;margin:0 0 4px} .muted{color:#666;font-size:13px}
- table{border-collapse:collapse;width:100%;margin:12px 0}
- td,th{border-bottom:1px solid #ddd;padding:8px 6px;text-align:left;vertical-align:top}
- button{font:inherit;font-size:13px;padding:4px 10px;margin:2px;border:1px solid #888;border-radius:4px;background:#f6f6f6;cursor:pointer}
- button.main{background:#2563eb;color:#fff;border-color:#2563eb} button:disabled{opacity:.4;cursor:default}
- .tag{display:inline-block;font-size:12px;padding:1px 6px;border-radius:8px;background:#eee;margin-right:4px}
- .ok{background:#dcfce7} .no{background:#fee2e2}
- pre{background:#111;color:#ddd;padding:10px;height:340px;overflow:auto;font-size:12px;white-space:pre-wrap}
- details{margin:8px 0} input[type=text]{font:inherit;padding:3px 6px}
- #msg{min-height:20px;color:#b45309}
-</style></head><body>
-<h1>kerncount</h1>
-<div class="muted">Steps: <b>1 Set up</b> (once) → check <i>layout</i> → <b>2 Run</b> → look at <i>review images</i> →
-optionally correct <i>counts.csv</i> in Excel (save &amp; close it) → <b>Run</b> again → <i>results</i>.</div>
-<p>Workspace: <input type="text" id="ws" size="70"> <button onclick="setWs()">Use this folder</button>
-<span class="muted">(the folder containing <code>data</code>)</span></p>
-<details><summary>Options</summary>
- <p><b>Run:</b> <label><input type="checkbox" id="no_review"> skip review images (faster)</label>
- <label><input type="checkbox" id="resegment"> re-detect every nucleus (ignore cache)</label>
- <label>overwrite generation(s): <input type="text" id="rebuild" size="8" placeholder="e.g. g2"></label></p>
- <p><b>Sampling:</b> <label>generation <input type="text" id="generation" size="5" placeholder="latest"></label></p>
- <p><b>Set up:</b> <label><input type="checkbox" id="force"> reset settings.toml and layout.csv</label></p>
-</details>
-<table><thead><tr><th>Experiment</th><th>Status</th><th>Actions</th><th>Open</th></tr></thead><tbody id="rows"></tbody></table>
-<div id="msg"></div>
-<p><b id="joblabel">Log</b> <button id="stop" onclick="post('/api/stop',{})" disabled>Stop</button></p>
-<pre id="log"></pre>
-<script>
-const TOKEN="__TOKEN__"; let next=0, running=false, lastLabel=null;
-const $=id=>document.getElementById(id);
-async function post(url,body){
-  const r=await fetch(url,{method:"POST",headers:{"X-Token":TOKEN,"Content-Type":"application/json"},body:JSON.stringify(body)});
-  const j=await r.json(); $("msg").textContent=j.error||""; refresh(); return j;
-}
-function opts(){return{no_review:$("no_review").checked,resegment:$("resegment").checked,rebuild:$("rebuild").value,
-  generation:$("generation").value,force:$("force").checked}}
-function start(action,exp){next=0;$("log").textContent="";post("/api/start",{action,experiment:exp,options:opts()})}
-function openIt(exp,what){post("/api/open",{experiment:exp,what})}
-function setWs(){post("/api/workspace",{path:$("ws").value})}
-const esc=s=>s.replace(/[&<>"']/g,c=>"&#"+c.charCodeAt(0)+";");
-function row(e){
-  const n=esc(JSON.stringify(e.name)), d=running?"disabled":"";
-  const st=(e.initialised?'<span class="tag ok">set up</span>':'<span class="tag no">not set up</span>')+
-    (e.generations.length?`<span class="tag ok">${e.generations.length} generation(s)</span>`:'');
-  const b=(lbl,act,cls,need)=>`<button class="${cls||""}" ${d} ${need===false?"disabled":""} onclick='start("${act}",${n})'>${lbl}</button>`;
-  const o=(lbl,w,need)=>`<button ${need?"":"disabled"} onclick='openIt(${n},"${w}")'>${lbl}</button>`;
-  return `<tr><td><b>${esc(e.name)}</b></td><td>${st}</td><td>`+
-    b("1 Set up","init",e.initialised?"":"main")+b("2 Run","run",e.initialised?"main":"",e.initialised)+
-    b("Sampling","sampling","",e.generations.length>0)+`</td><td>`+
-    o("Images","data",true)+o("Project folder","folder",e.initialised)+o("layout","layout",e.initialised)+
-    o("settings","settings",e.initialised)+o("Review images","review",e.counted)+o("counts.csv","counts",e.counted)+
-    o("Results (Excel)","results",e.generations.length>0)+`</td></tr>`;
-}
-async function refresh(){
-  const s=await (await fetch("/api/state")).json();
-  if(document.activeElement!==$("ws")) $("ws").value=s.workspace;
-  running=!!(s.job&&s.job.running); $("stop").disabled=!running;
-  $("joblabel").textContent=s.job?`Log: ${s.job.label} ${running?"(running…)":s.job.returncode===0?"(done)":"(stopped/failed)"}`:"Log";
-  $("rows").innerHTML=s.experiments.length?s.experiments.map(row).join(""):
-    '<tr><td colspan="4">No experiments found. Enter the workspace folder above (it must contain a <code>data</code> folder with one folder per experiment).</td></tr>';
-}
-async function poll(){
-  try{
-    const j=await (await fetch("/api/log?since="+next)).json();
-    if(j.lines.length){const L=$("log"),end=L.scrollTop+L.clientHeight>=L.scrollHeight-5;
-      L.textContent+=j.lines.join("\n")+"\n"; next=j.next; if(end) L.scrollTop=L.scrollHeight;}
-    const was=running; await refresh(); if(was&&!running) refresh();
-  }catch(e){$("msg").textContent="Lost contact with kerncount - is its window still open?"}
-  setTimeout(poll,1000);
-}
-poll();
-</script></body></html>
-"""
