@@ -18,6 +18,7 @@ kerncount/                 (this repository)
 ├── docs/technical.md      ← algorithms and implementation notes
 ├── src/kerncount/         ← the code
 ├── tests/                 ← unit tests (pytest)
+├── launcher/              ← source of the one-click kerncount.exe / kerncount.app
 └── setup.bat / setup.command / kerncount.bat / kerncount-gui.*   ← install and launch helpers
 ```
 Your images and results live in a separate **workspace** folder, with input and output kept apart:
@@ -63,13 +64,25 @@ data/<experiment>/                              e.g. data/my_experiment/
   sub-folder levels (images are found at any depth).
 - **Image format:** TIFF, 8- or 16-bit, greyscale, RGB or multi-channel, at any magnification and from any camera.
   Nucleus size is measured per folder and the detector rescales to it.
-- **Plates:** by default, images 1–6 = plate 1 and 7–12 = plate 2 (only used by the sampling analysis;
-  change it in `settings.toml`).
+- **Wells:** one n = one plate. Each condition sits in 2 wells of that plate; by default images 1–6 = well 1
+  and 7–12 = well 2 (only used by the sampling analysis; change it in `settings.toml`).
 
 ---
 
 ## 2. Install (once per computer)
 
+### Easiest: one-click app (no admin rights, no Python, no commands)
+Download from the [latest release](https://github.com/joe-bones/kerncount/releases/latest):
+- **Windows:** `kerncount.exe`
+- **Mac (Apple silicon):** `kerncount-mac.zip`. Double-click to unzip; this gives `kerncount.app`.
+
+Put it in your workspace folder (next to `data`) and double-click it. The first start needs internet, takes
+a few minutes and about 1 GB: it installs Python 3.12 and everything kerncount needs into your user folder.
+After that, every start opens kerncount in your browser straight away. The first time, the system warns about an
+unsigned app: on Windows click **More info → Run anyway**; on the Mac click **Done**, then
+**System Settings → Privacy & Security → Open Anyway**. Details: [launcher/README.md](launcher/README.md).
+
+### Alternative: install from this repository (for the command line)
 1. **Mac/Linux:** install **Python 3.12** from python.org (3.11 or newer works; 3.12 is recommended for TensorFlow).
    **Windows:** nothing to install first, and no admin rights needed: `setup.bat` fetches Python 3.12 itself
    (via [uv](https://docs.astral.sh/uv/)) into your user folder (`%LOCALAPPDATA%\kc`).
@@ -90,12 +103,23 @@ Run every command from the workspace folder (the one that contains `data/`). Exp
 to by their folder name in `data/`.
 
 ### Without commands: the web interface
-Double-click **`kerncount-gui.bat`** (Windows) or **`kerncount-gui.command`** (Mac). A page opens in your
-browser with one row per experiment and buttons for every step below (**1 Set up**, **2 Run**, **Sampling**),
-plus buttons that open the layout, settings, review images, `counts.csv` and the Excel results.
-The log shows progress live; **Stop** cancels a run. Keep the black window open while you work and close it
-to quit. The page only works on this computer, and nothing is sent anywhere else. The options under *Options*
-match the command options listed at the end of this section. The same thing from a terminal: `kerncount gui`.
+Double-click **`kerncount.exe`** / **`kerncount.app`** (section 2), or, with a repository install,
+**`kerncount-gui.bat`** (Windows) / **`kerncount-gui.command`** (Mac). The same thing from a terminal: `kerncount gui`.
+Everything below can be done in the browser, without editing files:
+
+| Tab | What you do there |
+|---|---|
+| **Run** | Set up, run the analysis (with the command options below as tick boxes), sampling; live log, **Stop** |
+| **Layout** | Fix n / treatment names, include or leave out folders |
+| **Settings** | Every toggle from section 4 as a form, with explanations; or edit `settings.toml` as text |
+| **Review images** | Overview sheet per treatment, then each image full size (← / → to browse); type a correction directly |
+| **Corrections** | Edit a generation: type corrected counts or **x** for a round (`manual_1` → g2, …), see the value before and after, then **build** the generation (about a minute; detection is reused) |
+| **Results** | All plots, tables and statistics per generation; download `results.xlsx` |
+| **Sampling** | Run and read the "how many images?" analysis |
+| **All files** | Browse and preview everything in the project folder |
+
+Keep the black (Windows) or Terminal (Mac) window open while you work; close it or press **Quit** to stop.
+The page only works on this computer, and nothing is sent anywhere else.
 
 ### Step 1: create a project (once per experiment)
 ```
@@ -168,6 +192,7 @@ set `segment` to that channel and `[segmentation] backend = "classical"`.
 | `kerncount run <experiment> --rebuild g2` | Overwrite an existing generation folder (never done by default). `--rebuild all` for all. |
 | `kerncount run <experiment> --resegment` | Ignore the cache and re-detect every nucleus |
 | `kerncount run <experiment> --no-review` | Skip drawing review images (faster) |
+| `kerncount regen <experiment> [--rebuild g2 g3]` | Rebuild generations from `counts.csv` only (fast; after corrections) |
 | `kerncount sampling <experiment> --generation g2` | Sampling analysis on a particular generation (default: latest) |
 
 Paths work too, for folders outside a workspace: `kerncount init <raw folder> <project folder>`,
@@ -236,17 +261,20 @@ isn't automatically "low". An image with 0 nuclei is always "low" (check for a b
 ### `[analysis]`: statistics
 | Setting | Default | Meaning |
 |---|---|---|
-| `reference` | `"LyoVec"` | Main comparison group |
-| `normalise_to` | `["LyoVec", "Control"]` | Groups to express results as % of (within each n), and to test against |
+| `reference` | `"Control"` | Main comparison group (headline plots) |
+| `normalise_to` | `["Control", "LyoVec"]` | Groups to express results as % of (within each n), and to test against. Every group listed gets its own tests and plots, so you always get both *vs Control* and *vs LyoVec* |
+| `two_way_anova` | `true` | Extra two-way ANOVA with Tukey all-pairs comparisons: per n treatment × well, all n treatment × n (5.4.3) |
 | `treatment_order` | `["Control", "LyoVec", "CL075"]` | Order in tables and plots; other treatments follow alphabetically |
 | `exclude_low_qc` | `false` | If `true`, images with QC low (and no manual value) are left out of the statistics |
 
 ### `[design]`: used by `kerncount sampling`
 | Setting | Default | Meaning |
 |---|---|---|
-| `plates` | `2` | Plates (wells) imaged per condition per n |
-| `fields_per_plate` | `6` | Fields per plate |
-| `plate_layout` | `"consecutive"` | `consecutive` = images 1–6 plate 1, 7–12 plate 2; `alternating` = odd/even |
+| `wells` | `2` | Wells imaged per condition per n (one plate per n) |
+| `fields_per_well` | `6` | Fields (images) per well |
+| `well_layout` | `"consecutive"` | `consecutive` = images 1–6 well 1, 7–12 well 2; `alternating` = odd/even |
+
+Older settings files using `plates` / `fields_per_plate` / `plate_layout` still work; the report asks you to rename them.
 
 ### `[review]`
 | Setting | Default | Meaning |
@@ -326,15 +354,20 @@ g1/
 │   ├── <treatment>/count_fields.png  bar per field (x = excluded)
 │   ├── count_summary.csv             per treatment: fields, mean, SD, SEM, median, % of LyoVec, % of Control
 │   ├── count_prism.csv               Prism Column table: columns = treatments, rows = fields
-│   ├── count_stats.csv               one-way ANOVA + Dunnett vs reference
-│   └── count.png / .pdf              bar = mean, error = SD, dots = fields, stars = Dunnett (5.4.2)
+│   ├── count_stats.csv               one-way ANOVA + Dunnett vs each control (Control, LyoVec)
+│   ├── count.png / .pdf              bar = mean, error = SD, dots = fields, stars = Dunnett vs Control (5.4.2)
+│   ├── count_vs_LyoVec.png / .pdf    same, stars = Dunnett vs LyoVec (only if this n has LyoVec)
+│   └── count_twoway.png / .pdf       two-way ANOVA treatment × well + Tukey all pairs (5.4.3)
+│       (+ count_twoway_anova.csv, count_twoway_pairs.csv)
 └── all_n/                            all experiments combined
     ├── count_summary.csv             per treatment: value per n, N, mean, SD, SEM, % of controls
     ├── count_prism.csv               Prism Column table: columns = treatments, rows = n
     ├── count_prism_pct_of_LyoVec.csv same, normalised to LyoVec within each n (also _Control)
-    ├── count_stats.csv               RM one-way ANOVA + ratio paired t-tests vs each control
+    ├── count_stats.csv               RM one-way ANOVA + Dunnett vs each control (stars); ratio paired t-tests (check)
     ├── count.png / .pdf              bar = mean of n, error = SEM, dot colour = n (legend), stars (5.4.2)
     ├── count_pct_of_LyoVec.png/.pdf  normalised version (dashed line = 100%); also _Control
+    ├── count_twoway.png / .pdf       two-way ANOVA treatment × n + Tukey all pairs (5.4.3)
+    │   (+ count_twoway_anova.csv, count_twoway_pairs.csv)
     └── n_colours.csv
 ```
 The same set of files exists for each intensity metric (`intensity_<channel>_<region>_*`).
@@ -344,7 +377,8 @@ The all-n files have the n label as a row title in the first column.
 
 **`results.xlsx` sheets:** *About* (what this generation is) · *Counts used* · *Count - all n* ·
 *Count - stats all n* · *Count - per n* · *Count - stats per n* · and, if intensity is on,
-*Intensity - all n* · *Intensity - stats all n* · *Intensity - per n*.
+*Intensity - all n* · *Intensity - stats all n* · *Intensity - per n* · and the two-way results:
+*Two-way anova - all n* · *Two-way pairs - all n* · *Two-way anova - per n* · *Two-way pairs - per n*.
 
 #### 5.4.1 Columns of `*_stats.csv`
 | Column | Meaning |
@@ -352,7 +386,7 @@ The all-n files have the n label as a row title in the first column.
 | `test` | Which test, and which control it compares against |
 | `comparison` | `<treatment> vs <control>`, or `all` for an overall ANOVA |
 | `N` | (all n) number of n's that contain both groups |
-| `ratio`, `ci_low`, `ci_high` | (all n) geometric-mean fold change vs the control and its 95% CI |
+| `effect_type`, `effect`, `ci_low`, `ci_high` | (all n) Dunnett: mean difference vs the control and its 95% CI (Dunnett-adjusted); ratio t-test: geometric-mean fold change and its 95% CI |
 | `statistic` | t, F or Dunnett statistic |
 | `p` / `p_adj` | raw / multiple-comparison-adjusted p (Dunnett is adjusted by construction; t-tests by Holm) |
 | `significance` | stars from `p_adj`: ns, \*, \*\*, \*\*\*, \*\*\*\* (< 0.05 / 0.01 / 0.001 / 0.0001) |
@@ -360,21 +394,31 @@ The all-n files have the n label as a row title in the first column.
 #### 5.4.2 How significance is shown on the plots
 - **Stars** (\* to \*\*\*\*) above a bar appear only when that treatment's comparison is significant
   (`p_adj` < 0.05). **No mark = not significant.** The control used is labelled **"ref"** above its bar.
-- **Per-n plots** use Dunnett vs the reference. If the reference is missing in that n, the next control
-  group (from `normalise_to`) is used, and the footer says which. These stars describe one experiment only.
-- **All-n plots** use the ratio paired t-test (Holm-adjusted) vs the control shown: the raw plot uses
-  `reference`; each `pct_of_<X>` plot uses X. The footer also gives the overall RM ANOVA p-value.
+- **Per-n plots** use Dunnett vs the control: `count.png` vs `reference` (Control), `count_vs_<X>.png`
+  vs each other control (LyoVec). If the reference is missing in that n, `count.png` uses the next control
+  group, and the footer says which. These stars describe one experiment only.
+- **All-n plots** use the Prism standard: repeated-measures one-way ANOVA (n = matched replicate), then
+  Dunnett vs the control shown, using the pooled error from all treatments: the raw plot uses
+  `reference` (Control); each `pct_of_<X>` plot uses X, so `pct_of_LyoVec` gives the stars vs LyoVec. The footer also gives the overall RM ANOVA p-value.
   A significant ANOVA with no starred bars means the treatments differ as a group, but no single
   comparison is significant yet with this many n's.
 - The footer of every plot names the test, so a figure can be read without the tables.
 
 **How to read the statistics:**
 - **Within one n** (`<n>/count_stats.csv`): the fields are *technical* replicates, so these p-values only
-  describe that experiment. Do not report them as the result. Dunnett compares against `reference`, or
-  the next control group if the reference is missing from that n.
+  describe that experiment. Do not report them as the result. Dunnett is run against every control
+  group present in that n (Control and LyoVec), each as its own family.
 - **All n** (`all_n/count_stats.csv`): each n is one biological replicate (the mean of its fields).
-  - *RM one-way ANOVA* (on n's that have every treatment): is there any difference at all?
-  - *Ratio paired t-test vs LyoVec / vs Control*: for each treatment, the ratio to the control within
+  - *RM one-way ANOVA*: is there any difference at all? Each n is a matched replicate. It is fitted by
+    least squares, so an n that misses one group (no LyoVec in n2) still counts for all its other groups.
+    With nothing missing this is exactly Prism's RM one-way ANOVA; with missing values Prism would use its
+    mixed-effects model, which gives very similar results.
+  - *Dunnett vs Control / vs LyoVec* (**drives the stars**): each treatment vs the control, using the
+    ANOVA's pooled residual error, adjusted for the number of comparisons. `effect` = mean difference
+    with a 95% CI. Pooling gives far more degrees of freedom than a single paired test (e.g. 20 instead
+    of 3 with 4 n's), so real effects reach significance with few n's. It assumes the n-to-n scatter is
+    similar for all treatments.
+  - *Ratio paired t-test vs LyoVec / vs Control* (**check**, no stars): for each treatment, the ratio to the control within
     each n, tested across n's. `ratio` = geometric-mean fold change (0.30 = 70% fewer cells), with a
     95% CI. `p_adj` is Holm-corrected within each control family. Stars: ns, \*, \*\*, \*\*\*, \*\*\*\*
     (0.05 / 0.01 / 0.001 / 0.0001).
@@ -384,20 +428,47 @@ The all-n files have the n label as a row title in the first column.
   cancel day-to-day differences in seeding, staining and lamp brightness.
 - **Intensity values** are only comparable if exposure and gain were fixed (auto-exposure off) within each n.
 
+#### 5.4.3 Two-way ANOVA with all-pairs comparisons (`*_twoway*`)
+An extra analysis at both levels, like Prism's two-way ANOVA with "compare all pairs":
+- **Per n:** treatment × well (wells from `[design]`); fields are the replicates.
+- **All n:** treatment × n; fields are the replicates.
+
+The model is `value ~ treatment + second factor + interaction` with Type II sums of squares, so a group
+missing from one n (e.g. no LyoVec in n2) is handled correctly. `*_twoway_anova.csv` gives F, df, p and the
+% of total variation for treatment, the second factor and the interaction. `*_twoway_pairs.csv` compares
+every pair of treatments (Tukey–Kramer, `p_adj`) on cell means matched within each well / n, using only the
+wells / n's that contain both groups (`matched_levels`), with the mean difference and its 95% CI. The plot
+shows grouped bars (mean ± SEM of fields per well / n) next to a matrix of the adjusted p-values.
+
+**Caution, all-n level:** treating fields as replicates makes these p-values more optimistic than the ratio
+RM ANOVA + Dunnett, which uses one value per n. Report RM ANOVA + Dunnett as the result; use the two-way analysis to
+see whether treatments differ from each other and whether the effect depends on the n (the interaction).
+
 ### 5.5 How many images are needed? `sampling/g1/`
 | File | Contents |
 |---|---|
 | `REPORT.txt` | Plain-language summary: start here |
-| `images_needed.png/.pdf` | Predicted noise, subsampling agreement and per-n error vs images per condition |
-| `variance_components.csv` | Variation field-to-field (within a plate) and plate-to-plate (within an n), as CV² |
-| `effects.csv` | Observed fold changes and biological (n-to-n) variance per treatment |
-| `design_power.csv` | For every design (1–2 plates × 1–6 fields), per treatment: noise vs now, power at your current number of n's, and n's needed for 80% power |
+| `images_needed.png/.pdf` | Predicted noise, subsampling agreement and per-n error vs images per condition (vs the main reference; `images_needed_vs_<group>` for the others) |
+| `batch_by_n.csv` | Per n: reference-group levels, missing references, systematic well difference, and whether this n's treatment effects are stronger/weaker than in the other n's |
+| `batch_by_condition.csv` | Per n × treatment: mean per well, well-to-well ratio with a flag when it exceeds field noise, ratio vs each reference |
+| `variance_components.csv` | Variation field-to-field (within a well) and well-to-well (within a plate), as CV² |
+| `effects.csv` | Per reference and treatment: observed fold change, p with all images, biological (n-to-n) variance |
+| `design_power.csv` | For every design (1–2 wells × 1–6 fields), per reference and treatment: noise vs now, power at your current number of n's, and n's needed for 80% power |
 | `subsampling.csv` | Real images re-drawn many times per design: how often the result matches the conclusion from all images, and how far each n's ratio moves |
 
+Every analysis is done once per reference group (`reference` + `normalise_to`), like the statistics in
+section 5.4: an n without LyoVec is left out of the comparisons vs LyoVec but still counts vs Control.
+
 **How to read it:** the across-n test is limited by two things. The first is *measurement noise*
-(from fields and plates), which shrinks with more images. The second is *biological n-to-n variation*,
+(from fields and wells), which shrinks with more images. The second is *n-to-n variation*,
 which shrinks only with more n's. More images help only while measurement noise is still comparable to the
-biological variation. Plate-to-plate noise shrinks only with more plates.
+n-to-n variation. Well-to-well noise shrinks only with more wells.
+
+**Batch effects:** each n is one plate on one day, so plate and day effects are part of the n-to-n
+variation and cannot be separated from it. Effects that scale a whole plate (seeding, staining, lamp) cancel
+in the ratio to the reference. Effects that change how strongly the cells respond (e.g. transfection
+efficiency) do not cancel; the report flags an n whose treatment effects are consistently stronger or weaker
+than in the others. A flag is a prompt to check the lab notes for that day; it is not a reason to exclude the n.
 
 **Typical pattern:** when cells clump, field-to-field variation is large. Imaging at lower
 magnification (10x covers about 16× the area of 40x) then reduces measurement noise far more than adding

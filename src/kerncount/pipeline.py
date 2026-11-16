@@ -206,6 +206,23 @@ def run(project_dir: Path, rebuild: list[str] | None = None, resegment: bool = F
     _summary(prj, table)
 
 
+def regenerate(project_dir: Path, rebuild: list[str] | None = None) -> None:
+    """Rebuild generations from counts.csv + qc_details.csv alone (after manual corrections): no detection, no review images."""
+    prj = Project(project_dir)
+    counts, details = prj.path / "counts.csv", prj.path / "qc_details.csv"
+    if not (counts.exists() and details.exists()):
+        raise SystemExit("counts.csv / qc_details.csv not found - run the full analysis first")
+    df = discover.read_table(counts)
+    table = discover.read_table(details)
+    table["image"] = table["image"].astype(int)
+    for c in table.columns:
+        if c.startswith("intensity_"):
+            table[c] = pd.to_numeric(table[c], errors="coerce")
+    log("Rebuilding generations from counts.csv (detection results are reused unchanged)...")
+    build_generations(prj, df, table, rebuild or [])
+    log("Done.")
+
+
 def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebuild: list[str]):
     gens = master.chain(df)
     inten = {c: c.replace("intensity_", "").replace("_", " ") + " mean intensity"

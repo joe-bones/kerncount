@@ -74,13 +74,16 @@ g1/
   <n>/<treatment>/fields.csv   per-field values + count_fields.png
   <n>/count_summary.csv        per treatment: fields, mean, SD, SEM, % of LyoVec / Control
   <n>/count_prism.csv          Prism Column table (fields as rows)
-  <n>/count_stats.csv          ANOVA + Dunnett vs reference, or the next control if the reference
-                               is missing in that n (fields = technical replicates)
+  <n>/count_stats.csv          ANOVA + Dunnett vs each control group present (Control, then LyoVec ->
+                               count_vs_LyoVec.png) (fields = technical replicates)
   <n>/count.png/.pdf
   all_n/count_summary.csv      per-n means, mean of n, SD, SEM, % of controls
   all_n/count_prism.csv        Prism Column table: rows = n, columns = treatments
   all_n/count_prism_pct_of_LyoVec.csv   normalised within each n
-  all_n/count_stats.csv        RM one-way ANOVA + ratio paired t-tests vs reference (Holm)
+  all_n/count_stats.csv        RM one-way ANOVA + Dunnett vs each control (pooled error; stars) + ratio paired
+                               t-tests vs each control (Holm per control; conservative check)
+  <n>/count_twoway*, all_n/count_twoway*   two-way ANOVA (per n: treatment x well; all n: treatment x n; fields =
+                               replicates; Type II SS) + Tukey-Kramer all pairs matched within well / n
   all_n/*.png/.pdf             bar = mean of n, error = SEM, dot colour = n
   ... the same set for each intensity metric (intensity_<channel>_<region>)
 ```
@@ -115,19 +118,29 @@ g1/
 ```
 kerncount sampling "<project folder>"          (uses the latest generation; --generation g2 to choose)
 ```
-Uses the plate design in `settings.toml` `[design]`: 2 plates × 6 fields, images 1–6 = plate 1, 7–12 = plate 2.
+Uses the design in `settings.toml` `[design]`: one plate per n, each condition in 2 wells × 6 fields, images 1–6 = well 1,
+7–12 = well 2. Old key names (`plates`, `fields_per_plate`, `plate_layout`) are still read. Everything is computed once per
+reference group (`reference` + `normalise_to`), matching the across-n statistics, so an n missing one reference still
+counts against the others.
 Writes `sampling/<gN>/`:
 
 - `REPORT.txt` gives the plain-language summary.
-- `variance_components.csv` splits the variation into field-to-field (within a plate) and plate-to-plate (within an n).
-- `design_power.csv` gives, for every design from 1 plate × 1 field to 2 × 6 and for each treatment: the predicted noise of
+- `variance_components.csv` splits the variation into field-to-field (within a well) and well-to-well (within a plate = n).
+- `batch_by_condition.csv`: per n × treatment, the mean per well and log(well 2 / well 1) as a z-score against pooled field
+  noise, SE = sqrt(cv2_field · (1/k1 + 1/k2)); |z| > 2.5 is flagged.
+- `batch_by_n.csv`: per n, reference levels, missing references, geometric-mean well 2 / well 1, and the effect-size shift:
+  this n's log ratio minus the across-n mean, averaged over non-control treatments. It is flagged when the shift is > 1.5× either
+  way and at least 80% of treatments move in the same direction.
+- `design_power.csv` gives, for every design from 1 well × 1 field to 2 × 6 and for each reference and treatment: the predicted noise of
   the across-n test relative to now, the power at the current number of n's, and the n's needed for 80% power.
 - `subsampling.csv` comes from drawing real images many times for each design and re-running the across-n test. It records
   how often the result matches the conclusion from all 12 images, and how far each n's ratio moves.
 - `images_needed.png/.pdf` plots the same results.
 
 The key point: biological n-to-n variation is only reduced by more n's. Extra images help only while
-field and plate noise are still large compared with it. Plate-to-plate noise is only reduced by imaging more plates.
+field and well noise are still large compared with it. Well-to-well noise is only reduced by imaging more wells.
+Plate/day batch effects are confounded with n (one plate per n): multiplicative plate-wide ones cancel in the ratio,
+effect-size ones (e.g. transfection efficiency) remain in the n-to-n variance and are surfaced by the shift flag.
 
 ## Intensity (replaces the Mean-intensity macros)
 
@@ -148,9 +161,20 @@ For whole-cell mCherry segmentation instead of nuclei, set `segment` to the mChe
 
 ## Significance on plots
 Bars get stars only when their comparison has `p_adj` < 0.05 (no mark = not significant); the control is
-labelled "ref" and a footer names the test. Per-n plots: Dunnett vs reference. All-n plots: Holm-adjusted
-ratio paired t-test vs the plotted control, plus the RM ANOVA p in the footer. Implemented in
+labelled "ref" and a footer names the test. Default reference is Control; every group in `normalise_to`
+(Control, LyoVec) gets its own test family and plots. Per-n plots: Dunnett vs each control. All-n plots (Prism standard): RM
+one-way ANOVA (value ~ treatment + n on n means, least squares, so missing groups are allowed) then Dunnett vs the
+plotted control with the pooled residual error (`analysis.rm_anova_dunnett`; adjusted p from the multivariate t with
+the contrasts' correlation, checked against `scipy.stats.dunnett`). RM ANOVA p in the footer. Implemented in
 `analysis.significance_marks` / `analysis._bar_plot`; covered by `test_significance_marks_only_where_significant`.
+
+## Two-way ANOVA (`analysis.two_way`)
+`value ~ treatment + B + treatment:B`, fields as replicates, B = well (per n) or n (all n). Sums of squares are
+Type II by model comparison on dummy-coded least squares, so empty cells (a group missing in one n) only drop
+their interaction column; checked against statsmodels `anova_lm(typ=2)`. Without replication the additive model
+is used. Pairs: Tukey-Kramer on the mean of matched cell-mean differences (B levels containing both groups),
+SE from the model MSE, p from the studentized range with k treatments. One B level = one-way ANOVA + Tukey,
+matching `scipy.stats.tukey_hsd` (tested). Toggle with `[analysis] two_way_anova`.
 
 ## Tests
 `pip install -e .[test]` then `pytest`.

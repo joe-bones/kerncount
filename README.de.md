@@ -18,6 +18,7 @@ kerncount/                 (dieses Repository)
 ├── docs/technical.md      ← Algorithmen und Implementierungshinweise
 ├── src/kerncount/         ← der Code
 ├── tests/                 ← Unit-Tests (pytest)
+├── launcher/              ← Quellcode der Ein-Klick-Programme kerncount.exe / kerncount.app
 └── setup.bat / setup.command / kerncount.bat / kerncount-gui.*   ← Hilfsdateien für Installation und Start
 ```
 Ihre Bilder und Ergebnisse liegen in einem separaten **Arbeitsbereich** (Workspace), in dem Eingabe und Ausgabe getrennt sind:
@@ -63,13 +64,25 @@ data/<experiment>/                              z. B. data/my_experiment/
   zusätzliche Unterordnerebenen (Bilder werden in jeder Tiefe gefunden).
 - **Bildformat:** TIFF, 8 oder 16 Bit, Graustufen, RGB oder mehrkanalig, bei jeder Vergrößerung und von jeder Kamera.
   Die Kerngröße wird pro Ordner gemessen, und der Detektor skaliert entsprechend.
-- **Platten:** Standardmäßig gilt Bild 1–6 = Platte 1 und Bild 7–12 = Platte 2 (wird nur für die Sampling-Analyse
-  verwendet; änderbar in `settings.toml`).
+- **Wells:** Ein n = eine Platte. Jede Bedingung liegt in 2 Wells dieser Platte; standardmäßig gilt Bild 1–6 = Well 1
+  und Bild 7–12 = Well 2 (wird nur für die Sampling-Analyse verwendet; änderbar in `settings.toml`).
 
 ---
 
 ## 2. Installation (einmal pro Computer)
 
+### Am einfachsten: Ein-Klick-Programm (ohne Administratorrechte, ohne Python, ohne Befehle)
+Laden Sie aus dem [neuesten Release](https://github.com/joe-bones/kerncount/releases/latest) herunter:
+- **Windows:** `kerncount.exe`
+- **Mac (Apple Silicon):** `kerncount-mac.zip`. Ein Doppelklick entpackt es zu `kerncount.app`.
+
+Legen Sie es in Ihren Arbeitsbereich-Ordner (neben `data`) und doppelklicken Sie darauf. Der erste Start braucht
+Internet, einige Minuten und etwa 1 GB: Python 3.12 und alles, was kerncount benötigt, wird in Ihren Benutzerordner
+installiert. Danach öffnet jeder Start kerncount sofort im Browser. Beim ersten Mal warnt das System vor einer
+nicht signierten App: unter Windows **Weitere Informationen → Trotzdem ausführen**; am Mac **Fertig**, dann
+**Systemeinstellungen → Datenschutz & Sicherheit → Trotzdem öffnen**. Details: [launcher/README.md](launcher/README.md).
+
+### Alternativ: Installation aus diesem Repository (für die Kommandozeile)
 1. **Mac/Linux:** Installieren Sie **Python 3.12** von python.org (ab 3.11 funktioniert es; 3.12 wird für TensorFlow empfohlen).
    **Windows:** Keine Vorinstallation und keine Administratorrechte nötig: `setup.bat` holt Python 3.12 selbst
    (über [uv](https://docs.astral.sh/uv/)) in Ihren Benutzerordner (`%LOCALAPPDATA%\kc`).
@@ -90,13 +103,23 @@ Führen Sie jeden Befehl aus dem Arbeitsbereich-Ordner aus (dem Ordner, der `dat
 über ihren Ordnernamen in `data/` angesprochen.
 
 ### Ohne Befehle: die Weboberfläche
-Doppelklicken Sie auf **`kerncount-gui.bat`** (Windows) bzw. **`kerncount-gui.command`** (Mac). Im Browser öffnet
-sich eine Seite mit einer Zeile pro Experiment und Knöpfen für jeden der folgenden Schritte (**1 Set up**,
-**2 Run**, **Sampling**) sowie Knöpfen, die Layout, Einstellungen, Kontrollbilder, `counts.csv` und die
-Excel-Ergebnisse öffnen. Das Protokoll zeigt den Fortschritt live; **Stop** bricht einen Lauf ab. Lassen Sie das
-schwarze Fenster während der Arbeit offen und schließen Sie es zum Beenden. Die Seite funktioniert nur auf diesem
-Computer, und es wird nichts nach außen gesendet. Die Einstellungen unter *Options* entsprechen den
-Befehlsoptionen am Ende dieses Abschnitts. Dasselbe aus einem Terminal: `kerncount gui`.
+Doppelklicken Sie auf **`kerncount.exe`** / **`kerncount.app`** (Abschnitt 2) oder, bei einer Repository-Installation,
+auf **`kerncount-gui.bat`** (Windows) bzw. **`kerncount-gui.command`** (Mac). Dasselbe aus einem Terminal: `kerncount gui`.
+Alles Folgende geht im Browser, ohne Dateien zu bearbeiten:
+
+| Reiter | Was Sie dort tun |
+|---|---|
+| **Run** | Einrichten, Analyse starten (die Befehlsoptionen unten als Häkchen), Sampling; Live-Protokoll, **Stop** |
+| **Layout** | n- / Behandlungsnamen korrigieren, Ordner ein- oder ausschließen |
+| **Settings** | Alle Schalter aus Abschnitt 4 als Formular mit Erklärungen; oder `settings.toml` als Text bearbeiten |
+| **Review images** | Übersicht pro Behandlung, dann jedes Bild in voller Größe (← / → zum Blättern); Korrektur direkt eintragen |
+| **Corrections** | Eine Generation bearbeiten: korrigierte Zählungen oder **x** für eine Runde eintragen (`manual_1` → g2, …), Wert vorher und nachher sehen, dann die Generation **bauen** (etwa eine Minute; die Erkennung wird wiederverwendet) |
+| **Results** | Alle Plots, Tabellen und Statistiken pro Generation; `results.xlsx` herunterladen |
+| **Sampling** | Die Analyse „Wie viele Bilder?“ starten und lesen |
+| **All files** | Alles im Projektordner durchsuchen und ansehen |
+
+Lassen Sie das schwarze (Windows) bzw. Terminal-Fenster (Mac) während der Arbeit offen; schließen Sie es oder
+drücken Sie **Quit** zum Beenden. Die Seite funktioniert nur auf diesem Computer, und es wird nichts nach außen gesendet.
 
 ### Schritt 1: Projekt anlegen (einmal pro Experiment)
 ```
@@ -169,6 +192,7 @@ setzen Sie `segment` auf diesen Kanal und `[segmentation] backend = "classical"`
 | `kerncount run <experiment> --rebuild g2` | Einen bestehenden Generationsordner überschreiben (geschieht standardmäßig nie). `--rebuild all` für alle. |
 | `kerncount run <experiment> --resegment` | Cache ignorieren und jeden Kern neu erkennen |
 | `kerncount run <experiment> --no-review` | Kontrollbilder nicht erstellen (schneller) |
+| `kerncount regen <experiment> [--rebuild g2 g3]` | Generationen nur aus `counts.csv` neu bauen (schnell; nach Korrekturen) |
 | `kerncount sampling <experiment> --generation g2` | Sampling-Analyse für eine bestimmte Generation (Standard: die neueste) |
 
 Für Ordner außerhalb eines Arbeitsbereichs funktionieren auch Pfade: `kerncount init <Rohdatenordner> <Projektordner>`,
@@ -237,17 +261,20 @@ nicht automatisch „niedrig“ ist. Ein Bild mit 0 Kernen ist immer „niedrig�
 ### `[analysis]`: Statistik
 | Einstellung | Standard | Bedeutung |
 |---|---|---|
-| `reference` | `"LyoVec"` | Hauptvergleichsgruppe |
-| `normalise_to` | `["LyoVec", "Control"]` | Gruppen, auf die Ergebnisse in % normiert werden (innerhalb jedes n) und gegen die getestet wird |
+| `reference` | `"Control"` | Hauptvergleichsgruppe (Hauptdiagramme) |
+| `normalise_to` | `["Control", "LyoVec"]` | Gruppen, auf die Ergebnisse in % normiert werden (innerhalb jedes n) und gegen die getestet wird. Jede aufgeführte Gruppe erhält eigene Tests und Diagramme, Sie bekommen also immer *gegen Control* und *gegen LyoVec* |
+| `two_way_anova` | `true` | Zusätzliche zweifaktorielle ANOVA mit Tukey-Vergleichen aller Paare: pro n Behandlung × Well, alle n Behandlung × n (5.4.3) |
 | `treatment_order` | `["Control", "LyoVec", "CL075"]` | Reihenfolge in Tabellen und Diagrammen; weitere Behandlungen folgen alphabetisch |
 | `exclude_low_qc` | `false` | Bei `true` werden Bilder mit QC niedrig (und ohne manuellen Wert) aus der Statistik ausgeschlossen |
 
 ### `[design]`: verwendet von `kerncount sampling`
 | Einstellung | Standard | Bedeutung |
 |---|---|---|
-| `plates` | `2` | Aufgenommene Platten (Wells) pro Bedingung und n |
-| `fields_per_plate` | `6` | Bildfelder pro Platte |
-| `plate_layout` | `"consecutive"` | `consecutive` = Bilder 1–6 Platte 1, 7–12 Platte 2; `alternating` = ungerade/gerade |
+| `wells` | `2` | Aufgenommene Wells pro Bedingung und n (eine Platte pro n) |
+| `fields_per_well` | `6` | Bildfelder pro Well |
+| `well_layout` | `"consecutive"` | `consecutive` = Bilder 1–6 Well 1, 7–12 Well 2; `alternating` = ungerade/gerade |
+
+Ältere Einstellungsdateien mit `plates` / `fields_per_plate` / `plate_layout` funktionieren weiterhin; der Bericht weist auf die Umbenennung hin.
 
 ### `[review]`
 | Einstellung | Standard | Bedeutung |
@@ -327,15 +354,20 @@ g1/
 │   ├── <treatment>/count_fields.png  Balken pro Feld (x = ausgeschlossen)
 │   ├── count_summary.csv             pro Behandlung: Felder, Mittelwert, SD, SEM, Median, % von LyoVec, % von Control
 │   ├── count_prism.csv               Prism-Column-Tabelle: Spalten = Behandlungen, Zeilen = Felder
-│   ├── count_stats.csv               einfaktorielle ANOVA + Dunnett gegen die Referenz
-│   └── count.png / .pdf              Balken = Mittelwert, Fehlerbalken = SD, Punkte = Felder, Sterne = Dunnett (5.4.2)
+│   ├── count_stats.csv               einfaktorielle ANOVA + Dunnett gegen jede Kontrolle (Control, LyoVec)
+│   ├── count.png / .pdf              Balken = Mittelwert, Fehlerbalken = SD, Punkte = Felder, Sterne = Dunnett gegen Control (5.4.2)
+│   ├── count_vs_LyoVec.png / .pdf    dasselbe, Sterne = Dunnett gegen LyoVec (nur wenn dieses n LyoVec enthält)
+│   └── count_twoway.png / .pdf       zweifaktorielle ANOVA Behandlung × Well + Tukey alle Paare (5.4.3)
+│       (+ count_twoway_anova.csv, count_twoway_pairs.csv)
 └── all_n/                            alle Versuche zusammen
     ├── count_summary.csv             pro Behandlung: Wert pro n, N, Mittelwert, SD, SEM, % der Kontrollen
     ├── count_prism.csv               Prism-Column-Tabelle: Spalten = Behandlungen, Zeilen = n
     ├── count_prism_pct_of_LyoVec.csv dasselbe, innerhalb jedes n auf LyoVec normiert (auch _Control)
-    ├── count_stats.csv               RM-einfaktorielle ANOVA + gepaarte Ratio-t-Tests gegen jede Kontrolle
+    ├── count_stats.csv               RM-einfaktorielle ANOVA + Dunnett gegen jede Kontrolle (Sterne); gepaarte Ratio-t-Tests (Kontrolle)
     ├── count.png / .pdf              Balken = Mittelwert der n, Fehlerbalken = SEM, Punktfarbe = n (Legende), Sterne (5.4.2)
     ├── count_pct_of_LyoVec.png/.pdf  normierte Version (gestrichelte Linie = 100 %); auch _Control
+    ├── count_twoway.png / .pdf       zweifaktorielle ANOVA Behandlung × n + Tukey alle Paare (5.4.3)
+    │   (+ count_twoway_anova.csv, count_twoway_pairs.csv)
     └── n_colours.csv
 ```
 Derselbe Satz an Dateien existiert für jede Intensitätsmessgröße (`intensity_<channel>_<region>_*`).
@@ -345,7 +377,8 @@ In den All-n-Dateien steht die n-Bezeichnung als Zeilentitel in der ersten Spalt
 
 **Tabellenblätter in `results.xlsx`:** *About* (was diese Generation ist) · *Counts used* · *Count - all n* ·
 *Count - stats all n* · *Count - per n* · *Count - stats per n* · und, falls die Intensitätsmessung aktiv ist,
-*Intensity - all n* · *Intensity - stats all n* · *Intensity - per n*.
+*Intensity - all n* · *Intensity - stats all n* · *Intensity - per n* · und die zweifaktoriellen Ergebnisse:
+*Two-way anova - all n* · *Two-way pairs - all n* · *Two-way anova - per n* · *Two-way pairs - per n*.
 
 #### 5.4.1 Spalten von `*_stats.csv`
 | Spalte | Bedeutung |
@@ -353,7 +386,7 @@ In den All-n-Dateien steht die n-Bezeichnung als Zeilentitel in der ersten Spalt
 | `test` | Welcher Test, und gegen welche Kontrolle verglichen wird |
 | `comparison` | `<treatment> vs <control>`, oder `all` für eine Gesamt-ANOVA |
 | `N` | (alle n) Anzahl der n, die beide Gruppen enthalten |
-| `ratio`, `ci_low`, `ci_high` | (alle n) geometrisch gemittelte x-fache Veränderung gegenüber der Kontrolle und ihr 95-%-KI |
+| `effect_type`, `effect`, `ci_low`, `ci_high` | (alle n) Dunnett: Mittelwertdifferenz zur Kontrolle mit 95-%-KI (Dunnett-adjustiert); Ratio-t-Test: geometrisch gemittelte x-fache Veränderung mit 95-%-KI |
 | `statistic` | t-, F- oder Dunnett-Statistik |
 | `p` / `p_adj` | roher / für multiples Testen adjustierter p-Wert (Dunnett ist per Konstruktion adjustiert; t-Tests nach Holm) |
 | `significance` | Sterne aus `p_adj`: ns, \*, \*\*, \*\*\*, \*\*\*\* (< 0,05 / 0,01 / 0,001 / 0,0001) |
@@ -361,21 +394,30 @@ In den All-n-Dateien steht die n-Bezeichnung als Zeilentitel in der ersten Spalt
 #### 5.4.2 Wie Signifikanz in den Diagrammen dargestellt wird
 - **Sterne** (\* bis \*\*\*\*) über einem Balken erscheinen nur, wenn der Vergleich dieser Behandlung signifikant ist
   (`p_adj` < 0,05). **Keine Markierung = nicht signifikant.** Die verwendete Kontrolle ist über ihrem Balken mit **„ref“** beschriftet.
-- **Diagramme pro n** verwenden Dunnett gegen die Referenz. Fehlt die Referenz in diesem n, wird die nächste Kontrollgruppe
-  (aus `normalise_to`) verwendet, und die Fußzeile nennt sie. Diese Sterne beschreiben nur einen einzigen Versuch.
-- **All-n-Diagramme** verwenden den gepaarten Ratio-t-Test (Holm-adjustiert) gegen die gezeigte Kontrolle: Das Rohdiagramm verwendet
-  `reference`; jedes `pct_of_<X>`-Diagramm verwendet X. Die Fußzeile nennt außerdem den p-Wert der Gesamt-RM-ANOVA.
+- **Diagramme pro n** verwenden Dunnett gegen die Kontrolle: `count.png` gegen `reference` (Control), `count_vs_<X>.png`
+  gegen jede weitere Kontrolle (LyoVec). Fehlt die Referenz in diesem n, verwendet `count.png` die nächste Kontrollgruppe,
+  und die Fußzeile nennt sie. Diese Sterne beschreiben nur einen einzigen Versuch.
+- **All-n-Diagramme** verwenden den Prism-Standard: RM-einfaktorielle ANOVA (n = gepaartes Replikat), danach Dunnett
+  gegen die gezeigte Kontrolle mit dem gepoolten Fehler aller Behandlungen: Das Rohdiagramm verwendet
+  `reference` (Control); jedes `pct_of_<X>`-Diagramm verwendet X, `pct_of_LyoVec` zeigt also die Sterne gegen LyoVec. Die Fußzeile nennt außerdem den p-Wert der Gesamt-RM-ANOVA.
   Eine signifikante ANOVA ohne Sterne an den Balken bedeutet, dass sich die Behandlungen als Gruppe unterscheiden, aber bei dieser
   Anzahl von n noch kein einzelner Vergleich signifikant ist.
 - Die Fußzeile jedes Diagramms nennt den Test, sodass eine Abbildung auch ohne die Tabellen lesbar ist.
 
 **So liest man die Statistik:**
 - **Innerhalb eines n** (`<n>/count_stats.csv`): Die Felder sind *technische* Replikate, daher beschreiben diese p-Werte
-  nur diesen einen Versuch. Berichten Sie sie nicht als Ergebnis. Dunnett vergleicht gegen `reference`, oder gegen
-  die nächste Kontrollgruppe, falls die Referenz in diesem n fehlt.
+  nur diesen einen Versuch. Berichten Sie sie nicht als Ergebnis. Dunnett wird gegen jede in diesem n
+  vorhandene Kontrollgruppe (Control und LyoVec) gerechnet, jeweils als eigene Familie.
 - **Alle n** (`all_n/count_stats.csv`): Jedes n ist ein biologisches Replikat (der Mittelwert seiner Felder).
-  - *RM-einfaktorielle ANOVA* (über die n, die jede Behandlung enthalten): Gibt es überhaupt einen Unterschied?
-  - *Gepaarter Ratio-t-Test gegen LyoVec / gegen Control*: Für jede Behandlung das Verhältnis zur Kontrolle innerhalb
+  - *RM-einfaktorielle ANOVA*: Gibt es überhaupt einen Unterschied? Jedes n ist ein gepaartes Replikat. Die Anpassung
+    erfolgt nach kleinsten Quadraten, sodass ein n, dem eine Gruppe fehlt (kein LyoVec in n2), für alle anderen Gruppen zählt.
+    Ohne fehlende Werte entspricht das genau Prisms RM-einfaktorieller ANOVA; mit fehlenden Werten würde Prism sein
+    Mixed-Effects-Modell verwenden, das sehr ähnliche Ergebnisse liefert.
+  - *Dunnett gegen Control / gegen LyoVec* (**bestimmt die Sterne**): jede Behandlung gegen die Kontrolle, mit dem gepoolten
+    Restfehler der ANOVA, adjustiert für die Anzahl der Vergleiche. `effect` = Mittelwertdifferenz mit 95-%-KI. Das Poolen
+    ergibt viel mehr Freiheitsgrade als ein einzelner gepaarter Test (z. B. 20 statt 3 bei 4 n), sodass echte Effekte schon
+    mit wenigen n signifikant werden. Annahme: Die Streuung zwischen den n ist für alle Behandlungen ähnlich.
+  - *Gepaarter Ratio-t-Test gegen LyoVec / gegen Control* (**Kontrolle**, keine Sterne): Für jede Behandlung das Verhältnis zur Kontrolle innerhalb
     jedes n, getestet über die n hinweg. `ratio` = geometrisch gemittelte x-fache Veränderung (0,30 = 70 % weniger Zellen), mit einem
     95-%-KI. `p_adj` ist innerhalb jeder Kontrollfamilie nach Holm korrigiert. Sterne: ns, \*, \*\*, \*\*\*, \*\*\*\*
     (0,05 / 0,01 / 0,001 / 0,0001).
@@ -385,20 +427,44 @@ In den All-n-Dateien steht die n-Bezeichnung als Zeilentitel in der ersten Spalt
   tagesabhängige Unterschiede bei Aussaat, Färbung und Lampenhelligkeit herausrechnen.
 - **Intensitätswerte** sind nur vergleichbar, wenn Belichtung und Verstärkung (Gain) innerhalb jedes n fest eingestellt waren (Auto-Belichtung aus).
 
+#### 5.4.3 Zweifaktorielle ANOVA mit Vergleich aller Paare (`*_twoway*`)
+Eine zusätzliche Auswertung auf beiden Ebenen, wie die zweifaktorielle ANOVA in Prism mit „compare all pairs“:
+- **Pro n:** Behandlung × Well (Wells aus `[design]`); die Felder sind die Replikate.
+- **Alle n:** Behandlung × n; die Felder sind die Replikate.
+
+Das Modell ist `Wert ~ Behandlung + zweiter Faktor + Wechselwirkung` mit Typ-II-Quadratsummen, sodass eine Gruppe, die in
+einem n fehlt (z. B. kein LyoVec in n2), korrekt behandelt wird. `*_twoway_anova.csv` enthält F, df, p und den Anteil an der
+Gesamtvariation für Behandlung, zweiten Faktor und Wechselwirkung. `*_twoway_pairs.csv` vergleicht jedes Paar von Behandlungen
+(Tukey–Kramer, `p_adj`) über die Zellmittelwerte innerhalb jedes Wells / n, nur über die Wells / n, die beide Gruppen enthalten
+(`matched_levels`), mit Mittelwertdifferenz und 95-%-KI. Das Diagramm zeigt gruppierte Balken (Mittelwert ± SEM der Felder pro
+Well / n) neben einer Matrix der adjustierten p-Werte.
+
+**Vorsicht auf der Ebene aller n:** Weil die Felder als Replikate zählen, sind diese p-Werte optimistischer als die gepaarten
+RM-ANOVA + Dunnett, die einen Wert pro n verwendet. Berichten Sie RM-ANOVA + Dunnett als Ergebnis; die zweifaktorielle Auswertung zeigt,
+ob sich Behandlungen untereinander unterscheiden und ob der Effekt vom n abhängt (Wechselwirkung).
+
 ### 5.5 Wie viele Bilder werden benötigt? `sampling/g1/`
 | Datei | Inhalt |
 |---|---|
 | `REPORT.txt` | Zusammenfassung in Klartext: hier beginnen |
 | `images_needed.png/.pdf` | Vorhergesagtes Rauschen, Übereinstimmung beim Subsampling und Fehler pro n in Abhängigkeit von der Bildzahl pro Bedingung |
-| `variance_components.csv` | Variation von Feld zu Feld (innerhalb einer Platte) und von Platte zu Platte (innerhalb eines n), als CV² |
-| `effects.csv` | Beobachtete x-fache Veränderungen und biologische Varianz (von n zu n) pro Behandlung |
-| `design_power.csv` | Für jedes Design (1–2 Platten × 1–6 Felder), pro Behandlung: Rauschen im Vergleich zu jetzt, Power bei Ihrer aktuellen Anzahl von n, und die für 80 % Power nötige Anzahl von n |
+| `batch_by_n.csv` | Pro n: Werte der Referenzgruppen, fehlende Referenzen, systematischer Unterschied zwischen Wells und ob die Behandlungseffekte in diesem n stärker/schwächer sind als in den anderen |
+| `batch_by_condition.csv` | Pro n × Behandlung: Mittelwert pro Well, Verhältnis Well zu Well mit Markierung, wenn es über das Feldrauschen hinausgeht, Verhältnis zu jeder Referenz |
+| `variance_components.csv` | Variation von Feld zu Feld (innerhalb eines Wells) und von Well zu Well (innerhalb einer Platte), als CV² |
+| `effects.csv` | Pro Referenz und Behandlung: beobachtete x-fache Veränderung, p mit allen Bildern, biologische Varianz (von n zu n) |
+| `design_power.csv` | Für jedes Design (1–2 Wells × 1–6 Felder), pro Referenz und Behandlung: Rauschen im Vergleich zu jetzt, Power bei Ihrer aktuellen Anzahl von n, und die für 80 % Power nötige Anzahl von n |
 | `subsampling.csv` | Echte Bilder, pro Design vielfach neu gezogen: wie oft das Ergebnis mit der Schlussfolgerung aus allen Bildern übereinstimmt, und wie stark sich das Verhältnis jedes n verschiebt |
 
 **So liest man es:** Der Test über die n wird durch zwei Dinge begrenzt. Das erste ist das *Messrauschen*
-(durch Felder und Platten), das mit mehr Bildern kleiner wird. Das zweite ist die *biologische Variation von n zu n*,
+(durch Felder und Wells), das mit mehr Bildern kleiner wird. Das zweite ist die *biologische Variation von n zu n*,
 die nur mit mehr n kleiner wird. Mehr Bilder helfen nur, solange das Messrauschen noch in einer ähnlichen Größenordnung wie die
-biologische Variation liegt. Das Rauschen von Platte zu Platte wird nur mit mehr Platten kleiner.
+biologische Variation liegt. Das Rauschen von Well zu Well wird nur mit mehr Wells kleiner.
+
+**Batch-Effekte:** Jedes n ist eine Platte an einem Tag; Platten- und Tageseffekte sind daher Teil der Variation von n zu n
+und lassen sich nicht davon trennen. Effekte, die eine ganze Platte skalieren (Aussaat, Färbung, Lampe), heben sich im
+Verhältnis zur Referenz auf. Effekte, die die Stärke der Reaktion ändern (z. B. Transfektionseffizienz), heben sich nicht auf;
+der Bericht markiert ein n, dessen Behandlungseffekte durchgehend stärker oder schwächer sind. Eine Markierung ist ein Anlass,
+die Labornotizen dieses Tages zu prüfen, kein Grund, das n auszuschließen.
 
 **Typisches Muster:** Wenn Zellen verklumpen, ist die Variation von Feld zu Feld groß. Eine Aufnahme mit geringerer
 Vergrößerung (10x deckt etwa die 16-fache Fläche von 40x ab) verringert das Messrauschen dann weit stärker als
