@@ -8,7 +8,8 @@ Every analysed column becomes a `Metric` with a `kind` that decides the statisti
 
 Recognised columns:
     count                 nuclei per field (always first)
-    intensity_*           mean intensity per cell (positive)
+    intensity_*           intensity readouts (positive); per-channel ones (e.g. intensity_Ki67_field_raw) get
+                          label / unit from `kerncount.classify.READOUTS.get(column)` (channel_metric_info)
     nuclei_per_mm2        density (positive; only present when the pixel size is known)
     readout_*             per-image readouts; label / kind / unit come from `kerncount.classify.READOUTS` when it
                           exists, otherwise the kind is inferred from the name (readout_frac_* = fraction, else positive)
@@ -35,6 +36,10 @@ class Metric:
     # "count" (N = c, e.g. % Ki-67-positive of counted nuclei) or "count_plus_fraction" (N = c / (1 - f), when the
     # fraction's own nuclei are not counted, e.g. out of focus / (counted + out of focus))
     denominator: str = "count"
+    # fractions only: a per-field column holding N directly (e.g. n_measured_Ki67 = nuclei measured for Ki-67:
+    # counted and not saturated). When set and present it replaces `denominator`: it is the binomial N of the
+    # logit model, the weight when pooling fields per well, and the "nuclei" reported. "" = use `denominator`.
+    n_column: str = ""
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -60,19 +65,24 @@ def describe_column(col: str) -> Metric | None:
     if col == "count":
         return COUNT
     if col.startswith("intensity_"):
-        return Metric(col, col, f"{_pretty(col[len('intensity_'):])} mean intensity", "intensity (a.u.)", "positive",
-                      "Mean fluorescence intensity per counted cell in one field (background subtracted if set).")
+        info = _readout_info().get(col) or {}
+        kind = str(info.get("kind", "positive")).strip().lower()
+        return Metric(col, col, str(info.get("label") or f"{_pretty(col[len('intensity_'):])} mean intensity"),
+                      str(info.get("unit") or "intensity (a.u.)"), kind if kind in KINDS else "positive",
+                      str(info.get("description") or "Mean fluorescence intensity per counted cell in one field "
+                          "(background subtracted if set)."))
     if col == "nuclei_per_mm2":
         return Metric(col, col, "Nuclei per mm²", "nuclei/mm²", "positive", "Counted nuclei per mm² of imaged area.")
     if col.startswith("readout_"):
-        info = _readout_info().get(col, {})
+        info = _readout_info().get(col) or {}
         kind = str(info.get("kind", "")).strip().lower()
         if kind not in KINDS:
             kind = "fraction" if col.startswith("readout_frac_") else "positive"
         unit = info.get("unit") or ("fraction" if kind == "fraction" else "")
         den = str(info.get("denominator") or ("count_plus_fraction" if col == "readout_frac_out_of_focus" else "count"))
         return Metric(col, col, str(info.get("label") or _pretty(col[len("readout_"):])), str(unit), kind,
-                      str(info.get("description", "")), den if den in DENOMINATORS else "count")
+                      str(info.get("description", "")), den if den in DENOMINATORS else "count",
+                      str(info.get("n_column") or "") if kind == "fraction" else "")
     return None
 
 
@@ -95,8 +105,14 @@ def normalise(metrics) -> dict[str, Metric]:
             out[k] = v
         else:
             m = describe_column(k) or Metric(k, k, str(v), "", "positive")
-            out[k] = Metric(m.id, m.column, str(v) if v else m.label, m.unit, m.kind, m.description, m.denominator)
+            out[k] = Metric(m.id, m.column, str(v) if v else m.label, m.unit, m.kind, m.description, m.denominator,
+                            m.n_column)
     return out
+
+
+def n_columns(reg) -> list[str]:
+    """The per-field N columns (Metric.n_column) a registry needs next to its metric columns."""
+    return list(dict.fromkeys(m.n_column for m in reg.values() if getattr(m, "n_column", "")))
 
 
 def estimand(metric: Metric, unit: str = "well", what: str = "effect") -> str:

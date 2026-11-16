@@ -233,10 +233,12 @@ def test_generation_counts_used_has_design_columns(tmp_path):
     out = generations.build(tmp_path, gen, tab[["n", "treatment", "image"]].assign(qc_level="high"), {}, _settings())
     used = pd.read_csv(out / "counts_used.csv", keep_default_na=False)
     assert list(used.columns) == ["n", "treatment", "image", "count", "source", "excluded", "qc_level",
-                                  "well", "position", "timepoint"]
+                                  "well", "position", "timepoint", "cell_line"] + \
+        [f"meta_{k}" for k in design.META_KEYS]
     assert used.loc[(used["n"] == "n2") & (used["image"] == 7), "well"].tolist() == [2, 2, 2]
     assert set(used.loc[used["n"] == "n2", "timepoint"]) == {"72h"}
-    assert list(pd.read_excel(out / "results.xlsx", sheet_name="Counts used").columns)[-3:] == ["well", "position", "timepoint"]
+    assert list(pd.read_excel(out / "results.xlsx", sheet_name="Counts used").columns)[7:11] == \
+        ["well", "position", "timepoint", "cell_line"]
 
 
 def test_settings_form_design_fields():
@@ -246,4 +248,4 @@ def test_settings_form_design_fields():
     assert settings_form.coerce({"design": dict(fields_per_well="9", wells="3")})["design"] == dict(fields_per_well=9, wells=3)
     with pytest.raises(ValueError):
         settings_form.coerce({"design": dict(field_positions="sometimes")})
-    assert set(settings_form.FIELDS["design"]) == set(st_mod.DEFAULTS["design"])
+    assert set(settings_form.FORM_ITEMS["design"]) == set(st_mod.DEFAULTS["design"])

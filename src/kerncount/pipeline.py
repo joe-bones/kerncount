@@ -199,6 +199,9 @@ def run(project_dir: Path, rebuild: list[str] | None = None, resegment: bool = F
                        diameter_px=round(info.get("diameter_used", np.nan), 1), stardist_scale=round(info.get("scale", 1), 3),
                        fiji_count=legacy_fiji.get((r.n, r.treatment, r.image)),
                        source_file="; ".join(str(p) for p in r.paths) if r.paths else str(r.path))
+            if r.paths:  # interleaved channel files: one field = one file per channel
+                for c, p in enumerate(r.paths):
+                    row[f"source_file_{_slug(prj.channel_name(c))}"] = str(p)
             row.update(_intensity(prj, cobjs, info))
             px = settings_mod.pixel_size_um(s) or info.get("pixel_size_um")
             h, w = tifffile.TiffFile(lab).pages[0].shape[:2]
@@ -272,9 +275,12 @@ def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebui
     # every registered metric column (intensity_*, nuclei_per_mm2, readout_*) flows through all statistics
     reg = metrics_mod.registry(table.columns, prj.settings)
     measured = {k: m for k, m in reg.items() if m.column != "count" and m.column in table}
-    img_cols = ["n", "treatment", "image", "qc_level", "cell_line"] + [m.column for m in measured.values()]
+    src_cols = [c for c in table.columns if c == "source_file" or str(c).startswith("source_file_")]
+    img_cols = (["n", "treatment", "image", "qc_level", "cell_line"] + [m.column for m in measured.values()]
+                + metrics_mod.n_columns(measured) + src_cols)
     img_table = table[[c for c in dict.fromkeys(img_cols) if c in table]]
     design_table = check_design(prj, df)
+    inputs = input_state(prj, img_table, design_table)
     # byte-identical raw images (e.g. a copied folder): duplicates.csv, a loud warning, acceptance criterion
     from . import duplicates as duplicates_mod
     try:
@@ -287,20 +293,108 @@ def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebui
         folder = root / g["name"]
         meta = folder / "generation.json"
         forced = "all" in rebuild or g["name"] in rebuild
+        g["inputs"] = inputs
         if folder.exists() and not forced:
             old = json.loads(meta.read_text()) if meta.exists() else {}
+            changed = describe_input_changes(old.get("inputs"), inputs)
+            cmd = f"kerncount run \"{prj.path}\" --rebuild {g['name']}"
             if old.get("fingerprint") != g["fingerprint"]:
                 log(f"  WARNING: {g['name']} already exists but counts.csv now gives different values for it "
-                    f"(automatic counts or {g['source']} changed). It was NOT overwritten. "
-                    f"To rebuild it: kerncount run \"{prj.path}\" --rebuild {g['name']}")
-            else:
+                    f"(automatic counts or {g['source']} changed). It was NOT overwritten."
+                    + (f" Also changed since it was built: {'; '.join(changed)}." if changed else "")
+                    + f" To rebuild it: {cmd}")
+                continue
+            if old.get("inputs") is None:
+                log(f"  note: {g['name']} was built by an older kerncount that did not record its intensity and "
+                    f"design inputs; it is left as it is. To refresh it with the current results: {cmd}")
+                continue
+            if not changed:
                 log(f"  {g['name']}: up to date")
-            continue
+                continue
+            # same counts, but intensity results (cut-off lock, positivity / flat-field settings) or the design /
+            # metadata changed: nothing manual lives in the generation, so it is rebuilt (docs/statistics.md)
+            log(f"  {g['name']}: counts unchanged, rebuilding because: {'; '.join(changed)}")
+            g["rebuilt_because"] = changed
         generations.build(prj.path, g, img_table, measured, prj.settings, design_table, duplicates=dups)
         log(f"  {g['name']}: built ({'automatic' if g['source'] == 'auto' else g['source']}, {g['changes']} manual cells)")
     extra = sorted(p.name for p in root.glob("g*") if p.is_dir() and p.name not in {g["name"] for g in gens})
     if extra:
         log(f"  note: {', '.join(extra)} exist but no longer have a matching manual column (left untouched)")
+
+
+INTENSITY_PREFIXES = ("intensity_", "readout_frac_positive_", "n_measured_")
+
+
+def _fp(df: pd.DataFrame) -> str:
+    import hashlib
+
+    return hashlib.sha1(df.to_csv(index=False).encode()).hexdigest()[:12] if len(df.columns) else ""
+
+
+def input_state(prj: Project, img_table: pd.DataFrame, design_table: pd.DataFrame) -> dict:
+    """What a generation was built from besides the counts (stored in generation.json "inputs"): fingerprints of
+    the per-image intensity columns and of the design / metadata, plus a readable summary (mean per column and n,
+    cut-off rule and value per n and channel, cell line per n) to say what changed."""
+    key = ["n", "treatment", "image"]
+    icols = sorted(c for c in img_table.columns if str(c).startswith(INTENSITY_PREFIXES))
+    it = img_table[key + icols].copy() if icols else pd.DataFrame()
+    if len(it):
+        it = it.sort_values(key).reset_index(drop=True)
+        for c in icols:
+            it[c] = pd.to_numeric(it[c], errors="coerce").round(6)
+    dcols = design.output_columns(design_table)
+    dt = design_table[key + dcols].astype({"image": int}).sort_values(key).reset_index(drop=True)
+    means = {c: {str(n): (None if pd.isna(v) else round(float(v), 4)) for n, v in it.groupby("n")[c].mean().items()}
+             for c in icols} if len(it) else {}
+    cut = []
+    cp = prj.path / "intensity" / "cutoffs.csv"
+    if icols and cp.exists():
+        try:
+            for r in pd.read_csv(cp).itertuples():
+                cut.append(dict(n=str(r.n), channel=str(r.channel), measure=str(r.measure), rule=str(r.rule),
+                                value=round(float(r.value), 3)))
+        except Exception:  # noqa: BLE001 - a summary only
+            cut = []
+    lines = {str(n): sorted(set(g["cell_line"].astype(str)) - {""}) for n, g in dt.groupby("n")} \
+        if "cell_line" in dt else {}
+    return dict(intensity_fingerprint=_fp(it) if icols else "", design_fingerprint=_fp(dt),
+                intensity_means=means, cutoffs=cut, cell_lines=lines)
+
+
+def describe_input_changes(old: dict | None, new: dict) -> list[str]:
+    """Plain-language list of what differs between two input_state() results ([] = nothing)."""
+    if old is None:
+        return []
+    out = []
+    if old.get("intensity_fingerprint", "") != new.get("intensity_fingerprint", ""):
+        oc = {(c["n"], c["channel"], c["measure"]): c for c in old.get("cutoffs", [])}
+        for c in new.get("cutoffs", []):
+            o = oc.get((c["n"], c["channel"], c["measure"]))
+            if o is None or (o["rule"], o["value"]) != (c["rule"], c["value"]):
+                was = f"{o['rule']} {o['value']:g}" if o else "none"
+                out.append(f"{c['channel']} cut-off ({c['measure']}) in {c['n']}: {was} -> {c['rule']} {c['value']:g}")
+        om, nm = old.get("intensity_means", {}), new.get("intensity_means", {})
+        added = sorted(set(nm) - set(om))
+        gone = sorted(set(om) - set(nm))
+        if added:
+            out.append(f"new intensity columns: {', '.join(added)}")
+        if gone:
+            out.append(f"intensity columns no longer present: {', '.join(gone)}")
+        moved = [c for c in sorted(set(nm) & set(om)) if nm[c] != om[c]]
+        for c in moved[:6]:
+            diffs = [f"{n} {om[c].get(n)} -> {v}" for n, v in nm[c].items() if om[c].get(n) != v]
+            out.append(f"{c} (mean per n: {', '.join(diffs[:3])}{' ...' if len(diffs) > 3 else ''})")
+        if len(moved) > 6:
+            out.append(f"... and {len(moved) - 6} more intensity columns")
+        if not out:
+            out.append("per-image intensity values changed (flat-field / positivity / measurement settings)")
+    if old.get("design_fingerprint", "") != new.get("design_fingerprint", ""):
+        ol, nl = old.get("cell_lines", {}), new.get("cell_lines", {})
+        ch = [f"{n}: {', '.join(ol.get(n, [])) or 'unknown'} -> {', '.join(v) or 'unknown'}" for n, v in nl.items()
+              if ol.get(n, []) != v]
+        out.append("plate design / experiment metadata changed" + (f" (cell line {'; '.join(ch)})" if ch else
+                                                                  " (wells, positions, timepoints or meta_* columns)"))
+    return out
 
 
 def check_design(prj: Project, df: pd.DataFrame) -> pd.DataFrame:

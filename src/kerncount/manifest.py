@@ -19,7 +19,8 @@ STATS_LONG_COLUMNS = ["level", "n", "metric", "family", "test", "comparison", "e
                       "ci_high", "p", "p_adj", "significance", "N", "model", "note", "estimand", "cell_line"]
 ESTIMATE_TYPES = ("ratio", "odds_ratio", "difference", "pp_difference", "mean")
 LEVELS = ("treatment", "n", "all_n", "generation")
-KINDS = ("absolute", "relative", "model", "contrast", "robustness", "diagnostic", "design", "acceptance", "data")
+KINDS = ("absolute", "relative", "model", "contrast", "robustness", "diagnostic", "design", "acceptance", "data",
+         "layers")
 
 
 # ---------------------------------------------------------------- describing files by name
@@ -152,6 +153,28 @@ def describe(rel: str, metrics: dict, n_by_slug: dict, tr_by_slug: dict, line_by
         elif name == "count_fields.png":
             entry.update(kind="absolute", metric="count", title=f"Nuclei per image: {entry['treatment']} in {entry['n']}",
                          description="Nuclei counted in each image of this treatment; bar colour = well, label = image and field position.")
+        return entry
+    lm = re.fullmatch(r"layers_(?P<ch>.+?)_(?P<what>vs_(?P<ref>.+)|effects|absolute|concordance)", stem)
+    if lm:  # readout ladder (layers.py)
+        ch, what, ref = lm.group("ch"), lm.group("what"), lm.group("ref")
+        lvl = "across all n" if entry["level"] == "all_n" else "within this experiment (descriptive)"
+        if ref:
+            t, d = (f"{ch} layer comparison vs {ref}",
+                    f"Effect vs {ref} at every analysis layer (raw field, corrected field, raw nucleus, corrected "
+                    f"nucleus, % positive, extras), {lvl}: does the conclusion depend on the analysis step?")
+        elif what == "effects":
+            t, d = (f"{ch} layer effects (table)", f"Effect of every treatment vs every reference at every layer, {lvl}.")
+        elif what == "concordance":
+            t, d = (f"{ch} layer concordance", "Per treatment and reference: the call at every layer, whether they "
+                                               "agree, and which analysis step changes the conclusion.")
+        else:
+            t, d = (f"{ch} absolute values at every layer", f"Value of every treatment at every analysis layer, {lvl}.")
+        entry.update(kind="layers", metric=None, channel=ch, reference=ref, title=t, description=d)
+        if entry["level"] == "n":
+            entry["title"] = f"{short(entry['n'])}: {entry['title']}"
+        elif entry["level"] == "all_n":
+            entry["title"] = (f"All n ({entry['cell_line']}): {entry['title']}" if entry.get("cell_line")
+                              else f"All n: {entry['title']}")
         return entry
     if name == "n_colours.csv":
         entry.update(kind="data", title="Colour of each experiment", description="The dot colour used for each experiment in the all-n plots.")

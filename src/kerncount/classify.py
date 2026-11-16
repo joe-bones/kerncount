@@ -159,18 +159,40 @@ def channel_metric_info(col: str) -> dict | None:
             description=f"Share of measurable nuclei whose 90th-percentile {c} signal (minus local background, "
                         "flat-field corrected) exceeds the cut-off: picks up dotted / nucleolar staining that the mean "
                         "dilutes. Same cut-off rule as the primary readout (see intensity/cutoffs.csv).",
-            min_nuclei=5)),
+            min_nuclei=5, n_column=f"n_measured_{c}")),
         (r"readout_frac_positive_(.+)", lambda c: dict(
             label=f"% {c}-positive nuclei", kind="fraction", unit="fraction",
             description=f"Share of measurable nuclei (counted, not saturated) whose mean {c} signal minus the local "
                         "background, divided by the flat field, exceeds the positivity cut-off. Its rule (negative "
                         "control, locked manual value or limit of detection) is in intensity/cutoffs.csv; without "
                         "negative-control wells 'positive' means detectably stained above background.",
-            min_nuclei=5)),
+            min_nuclei=5, n_column=f"n_measured_{c}")),
         (r"intensity_(.+)_nucleus_mean_bgsub", lambda c: dict(
             label=f"{c} per nucleus (median, background-subtracted)", kind="positive", unit="intensity (a.u., corrected)",
             description=f"Median over the image's measurable nuclei of the mean {c} inside the shrunk nucleus outline "
-                        "minus the local background, divided by the flat field.")),
+                        "minus the local background, divided by the flat field. Ladder layer 4.")),
+        # the readout ladder (docs/intensity.md "Readout ladder"): each layer removes one analysis choice
+        (r"intensity_(.+)_field_raw", lambda c: dict(
+            label=f"{c} field MFI, raw", kind="positive", unit="intensity (a.u., raw)",
+            description=f"Mean {c} of the whole field as acquired: no flat-field correction, no background "
+                        "subtraction, no segmentation (saturated pixels left out). Ladder layer 1.")),
+        (r"intensity_(.+)_field_corrected", lambda c: dict(
+            label=f"{c} field MFI, corrected", kind="positive", unit="intensity (a.u., corrected)",
+            description=f"Mean {c} of the whole field after subtracting the field's background (histogram mode, "
+                        "no DAPI) and dividing by the flat field; no segmentation. Ladder layer 2.")),
+        (r"intensity_(.+)_nucleus_mean_raw", lambda c: dict(
+            label=f"{c} per nucleus, raw (median; Fiji-like)", kind="positive", unit="intensity (a.u., raw)",
+            description=f"Median over the image's measurable nuclei of the mean raw {c} over the whole DAPI nucleus "
+                        "outline: no background subtraction, no flat field (comparable with a Fiji ROI mean). "
+                        "Ladder layer 3.")),
+        (r"intensity_(.+)_stained_area_mean", lambda c: dict(
+            label=f"{c} MFI in the {c}-stained area", kind="positive", unit="intensity (a.u., corrected)",
+            description=f"Mean corrected {c} over the pixels above an automatic threshold on the {c} image itself "
+                        "(background mode + 3 noise SD of the smoothed corrected image; no DAPI).")),
+        (r"intensity_(.+)_field_total", lambda c: dict(
+            label=f"{c} total signal per field", kind="positive", unit="integrated intensity (a.u. x px, corrected)",
+            description=f"Integrated corrected {c} over the {c}-stained area of the field (mean in the stained area "
+                        "x its pixels): total stain per field, grows with cell number.")),
         (r"intensity_(.+)_positive_mean_bgsub", lambda c: dict(
             label=f"{c} in positive nuclei (mean)", kind="positive", unit="intensity (a.u., corrected)",
             description=f"Mean background-subtracted, flat-field-corrected {c} of the positive nuclei only: how "

@@ -273,7 +273,11 @@ def transform(values: pd.Series, kind: str, counts: pd.Series | None = None) -> 
 
 
 def nuclei(fields: pd.DataFrame, metric: Metric) -> pd.Series | None:
-    """Nuclei N each field's fraction is taken of (None when the count is not available)."""
+    """Nuclei N each field's fraction is taken of (None when not available): the metric's own N column
+    (Metric.n_column, e.g. n_measured_Ki67) when set and present, else from the count (Metric.denominator)."""
+    ncol = getattr(metric, "n_column", "")
+    if ncol and ncol in fields:
+        return pd.to_numeric(fields[ncol], errors="coerce").astype(float)
     if "count" not in fields:
         return None
     c = pd.to_numeric(fields["count"], errors="coerce").astype(float)
@@ -356,7 +360,8 @@ def aggregate_wells(d: pd.DataFrame, metric: Metric, positions_ok: bool, covaria
             w = g.agg(K=("_K", "sum"), nuclei=("_N", "sum"), fields=("value", "size")).reset_index()
             w["value"] = (w["K"] / w["nuclei"]).where(w["nuclei"] > 0)
             notes.append("fraction pooled per well: sum of positives / sum of nuclei over its fields "
-                         + ("(nuclei = counted + the fraction's own nuclei)" if metric.denominator == "count_plus_fraction"
+                         + (f"(nuclei = {metric.n_column})" if metric.n_column and metric.n_column in d
+                            else "(nuclei = counted + the fraction's own nuclei)" if metric.denominator == "count_plus_fraction"
                             else "(nuclei = counted nuclei)") + "; fields are not position-adjusted for fractions")
         else:
             w = d.groupby(keys)["value"].agg(value="mean", fields="size").reset_index()

@@ -105,6 +105,7 @@ def test_auto_classes_one_per_treatment_controls_pooled():
 
 
 @pytest.mark.parametrize("scenario", ["misspecified", "uneven_fields"])
+@pytest.mark.slow
 def test_type_one_error_default_including_misspecification(scenario):
     """Quick null simulation under the default (well unit, classes = auto). misspecified: one miRNA varies much
     more between n's than the others (pooled classes gave 0.16 for it). uneven_fields: miRNA fields are far more
@@ -216,6 +217,7 @@ def _shape(out):
     return files
 
 
+@pytest.mark.slow
 def test_one_n_keeps_all_n_files_columns_and_has_no_stars(tmp_path):
     rng = np.random.default_rng(1)
     many, _ = _build(tmp_path / "a", _gen_table(rng))
@@ -245,6 +247,7 @@ def test_one_n_keeps_all_n_files_columns_and_has_no_stars(tmp_path):
     assert pn["tech_ci_low"].notna().all() and (pn["interval"] == models.TECH).all()
 
 
+@pytest.mark.slow
 def test_comparison_present_in_one_n_only_gets_no_stars(tmp_path):
     rng = np.random.default_rng(2)
     tab = _gen_table(rng)
@@ -258,6 +261,7 @@ def test_comparison_present_in_one_n_only_gets_no_stars(tmp_path):
 
 # ---------------------------------------------------------------- 5. cell lines, 6. negative control
 
+@pytest.mark.slow
 def test_cell_lines_are_never_pooled(tmp_path):
     rng = np.random.default_rng(3)
     tab = pd.concat([_gen_table(rng, ns=("n1", "n2")), _gen_table(rng, ns=("n3", "n4"))])
@@ -281,6 +285,7 @@ def test_cell_lines_are_never_pooled(tmp_path):
     assert "cell_line" in used
 
 
+@pytest.mark.slow
 def test_negative_control_is_excluded_everywhere(tmp_path):
     rng = np.random.default_rng(4)
     tab = _gen_table(rng, extra=(("2nd only", 5),))
@@ -335,6 +340,7 @@ def test_density_adjustment_and_overlap_flag():
     assert off.density is None
 
 
+@pytest.mark.slow
 def test_density_outputs_in_generation(tmp_path):
     rng = np.random.default_rng(7)
     out, _ = _build(tmp_path, _gen_table(rng))

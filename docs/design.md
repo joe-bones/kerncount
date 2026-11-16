@@ -90,8 +90,14 @@ work: the timepoint is then read from the `n_folder` names on the fly.
 
 - `design_check.csv` in the project folder (written by `run` and `regen`): one row per n × treatment
   (columns below). Check it whenever the summary line reports something unusual.
-- `generations/gN/counts_used.csv` and the "Counts used" sheet of `results.xlsx` have the columns
-  `well`, `position`, `timepoint` after the existing ones.
+- `generations/gN/counts_used.csv` and the "Counts used" sheet of `results.xlsx` have the columns, in this
+  order: `n`, `treatment`, `image`, `count`, `source`, `excluded`, `qc_level`, `well`, `position`, `timepoint`,
+  `cell_line`, `meta_magnification`, `meta_camera_pixel_um`, `meta_seeding_density`, `meta_seeding_unit`,
+  `meta_stain`, `meta_negative_control`, `meta_negative_control_type` (from `design.output_columns`; metadata are
+  strings, `""` = not set), then the field's source files: `source_file` (all files of the field, `; `-separated)
+  and, for interleaved channel files, `source_file_<channel>`. Per-treatment `fields.csv` also lists the source files.
+- A change of the design or the metadata (e.g. a new `cell_line`) rebuilds existing generations whose counts are
+  unchanged (see docs/statistics.md, "When a generation is rebuilt").
 - `run` / `regen` log one line, e.g.
 
       Design: 4 n, 8 conditions, 2 wells x 6 fields (auto), timepoint 72h (some n unknown);

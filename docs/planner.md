@@ -57,8 +57,12 @@ cannot be separated; all of it is counted as well.
 ### Across n's: biological variance, pooled within classes
 
 For reference `r` and a **class** of treatments, `d_nt = log(mean_t / mean_r)` per n. Classes come
-from `[analysis] classes` if it exists (class → names or glob patterns, e.g.
-`mirna = ["miR-*"]`), else references (`reference` + `normalise_to`) vs everything else.
+from `[analysis] classes`, with the same rule as the statistics (`models.config`): the default `"auto"` = one
+class per non-control treatment, references (`reference` + `normalise_to`) pooled as `controls`; a table
+(class → names or glob patterns, e.g. `mirna = ["miR-*"]`) = those classes; `{}` = references vs everything
+else (`treatments`). With `"auto"`, generic planning effects (`planning 0.7`, the cost analysis) use the
+`default_class` = the treatment whose biological variance vs the main reference is the (upper) median, noted in
+`notes`.
 
 `d_nt = δ_t + u_n + ε_nt`: `u_n` is shared by all treatments of one n (the reference's own noise and
 day effects on the response, e.g. n3 responding more strongly), `ε` is treatment-specific. The

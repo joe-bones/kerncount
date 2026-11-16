@@ -143,12 +143,19 @@ Columns in `qc_details.csv` (one row per image) that flow into every statistic t
 |---|---|---|
 | `readout_frac_positive_<ch>` | fraction | positive / measurable nuclei (mean rule). Empty below `min_nuclei` (5). |
 | `readout_frac_positive_p90_<ch>` | fraction | the same with the 90th percentile |
-| `intensity_<ch>_nucleus_mean_bgsub` | positive | median over the image's measurable nuclei of `mean_bgsub_ff` |
+| `intensity_<ch>_field_raw` | positive | ladder 1: mean of the whole marker image as acquired (section 6b) |
+| `intensity_<ch>_field_corrected` | positive | ladder 2: whole field, flat-field and background corrected (section 6b) |
+| `intensity_<ch>_nucleus_mean_raw` | positive | ladder 3: median over measurable nuclei of the raw mean over the whole DAPI outline (no background, no flat field; Fiji ROI mean) |
+| `intensity_<ch>_nucleus_mean_bgsub` | positive | ladder 4: median over the image's measurable nuclei of `mean_bgsub_ff` |
+| `intensity_<ch>_stained_area_mean` | positive | mean corrected signal inside the marker's own stained area (no DAPI; section 6b) |
+| `intensity_<ch>_field_total` | positive | integrated corrected signal over the stained area of the field |
 | `intensity_<ch>_positive_mean_bgsub` | positive | mean `mean_bgsub_ff` of the positive nuclei |
 | `intensity_<ch>_fiji_cell` | positive | legacy, only with region `fiji_cell`: mean of (nucleus + 6 px) minus image background over counted nuclei |
 
-Not registered (helpers): `n_measured_<ch>` (denominator of the fractions; use it as N for the logit weights),
-`n_saturated_<ch>`, `cutoff_rule_<ch>`, `channel_check`. `<ch>` is the channel name with unsafe characters
+Not registered (helpers): `n_measured_<ch>` (denominator of the fractions: it is the fractions' `Metric.n_column`,
+so the logit model weights and pools by it, not by `count`), `n_saturated_<ch>`, `cutoff_rule_<ch>`,
+`stained_frac_<ch>` (share of the field above the stain threshold), `saturated_px_frac_<ch>`, `channel_check`,
+`source_file` and, for interleaved files, `source_file_<channel>` (the file of each channel of the field). `<ch>` is the channel name with unsafe characters
 replaced by `_`. The existing `intensity_<ch>_nucleus` / `_cell` / `_ring` columns are unchanged.
 
 ## 6. Outputs: `<project>/intensity/`
@@ -165,6 +172,56 @@ replaced by `_`. The existing `intensity_<ch>_nucleus` / `_cell` / `_ring` colum
 | `alignment.csv`, `alignment_<n>.png` | shift, correlation and flags per field |
 
 `_work/nuclei_intensity.csv` is the per-nucleus table (section 3).
+
+## 6b. Readout ladder
+
+ADR 0001, "Readout ladder". Every marker channel gets five per-image layers, each removing one analysis choice,
+plus two stain-area readouts. They are ordinary registry metrics, so each gets every statistic (absolute values,
+effects vs each reference, per n and all n, the n = 1 rules).
+
+| layer | column | what it is | what the next step changes |
+|---|---|---|---|
+| 1 | `intensity_<ch>_field_raw` | mean of the whole image as acquired | flat field + background |
+| 2 | `intensity_<ch>_field_corrected` | mean of C over the field | per nucleus instead of per field |
+| 3 | `intensity_<ch>_nucleus_mean_raw` | median of the nuclei's raw means (whole DAPI outline) | shrunk outline, local background, flat field |
+| 4 | `intensity_<ch>_nucleus_mean_bgsub` | median of the nuclei's corrected signal | the positivity cut-off |
+| 5 | `readout_frac_positive_<ch>` | % positive nuclei | |
+| extra | `intensity_<ch>_stained_area_mean` | mean of C over the stained area | |
+| extra | `intensity_<ch>_field_total` | sum of C over the stained area | |
+
+**Whole-field layers** (`intensity.field_layers`, no segmentation, no DAPI; cached per field in
+`_work/<n>/<treatment>/NN_layers.json`, redone when the files or the flat field change):
+- *raw* = mean of the marker image, nothing applied. The raw layers truly skip both corrections (no flat field, no
+  background subtraction; for layer 3 the local background ring and the flat field are not used either).
+- *corrected image* C = (image - D) / F - b: F and D are the plate's flat and dark fields (section 4; F = 1, D = 0 when
+  the flat field is off or not estimable) and b is the field's own background, the **mode** of the histogram of
+  (image - D) / F (the background is the most common intensity unless a field is almost fully covered by cells). The
+  background noise SD is taken from the half of the histogram below the mode (half-normal: median distance / 0.6745).
+- *stained area* = pixels with C > 3 x that SD, then a morphological opening (3 x 3 cross) that drops isolated noise
+  pixels (about 0.1% of background pixels pass 3 SD) and one-pixel slivers. No smoothing (smoothing adds a halo
+  around every cell and lowers the stained-area mean). Fewer than 50 stained pixels: no stained-area mean and a
+  total of 0. The threshold sets what "stained" means: dim cells below 3 noise SD are left out, so the stained-area
+  mean describes the visibly stained cells (compare it within an n).
+- *total* = sum of C over the stained area (mean x stained pixels); the whole-field sum would just be layer 2 x the
+  field size.
+- **Saturation**: saturated pixels (at the camera maximum) are left out of every field layer; a field with more than
+  1% saturated pixels gets no field layers. Per-nucleus layers follow the nucleus rule (saturated nuclei excluded,
+  still counted). Fields whose marker file does not match the nuclear file (mis-paired) get no layers at all.
+
+**Layer comparison** (`layers.py`, written into every generation for every channel with at least two layers):
+
+| file (in `all_n/[cell line/]` and in every `<n>/`) | content |
+|---|---|
+| `layers_<ch>_vs_<reference>.png/.pdf` | rows = treatments, columns = layers; effect vs the reference with its interval: % of reference for intensities (shared axis, so compression is visible), percentage points for % positive. All n: 95% CI of the model and stars; one n: estimates only, "needs ≥ 2 n". Per n: technical 95% intervals from the fields, labelled descriptive. Filled dot = significant (per n: technical interval excludes no effect). |
+| `layers_<ch>_absolute.png/.pdf`, `layers_<ch>_absolute.csv` | the value of every condition at every layer (all n: model means with CI; per n: field means with technical intervals) |
+| `layers_<ch>_effects.csv` | level, n, cell_line, channel layer, reference, treatment, estimate, ci_low, ci_high, interval, p_adj, significance, direction, call |
+| `layers_<ch>_concordance.csv` | per treatment x reference: the call at every layer (columns named by layer key), `direction_agrees`, `conclusion_agrees`, `changes_at` (e.g. `2->3; 4->5`), `changing_steps`, and `summary` in plain language |
+
+A **call** is the direction (higher / lower / no change: within 2% or 1 pp and not significant) plus the
+significance (`*`, `(ns)`; per n `(tech.)` when the technical interval excludes no effect; one n at all n: direction
+only). The concordance walks the ladder 1 -> 5 and names every step where the call changes. Footers remind that raw
+layers compress effects toward 100% (a fixed baseline sits in both conditions) and that field layers scale with the
+number of cells in the field (see the density scatter).
 
 ## 7. Tuning API (for the browser)
 
@@ -192,8 +249,9 @@ tuning.lock(project_dir, channel, cutoff, field_ids, measure="mean", n=None) -> 
 
 Errors: `tuning.TuningError` (unknown field / channel, project not run). Cut-off units: signal = mean inside the
 shrunk nucleus minus local background, divided by the flat field. A lock takes effect at the next `kerncount run`
-(cached detections and measurements are reused). Note: an existing generation is only rebuilt when the counts
-change, so after a new lock run `kerncount run <exp> --rebuild gN` to refresh its statistics. Suggested flow: `sample` (per n), show `render` with a slider over
+(cached detections and measurements are reused). Existing generations whose counts are unchanged are rebuilt
+automatically when the intensity results change (new lock, positivity or flat-field settings); the run log and
+`generation.json` (`rebuilt_because`) say exactly what changed (docs/statistics.md, "When a generation is rebuilt"). Suggested flow: `sample` (per n), show `render` with a slider over
 `suggest_range`, `preview` for the overall %, `lock` with the sampled ids, then run.
 
 ## 8. Plate maps

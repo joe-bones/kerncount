@@ -131,7 +131,7 @@ def test_settings_defaults_and_form():
     keys = list(settings.DEFAULTS)
     assert keys[keys.index("intensity") + 1] == "readouts"
     assert settings.DEFAULTS["readouts"] == {"enabled": True, "include": "all"}
-    fkeys = list(settings_form.FIELDS)
+    fkeys = list(settings_form.FORM_ITEMS)
     assert fkeys[fkeys.index("intensity") + 1] == "readouts"
     assert "readouts" in settings_form.SECTION_TITLES
     import tomllib

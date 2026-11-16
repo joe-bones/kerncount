@@ -327,6 +327,102 @@ def measure_field(rec, labels_path: Path, info: dict, settings: dict, chans: lis
     return out, finfo
 
 
+# ---------------------------------------------------------------- readout ladder: whole-field layers
+
+LAYERS_VERSION = 2
+FIELD_SAT_MAX = 0.01  # more than this share of a field's pixels saturated: its field layers are left empty
+STAIN_K = 3.0  # stained area = corrected image above background mode + STAIN_K x its noise SD, then opened
+STAIN_SMOOTH = 0.0  # Gaussian sigma (px) before thresholding (0 = none: smoothing adds a halo around every cell)
+STAIN_MIN_PX = 50  # fewer stained pixels: no stained-area mean (total = 0)
+
+
+def background_mode(values: np.ndarray, bins: int = 512) -> tuple[float, float]:
+    """(mode, sd) of the background peak of a fluorescence image without any mask: the mode of a smoothed
+    histogram between the 0.5th and 99.5th percentiles, and the SD from the half below the mode (a half-normal:
+    median(mode - v) = 0.6745 sd). Robust while the background is the most common intensity (true unless a field is
+    almost fully covered by stained cells)."""
+    v = np.asarray(values, np.float64).ravel()
+    v = v[np.isfinite(v)]
+    if v.size < 100:
+        return float("nan"), float("nan")
+    lo, hi = np.percentile(v, [0.5, 99.5])
+    if not hi > lo:
+        return float(lo), 0.0
+    h, edges = np.histogram(v, bins=bins, range=(lo, hi))
+    h = ndi.gaussian_filter1d(h.astype(float), 2)
+    i = int(np.argmax(h))
+    mode = float(0.5 * (edges[i] + edges[i + 1]))
+    below = mode - v[v < mode]
+    sd = float(np.median(below) / 0.6745) if below.size >= 20 else float(np.std(v))
+    return mode, sd
+
+
+def field_layers(img: np.ndarray, max_value: float, flat: np.ndarray | None = None, dark: np.ndarray | None = None
+                 ) -> dict:
+    """Whole-field layers of one marker image (no segmentation, no DAPI; docs/intensity.md "Readout ladder").
+
+        field_raw          mean of the image as acquired (saturated pixels left out)
+        field_corrected    mean of C = (image - D) / F - b over the field: flat field F and dark field D of the
+                           plate (BaSiC model, F = 1 and D = 0 without a flat field), b = the field's own background
+                           (mode of the smoothed corrected image)
+        stained_area_mean  mean of C over the stained area: C > STAIN_K x background SD, opened (3 x 3 cross)
+        field_total        sum of C over the stained area (0 when nothing is stained)
+        stained_frac, saturated_frac, bg_mode, bg_sd  (helpers)
+    Fields with more than FIELD_SAT_MAX saturated pixels get NaN layers."""
+    img = np.asarray(img, np.float32)
+    sat = img >= 0.999 * float(max_value)
+    ok = ~sat
+    out = dict(saturated_frac=float(sat.mean()))
+    nan = dict(field_raw=np.nan, field_corrected=np.nan, stained_area_mean=np.nan, field_total=np.nan,
+               stained_frac=np.nan, bg_mode=np.nan, bg_sd=np.nan)
+    if out["saturated_frac"] > FIELD_SAT_MAX or ok.sum() < 100:
+        return out | nan
+    F = np.ones_like(img) if flat is None else np.asarray(flat, np.float32)
+    D = 0.0 if dark is None else np.asarray(dark, np.float32)
+    c0 = (img - D) / np.maximum(F, 1e-3)
+    sm = ndi.gaussian_filter(c0, STAIN_SMOOTH) if STAIN_SMOOTH > 0 else c0
+    b, sd = background_mode(sm[ok])
+    C = c0 - b
+    stained = ok & (sm - b > STAIN_K * sd) if np.isfinite(sd) else np.zeros_like(ok)
+    # opening with a 3 x 3 cross: drops isolated noise pixels (about 0.1% of background pixels pass 3 SD) and
+    # one-pixel slivers; stained cells (many pixels across) keep their shape
+    stained = ndi.binary_opening(stained, structure=ndi.generate_binary_structure(2, 1))
+    k = int(stained.sum())
+    out.update(field_raw=float(img[ok].mean()), field_corrected=float(C[ok].mean()),
+               stained_area_mean=float(C[stained].mean()) if k >= STAIN_MIN_PX else np.nan,
+               field_total=float(C[stained].sum()) if k >= STAIN_MIN_PX else 0.0,
+               stained_frac=float(k / ok.sum()), bg_mode=float(b), bg_sd=float(sd))
+    return out
+
+
+def _ff_key(ff) -> str:
+    return hashlib.sha1(json.dumps(ff.to_dict(), sort_keys=True, default=float).encode()).hexdigest()[:12]
+
+
+def field_layers_cached(rec, labels_path: Path, c: int, name: str, ff, max_value: float, grids: dict) -> dict:
+    """field_layers for channel c of one field, cached next to the detection cache (NN_layers.json): redone when
+    the image files, the flat field or LAYERS_VERSION change. `grids` caches the full F / D maps per flat field."""
+    stem = labels_path.name.replace("_labels.tif", "")
+    p = labels_path.with_name(f"{stem}_layers.json")
+    srcs = [rec.paths[c]] if rec.paths else [rec.path]
+    key = dict(version=LAYERS_VERSION, sources=[_sig(Path(x)) for x in srcs], ff=_ff_key(ff), channel=int(c),
+               sat=FIELD_SAT_MAX, k=STAIN_K, smooth=STAIN_SMOOTH)
+    data = json.loads(p.read_text()) if p.exists() else {}
+    hit = data.get(name)
+    if hit and hit.get("key") == json.loads(json.dumps(key)):
+        return hit["values"]
+    img = channel_image(rec, c)
+    gid = id(ff)
+    if gid not in grids:
+        on = ff.source != "off" and tuple(ff.shape) == tuple(img.shape)
+        grids[gid] = (ff.flat() if on else None, ff.dark() if on else None)
+    flat, dark = grids[gid]
+    vals = field_layers(img, max_value, flat, dark)
+    data[name] = dict(key=key, values=vals)
+    p.write_text(json.dumps(data, default=float))
+    return vals
+
+
 # ---------------------------------------------------------------- project stage (called by pipeline.run)
 
 def _slug(s: str) -> str:
@@ -408,6 +504,8 @@ def derive(nuc: pd.DataFrame, ffs: dict, k: float) -> pd.DataFrame:
     nuc["mean_bgsub_ff"] = nuc["mean_bgsub"] / nuc["ff"]
     nuc["p90_bgsub_ff"] = nuc["p90_bgsub"] / nuc["ff"]
     nuc["total_bgsub_ff"] = nuc["total"] / nuc["ff"]
+    # raw mean over the whole (unshrunk) nucleus: no background, no flat field (Fiji ROI mean; total = sum - area x bg)
+    nuc["mean_raw"] = nuc["total"] / nuc["area"].where(nuc["area"] > 0) + nuc["bg"]
     nuc["counted"] = nuc["category"].isin(classify.COUNTED)
     nuc["measurable"] = nuc["counted"] & ~nuc["saturated"].astype(bool) & (nuc["measured_px"] > 0)
     nuc["thr_lod"], nuc["thr90_lod"] = positivity.lod_thresholds(nuc, k, nuc["ff"].to_numpy(float))
@@ -505,6 +603,19 @@ def process(prj, fields: list, log=print) -> dict | None:
     if len(sweep_df):
         sweep_df = sweep_df[["n", "treatment", "channel", "measure", "rule", "factor", "cutoff", "frac_positive", "nuclei"]]
 
+    # readout ladder: whole-field layers per field and channel (cheap: no segmentation; cached per field)
+    layer_vals: dict = {}
+    grids: dict = {}
+    for r, row, fi, info in finfos:
+        mv = float(fi.get("max_value") or info.get("max_value") or 65535)
+        lab = next(f[1] for f in fields if f[0] is r)
+        for c in chans:
+            try:
+                layer_vals[(r.n, r.treatment, r.image, names[c])] = field_layers_cached(
+                    r, lab, c, names[c], ffs[(r.n, names[c])], mv, grids)
+            except Exception as e:  # noqa: BLE001 - a layer must never stop a run
+                log(f"  note: field layers {r.n} / {r.treatment} / {r.image}: {type(e).__name__}: {e}")
+
     # per-image columns
     minn = int(s["positivity"].get("min_nuclei", 5))
     regions = s["intensity"].get("regions", [])
@@ -530,7 +641,22 @@ def process(prj, fields: list, log=print) -> dict | None:
             row[f"n_measured_{sl}"] = int(len(meas))
             row[f"n_saturated_{sl}"] = int((g["counted"] & g["saturated"].astype(bool)).sum())
             ok = len(meas) >= minn
+            mispaired = bool(len(g)) and (g["excluded"] != "").all()
+            lv = {} if mispaired else layer_vals.get((r.n, r.treatment, r.image, ch), {})
+
+            def lay(k, nd=3):
+                v = lv.get(k, np.nan)
+                return round(float(v), nd) if v is not None and np.isfinite(v) else np.nan
+
+            # the ladder, in order (layers 1-4; layer 5 = % positive below), then the two stain-area readouts
+            row[f"intensity_{sl}_field_raw"] = lay("field_raw")
+            row[f"intensity_{sl}_field_corrected"] = lay("field_corrected")
+            row[f"intensity_{sl}_nucleus_mean_raw"] = round(float(meas["mean_raw"].median()), 3) if ok else np.nan
             row[f"intensity_{sl}_nucleus_mean_bgsub"] = round(float(meas["mean_bgsub_ff"].median()), 3) if ok else np.nan
+            row[f"intensity_{sl}_stained_area_mean"] = lay("stained_area_mean")
+            row[f"intensity_{sl}_field_total"] = lay("field_total", 1)
+            row[f"stained_frac_{sl}"] = lay("stained_frac", 5)
+            row[f"saturated_px_frac_{sl}"] = lay("saturated_frac", 5)
             if "fiji_cell" in regions:
                 cnt = g[g["counted"]]
                 bgv = float(info.get(f"C{c + 1}_background", 0.0)) if s["intensity"].get("subtract_background", True) else 0.0

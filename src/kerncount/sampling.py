@@ -262,9 +262,12 @@ def run(df: pd.DataFrame, settings: dict, out: Path, metric_label: str = "nuclei
     cond.to_csv(out / "batch_by_condition.csv", index=False)
     per_n.to_csv(out / "batch_by_n.csv", index=False)
     keys = ["reference", "wells", "fields_per_well", "images"]
-    summary = (pw.groupby(keys)
-               .agg(median_variance_vs_current=("variance_vs_current", "median"),
-                    median_n_for_80pct_power=("n_for_80pct_power", "median")).reset_index())
+    if pw.empty:  # e.g. one n: no across-n variance, so no power table (the report says why)
+        summary = pd.DataFrame(columns=keys + ["median_variance_vs_current", "median_n_for_80pct_power"])
+    else:
+        summary = (pw.groupby(keys)
+                   .agg(median_variance_vs_current=("variance_vs_current", "median"),
+                        median_n_for_80pct_power=("n_for_80pct_power", "median")).reset_index())
     if len(emp):
         summary = summary.merge(emp.groupby(keys).agg(
             same_conclusion_pct=("same_conclusion_pct", "mean"),
@@ -372,7 +375,13 @@ def _report(vc, eff, summary, cond, per_n, out, W, K, layout, refs, means, notes
     else:
         L.append("  No well pair differs more than field noise explains.")
 
+    if eff.empty or "reference" not in eff:
+        L += ["", "3. Design table", "-" * 70,
+              "  No treatment has a ratio to a reference in 2 or more n's (e.g. only one n): the across-n design table",
+              "  and power need >= 2 n. The within-n components above (field, well) are still estimated."]
     for i, ref in enumerate(refs):
+        if eff.empty or "reference" not in eff:
+            break
         e = eff[eff["reference"] == ref]
         s = summary[summary["reference"] == ref].drop(columns="reference")
         if not len(e):

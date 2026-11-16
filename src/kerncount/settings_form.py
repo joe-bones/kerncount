@@ -1,4 +1,4 @@
-"""Settings as a form: field descriptions for the web interface, and a comment-preserving settings.toml writer.
+"""Settings as a form: form items (one per setting) for the web interface, and a comment-preserving settings.toml writer.
 
 Standard library only (the web interface must start without the scientific stack).
 """
@@ -14,10 +14,10 @@ from .settings import DEFAULTS
 READOUT_NAMES = ["frac_out_of_focus", "micronuclei_per_nucleus", "nuclear_area_median", "nuclear_area_median_um2",
                  "nuclear_area_cv", "frac_irregular", "coverage", "nn_distance_median"]
 
-# kind: bool | int | float | choice | multi | list | num_or (a number, or one of `special`) | measure | names ("all" or some of `options`) | text
+# FORM_ITEMS: one form item per setting (not to be confused with a microscope field). kind: bool | int | float | choice | multi | list | num_or (a number, or one of `special`) | measure | names ("all" or some of `options`) | text
 # | table (TOML inline table of name = [strings], e.g. { mirna = ["miR-*"] }; shown and edited as text)
 # reseg = changing it re-detects every nucleus (the slow step, ~2-3 s per image)
-FIELDS: dict[str, dict[str, dict]] = {
+FORM_ITEMS: dict[str, dict[str, dict]] = {
     "project": {
         "raw_dir": dict(kind="text", label="Raw images folder",
                         help="Where the raw images are. Relative paths are relative to the project folder."),
@@ -277,8 +277,8 @@ SECTION_TITLES = {
 
 def schema() -> list[dict]:
     return [dict(section=s, title=SECTION_TITLES.get(s, s),
-                 fields=[dict(key=k, default=DEFAULTS[s][k], **meta) for k, meta in keys.items()])
-            for s, keys in FIELDS.items()]
+                 items=[dict(key=k, default=DEFAULTS[s][k], **meta) for k, meta in keys.items()])
+            for s, keys in FORM_ITEMS.items()]
 
 
 def _num(v, as_int=False):
@@ -296,10 +296,10 @@ def coerce(values: dict) -> dict:
     """Turn form values (strings, booleans, lists) into typed settings; raise ValueError naming the bad field."""
     out: dict[str, dict] = {}
     for sec, keys in values.items():
-        if sec not in FIELDS:
+        if sec not in FORM_ITEMS:
             continue
         for key, v in keys.items():
-            meta = FIELDS[sec].get(key)
+            meta = FORM_ITEMS[sec].get(key)
             if meta is None:
                 continue
             k, where = meta["kind"], f"{SECTION_TITLES[sec]} → {meta.get('label', key)}"

@@ -382,8 +382,9 @@ def test_settings_sections_and_form():
     keys = list(settings.DEFAULTS)
     assert keys.index("experiment") == keys.index("project") + 1
     for sec in ("experiment", "channels", "intensity", "positivity"):
-        assert set(settings_form.FIELDS[sec]) == set(settings.DEFAULTS[sec])
+        assert set(settings_form.FORM_ITEMS[sec]) == set(settings.DEFAULTS[sec])
     assert [x["section"] for x in settings_form.schema()][:3] == ["project", "experiment", "channels"]
+    assert all("items" in x and "fields" not in x for x in settings_form.schema())  # form items, not microscope fields
     typed = settings_form.coerce({"channels": {"files": "interleaved", "file_order": "Ki67, DAPI", "segment": "DAPI"},
                                   "experiment": {"cell_line": "LN229", "seeding_density": "30000"}})
     out = settings_form.update_text(settings.TEMPLATE.format(raw_dir="x"), typed)
@@ -510,6 +511,20 @@ def test_end_to_end_interleaved_project(ki_project):
     assert {"mean", "total", "p90", "area", "bg", "saturated", "mean_bgsub_ff", "positive"} <= set(nuc.columns)
     used = sorted((prj / "generations").glob("g*/counts_used.csv"))
     assert used
+    # readout ladder columns, per-field source files, and the layer comparison in the generation
+    for c in ("intensity_Ki67_field_raw", "intensity_Ki67_field_corrected", "intensity_Ki67_nucleus_mean_raw",
+              "intensity_Ki67_stained_area_mean", "intensity_Ki67_field_total", "source_file_Ki67", "source_file_DAPI"):
+        assert c in qc, c
+    ok = qc[~((qc["treatment"] == "LyoVec") & (qc["image"] == 3))]
+    assert (ok["intensity_Ki67_field_raw"] > ok["intensity_Ki67_field_corrected"]).all()  # raw keeps the background
+    assert (ok["intensity_Ki67_nucleus_mean_raw"] > ok["intensity_Ki67_nucleus_mean_bgsub"]).all()
+    assert np.isnan(row["intensity_Ki67_field_raw"])  # mis-paired field: no marker readouts at all
+    assert qc["source_file_Ki67"].str.endswith(".tif").all()
+    g1 = prj / "generations" / "g1"
+    assert (g1 / "all_n" / "layers_Ki67_concordance.csv").exists()
+    man = json.loads((g1 / "manifest.json").read_text())
+    assert any(f["kind"] == "layers" for f in man["files"]) and "Ki67" in man["layers"]
+    assert json.loads((g1 / "generation.json").read_text())["inputs"]["intensity_fingerprint"]
 
 
 def test_tuning_api_blinded_and_fast(ki_project):

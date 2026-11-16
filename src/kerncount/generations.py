@@ -273,6 +273,53 @@ def _density_per_n(sub: pd.DataFrame, met, cov: str, order: list[str], nd: Path,
                                xl, f"{met.label} (% of nuclei)", by_n=False)
 
 
+def _write_layers(out: Path, blocks, results: dict, metrics_live: dict, settings: dict, order: list[str], ncol: dict,
+                  n_by_slug: dict) -> dict:
+    """Layer comparison (layers.py) for every channel with a readout ladder: all_n[/<line>]/ and <n>/.
+    Returns the manifest entry {channel: {layers: [...], extras: [...], references: [...], files: {...}}}."""
+    from . import layers as layers_mod
+
+    chans = layers_mod.channels(metrics_live)
+    info = {}
+    if not chans:
+        return info
+    slug_of = {v: k for k, v in n_by_slug.items()}
+    for ch in chans:
+        lays = layers_mod.layer_list(ch, metrics_live)
+        refs_all = []
+        for line, ad, rows in blocks:
+            key = (lambda m: m) if len(blocks) == 1 else (lambda m, line=line: f"{line}/{m}")
+            res_b = {L["metric"]: results[key(L["metric"])] for L in lays if key(L["metric"]) in results}
+            if not res_b:
+                continue
+            present = set(rows["treatment"])
+            refs = [c for c in models.config(settings, present).controls if c in present]
+            refs_all += [r for r in refs if r not in refs_all]
+            where = f"All n ({line})" if len(blocks) > 1 else "All n"
+            frac_m = f"readout_frac_positive_{ch}"
+            dens = (f"{frac_m}_density.png in this folder and intensity/density_[n]__{ch}.png"
+                    if frac_m in metrics_live else f"intensity/density_[n]__{ch}.png")
+            try:
+                layers_mod.write_level(ad, ch, lays, res_b, refs, order, "all_n", where, line, ncol=ncol,
+                                       density_hint=dens)
+                for n in sorted(rows["n"].unique()):
+                    nd = out / slug_of.get(n, _slug(n))
+                    refs_n = [r for r in refs if ((rows["n"] == n) & (rows["treatment"] == r)).any()]
+                    layers_mod.write_level(nd, ch, lays, res_b, refs_n, order, "n", manifest.short(n), line,
+                                           n_filter=n, ncol=ncol, density_hint=f"{frac_m}_density.png in this folder")
+            except Exception:  # noqa: BLE001 - never crash a generation build on the layer comparison
+                traceback.print_exc()
+        info[ch] = dict(layers=[dict(index=L["index"], key=L["key"], label=L["label"], metric=L["metric"],
+                                     step=L["step"]) for L in lays if not L["extra"]],
+                        extras=[dict(key=L["key"], label=L["label"], metric=L["metric"]) for L in lays if L["extra"]],
+                        references=refs_all,
+                        files=dict(effects=f"layers_{ch}_effects.csv", absolute=f"layers_{ch}_absolute.csv",
+                                   concordance=f"layers_{ch}_concordance.csv",
+                                   ladder_plot=f"layers_{ch}_vs_[reference].png",
+                                   absolute_plot=f"layers_{ch}_absolute.png"))
+    return info
+
+
 def _cell_lines(t: pd.DataFrame) -> list[str]:
     if "cell_line" not in t:
         return []
@@ -302,22 +349,27 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, metrics: dict | N
         t.loc[drop, "source"] = "auto (excluded: QC low)"
     if design_table is None:
         design_table = design.assign(t[["n", "treatment", "image"]], settings, project)
-    dcols = ["well", "position", "timepoint"]
-    dextra = [c for c in ("cell_line",) if c in design_table and c not in t]
-    t = t.drop(columns=[c for c in dcols if c in t]).merge(
-        design_table[["n", "treatment", "image"] + dcols + dextra].astype({"image": int}).drop_duplicates(
+    # design + experiment metadata (well, position, timepoint, cell_line, meta_*), in design.output_columns order
+    dcols = [c for c in design.output_columns(design_table) if c in design.COLUMNS]
+    mcols = [c for c in design.output_columns(design_table) if c not in design.COLUMNS]
+    # a metadata value already in the image table (e.g. cell_line) is kept where the design leaves it empty
+    prior = {c: t[c].fillna("").astype(str).str.strip().to_numpy() for c in mcols if c in t}
+    t = t.drop(columns=[c for c in dcols + mcols if c in t]).merge(
+        design_table[["n", "treatment", "image"] + dcols + mcols].astype({"image": int}).drop_duplicates(
             ["n", "treatment", "image"]), on=["n", "treatment", "image"], how="left")
-    if "cell_line" in t:
-        t["cell_line"] = t["cell_line"].fillna("").astype(str).str.strip()
+    for c in mcols:
+        t[c] = t[c].fillna("").astype(str).str.strip()
+        if c in prior:
+            t[c] = t[c].where(t[c] != "", prior[c])
+    src_cols = [c for c in t.columns if c == "source_file" or c.startswith("source_file_")]
     # negative control: only sets positivity cut-offs, never analysed
     neg = str((settings.get("experiment") or {}).get("negative_control", "") or "").strip()
     neg_present = bool(neg) and (t["treatment"] == neg).any()
     if neg_present:
         t.loc[t["treatment"] == neg, "excluded"] = True
         t.loc[t["treatment"] == neg, "source"] = "negative control (cut-off only; not analysed)"
-    used_cols = ["n", "treatment", "image", "count", "source", "excluded", "qc_level"] + dcols + \
-        (["cell_line"] if "cell_line" in t else [])
-    t[used_cols].to_csv(out / "counts_used.csv", index=False)
+    used_cols = ["n", "treatment", "image", "count", "source", "excluded", "qc_level"] + dcols + mcols
+    t[used_cols + src_cols].to_csv(out / "counts_used.csv", index=False)
     if neg_present:
         t = t[t["treatment"] != neg].copy()
     try:
@@ -358,7 +410,8 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, metrics: dict | N
             td.mkdir()
             tr_by_slug[(_slug(n), _slug(tr))] = tr
             sub = t[(t["n"] == n) & (t["treatment"] == tr)].sort_values("image")
-            keep = ["image", "count", "source", "excluded", "qc_level"] + dcols[:2] + [c for c in extra_cols if c in sub]
+            keep = (["image", "count", "source", "excluded", "qc_level"] + dcols[:2] + [c for c in extra_cols if c in sub]
+                    + src_cols)
             sub[[c for c in keep if c in sub]].to_csv(td / "fields.csv", index=False)
             _fields_plot(sub, td / "count_fields.png", f"{n} / {tr}", positions_ok)
         for m, met in metrics_live.items():
@@ -449,6 +502,8 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, metrics: dict | N
                 modelplots.position_effect(vals, ad / f"{m}_position_effect",
                                            f"{where}: {met.label} by field position (per n)", "n", ncol, manifest.short)
 
+    # readout ladder: every intensity layer's effect side by side, per channel, at all n and in every n
+    layer_info = _write_layers(out, blocks, results, metrics_live, settings, order_all, ncol, n_by_slug)
     stats_long = manifest.write_stats_long(out, long_rows)
     cfg_all = models.config(settings, live_all["treatment"].unique())
     dup_lines = duplicates_mod.summary_lines(duplicates) if duplicates is not None else []
@@ -487,8 +542,11 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, metrics: dict | N
         line_text=(" (one sub-folder per cell line: " + ", ".join(b[1].name for b in blocks) + ")") if len(blocks) > 1 else "",
         extra_notes=("\nNotes\n" + "\n".join(f"  - {x}" for x in notes) + "\n") if notes else ""), encoding="utf-8")
     (out / "generation.json").write_text(json.dumps(dict(name=gen["name"], source=gen["source"], fingerprint=gen["fingerprint"],
-                                                         changes=gen["changes"], built=datetime.now().isoformat(timespec="seconds")),
-                                                    indent=2), encoding="utf-8")
+                                                         changes=gen["changes"], built=datetime.now().isoformat(timespec="seconds"),
+                                                         **({"inputs": gen["inputs"]} if gen.get("inputs") else {}),
+                                                         **({"rebuilt_because": gen["rebuilt_because"]}
+                                                            if gen.get("rebuilt_because") else {})),
+                                                    indent=2, default=str), encoding="utf-8")
     primary = dict(test=cfg_all.primary_test, family=f"vs {cfg_all.primary_ref}", reference=cfg_all.primary_ref,
                    fallback_metrics=fallbacks, controls=cfg_all.controls,
                    classes={c: [t_ for t_, k in cfg_all.classes.items() if k == c] for c in cfg_all.class_order},
@@ -507,6 +565,7 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, metrics: dict | N
         all_n_folders=[dict(cell_line=b[0], path=b[1].relative_to(out).as_posix(), n_count=int(b[2]["n"].nunique()))
                        for b in blocks],
         negative_control=dict(treatment=neg or None, present=neg_present),
+        layers=layer_info,
         duplicates=dict(checked=duplicates is not None,
                         images=int(len(duplicates)) if duplicates is not None else 0,
                         cross_condition=int(duplicates["cross_condition"].astype(bool).sum()) if duplicates is not None

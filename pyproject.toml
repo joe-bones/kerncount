@@ -33,3 +33,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 kerncount = ["models/**/*", "web/*"]
+
+[tool.pytest.ini_options]
+# heavy simulations (type I error loops) and large generation builds are marked slow and skipped by default;
+# run them with `pytest -m slow` (or everything with `pytest -m "slow or not slow"`)
+markers = ["slow: heavy simulations and large model fits / generation builds (run with -m slow)"]
+addopts = "-m 'not slow'"

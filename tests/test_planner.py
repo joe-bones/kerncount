@@ -73,7 +73,7 @@ def test_component_recovery_on_simulated_nested_data():
     rng = np.random.default_rng(1)
     df = simulate(rng, n=12, treatments=8, wells=3, fields=8, s_field=0.3, s_pos=0.2, s_well=0.12, s_bio=0.15,
                   s_shift=0.1)
-    plan = planner.build(df, _settings(design={"wells": 3}))
+    plan = planner.build(df, _settings(design={"wells": 3}, analysis={"classes": {}}))  # pooled class (controls vs the rest)
     c = plan["components_point"]
     cv2 = lambda s: math.exp(s ** 2) - 1  # relative-scale variance of a log-normal
     assert c["field"] == pytest.approx(cv2(0.3), rel=0.2)
@@ -114,7 +114,15 @@ def test_component_intervals_cover_truth():
 def test_classes_from_settings_and_default():
     s = _settings()
     cls, src, notes = planner.treatment_classes(s, ["Control", "LyoVec", "miR-1", "CL075"], ["Control", "LyoVec"])
+    # default "auto" = the statistics' rule: one class per non-control treatment, controls pooled
+    assert cls == {"Control": "controls", "LyoVec": "controls", "miR-1": "miR-1", "CL075": "CL075"}
+    assert src.startswith("auto")
+    s["analysis"]["classes"] = {}  # "two": controls vs the rest
+    cls, src, notes = planner.treatment_classes(s, ["Control", "LyoVec", "miR-1", "CL075"], ["Control", "LyoVec"])
     assert cls == {"Control": "controls", "LyoVec": "controls", "miR-1": "treatments", "CL075": "treatments"}
+    s["analysis"]["classes"] = '{ mirna = ["miR-*"] }'  # TOML text form
+    cls, src, notes = planner.treatment_classes(s, ["Control", "miR-1", "CL075"], ["Control"])
+    assert cls == {"Control": "controls", "miR-1": "mirna", "CL075": "other"}
     s["analysis"]["classes"] = {"mirna": ["miR-*"], "positive": "CL075"}
     cls, src, notes = planner.treatment_classes(s, ["Control", "miR-1", "miR-2", "CL075"], ["Control"])
     assert cls["miR-2"] == "mirna" and cls["CL075"] == "positive" and cls["Control"] == "controls"
@@ -222,7 +230,7 @@ def test_planner_settings_and_form():
     from kerncount import settings_form
 
     assert list(st_mod.DEFAULTS)[-1] == "planner"
-    assert set(settings_form.FIELDS["planner"]) == set(st_mod.DEFAULTS["planner"])
+    assert set(settings_form.FORM_ITEMS["planner"]) == set(st_mod.DEFAULTS["planner"])
     import tomllib
 
     parsed = tomllib.loads(st_mod.TEMPLATE.format(raw_dir="x"))

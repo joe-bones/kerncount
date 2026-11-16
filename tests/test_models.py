@@ -86,6 +86,7 @@ def test_class_specific_variances_are_recovered():
     assert _row(res, "vs LyoVec", "A vs LyoVec").se > 2 * _row(res, "vs LyoVec", "Control vs LyoVec").se
 
 
+@pytest.mark.slow
 def test_null_type_one_error_is_roughly_nominal_at_four_n():
     """Quick null simulation (the docs report a larger one): per-comparison rejection rate near 5%."""
     rng = np.random.default_rng(11)
@@ -216,9 +217,9 @@ def test_metric_registry():
 
 def test_settings_form_new_fields():
     for sec in ("analysis", "acceptance"):
-        assert set(settings_form.FIELDS[sec]) == set(st_mod.DEFAULTS[sec])
+        assert set(settings_form.FORM_ITEMS[sec]) == set(st_mod.DEFAULTS[sec])
     assert list(st_mod.DEFAULTS).index("acceptance") == list(st_mod.DEFAULTS).index("analysis") + 1
-    assert list(settings_form.FIELDS).index("acceptance") == list(settings_form.FIELDS).index("analysis") + 1
+    assert list(settings_form.FORM_ITEMS).index("acceptance") == list(settings_form.FORM_ITEMS).index("analysis") + 1
     typed = settings_form.coerce({"analysis": dict(classes='{ mirna = ["miR-*"] }', primary_test="rm_anova",
                                                    among_classes="mirna"),
                                   "acceptance": dict(vehicle_within="", positive_control_max_ratio="0.8", enforce=True)})
@@ -309,6 +310,7 @@ def test_manifest_and_stats_long_contract(tmp_path):
     assert (out / "all_n" / "count_prism_pct_of_Control.csv").exists()  # existing outputs kept
 
 
+@pytest.mark.slow
 def test_generation_survives_one_n_and_rm_anova_primary(tmp_path):
     rng = np.random.default_rng(1)
     out, _ = _build(tmp_path, _gen_table(rng, ns=("n1",)))
@@ -319,6 +321,7 @@ def test_generation_survives_one_n_and_rm_anova_primary(tmp_path):
     assert man["primary"]["test"] == "rm_anova" and man["model_status"]["count"]["stars_from"] == "rm_anova"
 
 
+@pytest.mark.slow
 def test_generation_enforced_acceptance_excludes_n(tmp_path):
     rng = np.random.default_rng(2)
     tab = _gen_table(rng)

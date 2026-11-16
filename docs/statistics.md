@@ -18,7 +18,7 @@ column goes through every statistic below.
 | column | kind | analysis scale (model unit = well, default) | headline effect (estimand) |
 |---|---|---|---|
 | `count` (nuclei per field) | count | log(well mean + 0.5) | **ratio of mean nuclei per field**; means in nuclei per field |
-| `intensity_*` | positive | log(well mean) | ratio of mean intensity; means in intensity units |
+| `intensity_*` | positive (label / unit from `classify.READOUTS.get(column)`, i.e. `classify.channel_metric_info` for per-channel columns) | log(well mean) | ratio of mean intensity; means in intensity units |
 | `nuclei_per_mm2` | positive | log(well mean) | ratio of mean nuclei/mm² |
 | `readout_*` | from `classify.READOUTS`, else `readout_frac_*` = fraction, others positive | log, or logit of the pooled well fraction | ratio; fractions: **difference in percentage points** (odds ratio and % of reference secondary); means in % of nuclei |
 
@@ -69,8 +69,14 @@ borderline). The odds ratio
 (`estimate`, `ci_low/high`) and % of the reference (`pct_of_comparator` = 100 p_a / p_b) are in the tables, never
 the headline: the out-of-focus fraction is 0 in most control images, and a ratio of near-zero fractions means
 nothing. The model % is that of a typical well (logit-normal median); `observed_mean` gives the pooled fraction
-averaged over n's for comparison. Nuclei N per field: counted nuclei (`count`), or count / (1 − f) for
-`readout_frac_out_of_focus` (out of focus / (counted + out of focus); `Metric.denominator`).
+averaged over n's for comparison. Nuclei N per field: the metric's own N column when it has one
+(`Metric.n_column`, e.g. `n_measured_Ki67` for `readout_frac_positive_Ki67` and its p90 variant: the counted,
+non-saturated nuclei the fraction is taken of), else counted nuclei (`count`), or count / (1 − f) for
+`readout_frac_out_of_focus` (out of focus / (counted + out of focus); `Metric.denominator`). N is the binomial N of
+the empirical logit, the weight when fields are pooled per well, and the `nuclei` reported. The registry's N columns
+(`metrics.n_columns(registry)`) are carried into the generation next to the metric columns.
+
+`Metric` fields: `id`, `column`, `label`, `unit`, `kind`, `description`, `denominator`, `n_column`.
 
 Why log: effects are multiplicative. Baselines differ between n's (62–90 nuclei per field in the current data),
 and a treatment that removes 70% of cells removes 70% whatever the baseline. On the log scale such effects are
@@ -349,6 +355,14 @@ interval in `ci_low/ci_high` (from the fields; label in `note`). With one n ever
   "cell_lines": [],                                 // non-empty cell lines; >= 2 = separate all-n folders
   "all_n_folders": [ {"cell_line": null, "path": "all_n", "n_count": 4} ],
   "negative_control": {"treatment": null, "present": false},
+  "layers": { "Ki67": {                             // readout ladder per channel ({} for DAPI-only projects)
+       "layers": [ {"index": 1, "key": "field_raw", "label": "1 Field, raw", "metric": "intensity_Ki67_field_raw",
+                    "step": ""}, ... ],             // 5 entries in ladder order; "step" = what changes from the previous
+       "extras": [ {"key": "stained_area_mean", "label": "Stained-area MFI", "metric": "..."}, ... ],
+       "references": ["LyoVec", "Control"],
+       "files": {"effects": "layers_Ki67_effects.csv", "absolute": "layers_Ki67_absolute.csv",
+                 "concordance": "layers_Ki67_concordance.csv", "ladder_plot": "layers_Ki67_vs_[reference].png",
+                 "absolute_plot": "layers_Ki67_absolute.png"} } },
   "duplicates": {"checked": true, "images": 24, "cross_condition": 24,
                  "affected": {"n3_2026-09-29": ["Control", "LyoVec"]}, "summary": ["..."]},
   "model_status": { "<metric id>" (or "<cell line>/<metric id>"): {
@@ -369,7 +383,8 @@ interval in `ci_low/ci_high` (from the fields; label in `note`). With one n ever
        "n": "n1_2026-06-05" | null, "treatment": "CL075" | null, "metric": "count" | null,
        "cell_line": "U251" | null,
        "kind": "absolute" | "relative" | "model" | "contrast" | "robustness" | "diagnostic" | "design"
-               | "acceptance" | "data",
+               | "acceptance" | "data" | "layers",
+       "channel": "Ki67", "reference": "LyoVec" | null,   // only for kind "layers" (metric is null there)
        "title": "All n: Nuclei per field: each treatment compared with LyoVec",
        "description": "One plain sentence a biologist understands." } ]
 }
@@ -379,6 +394,31 @@ Guarantees: every `.png`, `.csv` and `.xlsx` in the generation folder is listed 
 to their PNG), every listed path exists, `level`/`kind` take only the values above, and values that are not
 numbers (NaN) are written as `null`. Files are described from their names, so a new output that follows the
 `<metric>_<what>` naming is listed automatically (with a generic description if no rule matches).
+
+### Layer comparison (readout ladder)
+
+For every marker channel with at least two ladder layers, each generation writes `layers_<ch>_*` files in `all_n/`
+(or `all_n/<cell line>/`) and in every `<n>/` (docs/intensity.md, section 6b): a ladder plot per reference
+(rows = treatments, columns = layers, effect with its interval), an absolute version, the effects table and a
+concordance table that names the analysis step that changes the conclusion. They are built from the per-layer
+results above (the layers are ordinary registry metrics), so their rows in `stats_long.csv` are the usual ones of
+each layer metric (no extra rows): all n = the model contrasts (one n: estimates, "needs ≥ 2 n"); per n = the
+descriptive per-n effects with technical intervals. Manifest kind: `"layers"`.
+
+### When a generation is rebuilt
+
+`generation.json` records the counts fingerprint and, since this version, `inputs`: fingerprints of the per-image
+intensity columns (`intensity_*`, `readout_frac_positive_*`, `n_measured_*`) and of the design / metadata, with a
+readable summary (mean per column and n, cut-off rule and value per n and channel, cell line per n). On `run` /
+`regen`:
+
+- counts changed (automatic counts or a manual column): **not overwritten**, warning with the command to rebuild
+  (`--rebuild gN`), as before; the warning also lists any intensity / design change;
+- counts unchanged but intensity results changed (new cut-off lock, positivity, flat-field or measurement settings)
+  or the design / metadata changed: **rebuilt automatically**, because nothing manual lives in a generation and a
+  stale one would contradict `intensity/` (rewritten on every run). The log line and `generation.json`
+  (`rebuilt_because`) say exactly what changed, e.g. `Ki67 cut-off (mean) in n1: lod 36.7 -> manual 120`;
+- a generation built by an older kerncount (no `inputs`): left as it is, with a note and the rebuild command.
 
 ## 7. Excel workbook (`results.xlsx`)
 All previous sheets are kept (all-n sheets gain `metric` / `cell_line` columns). Added in this revision:

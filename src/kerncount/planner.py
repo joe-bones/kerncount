@@ -105,11 +105,20 @@ def references(settings: dict, present) -> list[str]:
 
 
 def treatment_classes(settings: dict, treatments, refs) -> tuple[dict[str, str], str, list[str]]:
-    """{treatment: class}, source, notes. analysis.classes (class -> names or glob patterns such as "miR-*") wins;
-    otherwise references (reference + normalise_to) are "controls" and everything else "treatments"."""
-    spec = settings.get("analysis", {}).get("classes")
+    """{treatment: class}, source, notes; the same rule as the statistics (models.config):
+    "auto" (default) = one class per non-control treatment, references (reference + normalise_to) pooled as
+    "controls"; a table (class -> names or glob patterns such as "miR-*") = those classes; anything else (e.g.
+    "two") = references vs everything else ("treatments")."""
+    from . import models
+
+    raw = settings.get("analysis", {}).get("classes", "auto")
+    mode = models.classes_mode(raw)
+    spec = models.parse_classes(raw) if mode == "user" else {}
     notes = []
-    if isinstance(spec, dict) and spec:
+    if mode == "auto":
+        return ({t: CONTROLS if t in refs else str(t) for t in treatments},
+                "auto (one class per non-control treatment; controls pooled)", notes)
+    if spec:
         out = {}
         for t in treatments:
             for cls, pats in spec.items():
@@ -631,9 +640,17 @@ def build(df: pd.DataFrame, settings: dict, project_dir=None, seed: int = 0, n_d
                                      float(np.exp(x.mean() + tc * sd / np.sqrt(len(x))))])
             effects.append(e)
 
-    # default class: the non-control class with most treatments
+    # default class (generic planning effects): the non-control class with most treatments; with one class per
+    # treatment ("auto") the typical one: upper median of the biological variance vs the main reference
     counts = pd.Series([c for t, c in classes.items() if t not in refs]).value_counts()
     default_class = str(counts.index[0]) if len(counts) else CONTROLS
+    if class_source.startswith("auto") and refs:
+        cand = sorted((v["var"], k.split("|", 1)[1]) for k, v in bio.items()
+                      if k.startswith(refs[0] + "|") and k.split("|", 1)[1] != CONTROLS)
+        if cand:
+            default_class = cand[len(cand) // 2][1]
+            notes.append(f"classes auto: one class per treatment; generic planning effects use '{default_class}' "
+                         "(median biological variance vs " + refs[0] + ")")
 
     def comp_entry(name, var, draws, dfree, note=""):
         if var is None:

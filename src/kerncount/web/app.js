@@ -255,7 +255,7 @@ function tomlTable(v) {  // kind "table": { name = ["a", "b"] } shown as TOML in
   const keys = Object.keys(v || {});
   return keys.length ? `{ ${keys.map(k => `${k} = [${[].concat(v[k]).map(x => JSON.stringify(x)).join(", ")}]`).join(", ")} }` : "{}";
 }
-function fieldInput(sec, f, v) {
+function itemInput(sec, f, v) {
   const id = `f_${sec}_${f.key}`;
   switch (f.kind) {
     case "bool": return `<label><input type="checkbox" id="${id}" ${v ? "checked" : ""}> on</label>`;
@@ -270,7 +270,7 @@ function fieldInput(sec, f, v) {
     default: return `<input type="text" id="${id}" value="${esc(v)}" style="width:100%">`;
   }
 }
-function fieldValue(sec, f) {
+function itemValue(sec, f) {
   const id = `f_${sec}_${f.key}`;
   if (f.kind === "bool") return $(id).checked;
   if (f.kind === "multi") return [...document.querySelectorAll(`[data-multi="${id}"]:checked`)].map(x => x.value);
@@ -285,23 +285,23 @@ async function renderSettings(b) {
       <button onclick="saveSettings(true)">Save &amp; run analysis</button>
       <span class="muted small" id="setState"></span><span class="spacer"></span>
       <button onclick="resetSettings()">Reset to defaults…</button></div>
-    ${p.schema.map(sec => `<div class="form-sec"><h3>${esc(sec.title)}</h3>${sec.fields.map(f => {
+    ${p.schema.map(sec => `<div class="form-sec"><h3>${esc(sec.title)}</h3>${sec.items.map(f => {
       const v = (p.settings[sec.section] || {})[f.key];
-      return `<div class="field" data-sec="${sec.section}" data-key="${f.key}"><div><div class="lbl">${esc(f.label || f.key)} ${f.reseg ? `<span class="tag blue">re-detects</span>` : ""}</div>
+      return `<div class="form-item" data-sec="${sec.section}" data-key="${f.key}"><div><div class="lbl">${esc(f.label || f.key)} ${f.reseg ? `<span class="tag blue">re-detects</span>` : ""}</div>
         <div class="key">${sec.section}.${f.key} · default ${esc(JSON.stringify(f.default))}</div></div>
-        <div>${fieldInput(sec.section, f, v)}</div>${f.help ? `<div class="help">${esc(f.help)}</div>` : ""}</div>`; }).join("")}</div>`).join("")}
+        <div>${itemInput(sec.section, f, v)}</div>${f.help ? `<div class="help">${esc(f.help)}</div>` : ""}</div>`; }).join("")}</div>`).join("")}
     <details class="card"><summary>Advanced: edit settings.toml as text</summary>
       <p class="muted small">For settings not shown above. The file must stay valid TOML.</p>
       <textarea id="rawToml" rows="24" spellcheck="false">${esc(p.settings_text)}</textarea>
       <div class="row" style="margin-top:8px"><button onclick="saveRawSettings()">Save text</button></div></details>`;
-  b.querySelectorAll(".field").forEach(el => el.addEventListener("input", () => { el.classList.add("changed"); $("setState").textContent = "unsaved changes"; }));
-  b.querySelectorAll(".field").forEach(el => el.addEventListener("change", () => { el.classList.add("changed"); $("setState").textContent = "unsaved changes"; }));
+  b.querySelectorAll(".form-item").forEach(el => el.addEventListener("input", () => { el.classList.add("changed"); $("setState").textContent = "unsaved changes"; }));
+  b.querySelectorAll(".form-item").forEach(el => el.addEventListener("change", () => { el.classList.add("changed"); $("setState").textContent = "unsaved changes"; }));
 }
 async function saveSettings(thenRun) {
   const values = {}, p = S.project;
-  for (const sec of p.schema) for (const f of sec.fields) {
-    const el = document.querySelector(`.field[data-sec="${sec.section}"][data-key="${f.key}"]`);
-    if (el && el.classList.contains("changed")) (values[sec.section] ||= {})[f.key] = fieldValue(sec.section, f);
+  for (const sec of p.schema) for (const f of sec.items) {
+    const el = document.querySelector(`.form-item[data-sec="${sec.section}"][data-key="${f.key}"]`);
+    if (el && el.classList.contains("changed")) (values[sec.section] ||= {})[f.key] = itemValue(sec.section, f);
   }
   if (!Object.keys(values).length && !thenRun) return toast("Nothing changed");
   if (Object.keys(values).length) await post("/api/settings", { experiment: S.exp, values });

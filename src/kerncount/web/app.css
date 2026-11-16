@@ -51,10 +51,10 @@ table.grid{border-collapse:collapse;width:100%;background:#fff;font-size:13px}
 .tablewrap{max-height:70vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
 .tablewrap .grid th{top:0}
 .form-sec{background:#fff;border:1px solid var(--line);border-radius:10px;padding:6px 16px 12px;margin-bottom:14px}
-.field{display:grid;grid-template-columns:260px 1fr;gap:4px 16px;padding:9px 0;border-bottom:1px solid #f0f1f4;align-items:start}
-.field:last-child{border-bottom:0}.field .lbl{font-weight:500}.field .help{grid-column:2;color:var(--muted);font-size:12px}
-.field .key{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#9ca3af}
-.field.changed .lbl::after{content:" •";color:var(--orange)}
+.form-item{display:grid;grid-template-columns:260px 1fr;gap:4px 16px;padding:9px 0;border-bottom:1px solid #f0f1f4;align-items:start}
+.form-item:last-child{border-bottom:0}.form-item .lbl{font-weight:500}.form-item .help{grid-column:2;color:var(--muted);font-size:12px}
+.form-item .key{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#9ca3af}
+.form-item.changed .lbl::after{content:" •";color:var(--orange)}
 .chk{margin-right:14px;white-space:nowrap}
 .bar{position:sticky;top:48px;z-index:5;background:var(--bg);padding:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
@@ -95,4 +95,4 @@ details>summary{cursor:pointer;font-weight:600;padding:6px 0}
 .kbd{font:11px ui-monospace,monospace;border:1px solid #ccc;border-bottom-width:2px;border-radius:4px;padding:0 4px;color:#555}
 .hero{max-width:760px}
 .hero ol{padding-left:20px}.hero li{margin:4px 0}
-@media (max-width:900px){.split{grid-template-columns:1fr}.preview{position:static}#side{width:180px}.field{grid-template-columns:1fr}.field .help{grid-column:1}}
+@media (max-width:900px){.split{grid-template-columns:1fr}.preview{position:static}#side{width:180px}.form-item{grid-template-columns:1fr}.form-item .help{grid-column:1}}
