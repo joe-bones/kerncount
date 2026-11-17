@@ -347,14 +347,93 @@ def describe(table: pd.DataFrame) -> pd.DataFrame:
                          fields_max=int(per_well.max()), max_image=imgs[-1], missing_images=_numbers(missing),
                          beyond_design=_numbers(beyond), unbalanced=bool(unbalanced), single_well=len(present) == 1,
                          flags="; ".join(flags)))
-    return pd.DataFrame(rows, columns=DESCRIBE_COLUMNS)
+    out = pd.DataFrame(rows, columns=DESCRIBE_COLUMNS)
+    # auto fields per well read from the highest image number: a condition imaged in one well only (1-6) or missing
+    # its last images looks like a smaller design. Say so when the rest of its n has a different size.
+    for n, g in out[out["fields_source"] == "auto"].groupby("n"):
+        if len(g) < 2:
+            continue
+        mode = g["fields_per_well"].mode()
+        k = int(mode.max())
+        if (g["fields_per_well"] == k).sum() * 2 <= len(g):
+            continue  # no clear majority
+        for i in g.index[g["fields_per_well"] != k]:
+            r = out.loc[i]
+            note = (f"fields per well read as {r.fields_per_well} (highest image {r.max_image} / {r.wells_expected} "
+                    f"wells) but {k} in the other conditions of this n: if only one well was imaged or the last "
+                    f"images are missing, the well split is wrong; set it in {WELLS_FILE} or fix fields_per_well")
+            out.at[i, "flags"] = "; ".join(x for x in (r.flags, note) if x)
+    return out
+
+
+def absent(assigned: pd.DataFrame, settings: dict, layout: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Conditions an n does not have, as design_check rows with images = 0 and a flag (docs/design.md, "Unusual
+    designs"): a condition present in another n of the same cell line but not in this one (a missing reference is
+    named as such), and an included layout.csv folder that gave no images at all. Cell lines are never compared."""
+    cols = DESCRIBE_COLUMNS
+    if assigned.empty and (layout is None or layout.empty):
+        return pd.DataFrame(columns=cols)
+    a = settings.get("analysis", {})
+    refs = [r for r in dict.fromkeys([a.get("reference", "")] + list(a.get("normalise_to") or [])) if r]
+    neg = str((settings.get("experiment") or {}).get("negative_control", "") or "").strip()
+    W = DEFAULT_WELLS if _auto(spec(settings).wells) else spec(settings).wells
+    have = {(str(n), str(t)) for n, t in zip(assigned["n"], assigned["treatment"])} if len(assigned) else set()
+    line = {}
+    if "cell_line" in assigned and len(assigned):
+        for n, g in assigned.groupby(assigned["n"].astype(str)):
+            line[n] = "; ".join(sorted(set(g["cell_line"].fillna("").astype(str)) - {""}))
+    tps = {}
+    if "timepoint" in assigned and len(assigned):
+        tps = assigned.groupby(assigned["n"].astype(str))["timepoint"].first().to_dict()
+    ns = sorted({n for n, _ in have})
+    rows, seen = [], set()
+
+    def row(n, t, flag):
+        seen.add((n, t))
+        rows.append(dict(n=n, treatment=t, timepoint=tps.get(n, ""), images=0, wells_expected=W, wells_present=0,
+                         fields_per_well=np.nan, fields_source="", fields_min=0, fields_max=0, max_image=np.nan,
+                         missing_images="", beyond_design="", unbalanced=False, single_well=False, flags=flag))
+
+    if layout is not None and len(layout) and {"n", "treatment"} <= set(layout.columns):
+        inc = layout["include"].astype(str).str.strip().str.lower().isin(("yes", "y", "true", "1")) \
+            if "include" in layout else pd.Series(True, index=layout.index)
+        for r in layout[inc].itertuples():
+            n, t = str(r.n), str(r.treatment)
+            if (n, t) not in have and (n, t) not in seen:
+                folder = f"{getattr(r, 'n_folder', '')}/{getattr(r, 'treatment_folder', '')}".strip("/")
+                row(n, t, f"no images: folder {folder or t} is empty (or holds no numbered .tif files); "
+                          f"{t} is missing from {n.split('_')[0]}")
+    for t in sorted({t for _, t in have}):
+        if t == neg:
+            continue
+        with_t = [n for n in ns if (n, t) in have]
+        for n in ns:
+            if (n, t) in have or (n, t) in seen:
+                continue
+            peers = [m for m in with_t if line.get(m, "") == line.get(n, "")]
+            if not peers:
+                continue  # only other cell lines have it: never compared
+            short = ", ".join(m.split("_")[0] for m in peers)
+            if t in refs:
+                flag = (f"reference {t} absent from this n (present in {short}): comparisons vs {t} use only the "
+                        f"n's that have it; this n enters them only through the other reference(s)")
+            else:
+                flag = (f"condition absent from this n (present in {short}): its comparisons use only the n's that "
+                        "have it")
+            row(n, t, flag)
+    for r in rows:  # an empty folder of a condition the other n's have: say both
+        if r["flags"].startswith("no images") and r["treatment"] in refs:
+            r["flags"] += f" (reference {r['treatment']}: comparisons vs {r['treatment']} use only the n's that have it)"
+    return pd.DataFrame(rows, columns=cols)
 
 
 def summary_line(desc: pd.DataFrame, settings: dict) -> str:
     """One log line, e.g. 'Design: 4 n, 8 conditions, 2 wells x 6 fields (auto); 1 condition unbalanced
-    (n1 / CL075: 11 images)'."""
+    (n1 / CL075: 11 images)'. Rows with images = 0 (`absent`) are listed as missing conditions."""
+    gone = desc[desc["images"] == 0] if len(desc) else desc
+    desc = desc[desc["images"] != 0] if len(desc) else desc
     if desc.empty:
-        return "Design: no images"
+        return "Design: no images" + (f"; {len(gone)} condition(s) without images, see design_check.csv" if len(gone) else "")
     sp = spec(settings)
 
     def rng(col):
@@ -380,7 +459,11 @@ def summary_line(desc: pd.DataFrame, settings: dict) -> str:
         line += f"; {len(unb)} condition{'s' * (len(unb) != 1)} unbalanced ({listing(unb)})"
     if len(other):
         line += f"; {len(other)} other condition{'s' * (len(other) != 1)} flagged ({listing(other)})"
-    if len(unb) or len(other):
+    if len(gone):
+        bits = [f"{r.n.split('_')[0]} / {r.treatment}" for r in gone.itertuples()]
+        line += (f"; {len(gone)} condition{'s' * (len(gone) != 1)} missing from an n ("
+                 + ", ".join(bits[:4]) + (f", +{len(bits) - 4} more" if len(bits) > 4 else "") + ")")
+    if len(unb) or len(other) or len(gone):
         line += "; see design_check.csv"
     return line
 

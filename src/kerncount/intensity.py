@@ -513,6 +513,28 @@ def derive(nuc: pd.DataFrame, ffs: dict, k: float) -> pd.DataFrame:
     return nuc
 
 
+SUSPECT_SHARE = 0.5  # at least this share of a folder's fields failing the channel check: the folder is suspect
+
+
+def field_fails_check(fi: dict) -> bool:
+    """A field whose marker file does not look like the partner of its nuclear file."""
+    b = fi.get("brightness") or {}
+    mis = any(np.isfinite(a.get("corr", np.nan)) and a["corr"] < MISPAIR_CORR
+              for a in (fi.get("alignment") or {}).values())
+    return bool(mis or (b and not b.get("nuclear_brightest", True)))
+
+
+def suspect_folders(finfos: list) -> dict:
+    """{(n, treatment): (failing fields, fields)} for folders where at least SUSPECT_SHARE of the fields (and at
+    least 2) fail the channel check."""
+    tally: dict = {}
+    for r, _, fi, _ in finfos:
+        t = tally.setdefault((r.n, r.treatment), [0, 0])
+        t[0] += field_fails_check(fi)
+        t[1] += 1
+    return {k: (b, n) for k, (b, n) in tally.items() if b >= 2 and b >= SUSPECT_SHARE * n}
+
+
 def process(prj, fields: list, log=print) -> dict | None:
     """Measure marker channels per nucleus for every field, estimate flat fields, decide cut-offs, add per-image
     columns to the rows (in place) and write the intensity outputs. Does nothing (returns None) when the images
@@ -566,6 +588,19 @@ def process(prj, fields: list, log=print) -> dict | None:
                 m = (nuc["n"] == r.n) & (nuc["treatment"] == r.treatment) & (nuc["image"] == r.image) & (nuc["channel"] == ch)
                 nuc.loc[m, "excluded"] = "marker image does not match the nuclear image"
                 nuc.loc[m, "measurable"] = False
+
+    # a whole folder whose channel files do not behave like marker + nuclear pairs (most fields mis-paired, or the
+    # nuclear channel not the brightest on its nuclei): the folder may hold only one channel, or a missing / extra
+    # file shifted the pairing. Its marker readouts are left empty (docs/design.md, "Unusual designs").
+    suspect = suspect_folders(finfos)
+    for (n, t), (bad, tot) in suspect.items():
+        m = (nuc["n"] == n) & (nuc["treatment"] == t)
+        nuc.loc[m, "excluded"] = "channel files of this folder do not pair up"
+        nuc.loc[m, "measurable"] = False
+        log(f"  WARNING: {n} / {t}: {bad} of {tot} fields fail the channel check (mis-paired files or the nuclear "
+            f"channel is not the brightest): the folder may hold only one channel, or a missing / extra file shifted "
+            f"the pairing. Its marker readouts are left empty; its counts come from every second file only. Check "
+            f"the files (Intensity → Channel checks).")
 
     # cut-offs per n and channel
     pos_ch = positivity_channels(s, [names[c] for c in chans])
@@ -633,6 +668,10 @@ def process(prj, fields: list, log=print) -> dict | None:
                 flags.append(f"{ch} shifted {a['shift_px']:.1f} px vs {names[seg_ch]}" + (" (corrected)" if a.get("corrected") else ""))
             if np.isfinite(a.get("corr", np.nan)) and a["corr"] < MISPAIR_CORR:
                 flags.append(f"{ch} barely resembles {names[seg_ch]} (r = {a['corr']:.2f}): files mis-paired? Marker readouts left empty")
+        if (r.n, r.treatment) in suspect:
+            bad, tot = suspect[(r.n, r.treatment)]
+            flags.append(f"folder fails the channel check ({bad} of {tot} fields): only one channel, or files "
+                         "mis-paired? Marker readouts of the whole folder left empty")
         if fi.get("alignment") or b:
             row["channel_check"] = "; ".join(flags)
         for c in chans:

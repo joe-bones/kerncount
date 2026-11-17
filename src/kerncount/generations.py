@@ -336,6 +336,50 @@ def _write_layers(out: Path, blocks, results: dict, metrics_live: dict, settings
     return info
 
 
+def coverage_notes(t: pd.DataFrame, metrics_live: dict) -> list[str]:
+    """Plain-language notes on data that drop out of the statistics without an error (docs/design.md, "Unusual
+    designs"): a well or a whole condition with no usable field left (QC low / manual exclusions), and a condition
+    that has fields but no value of a readout in an n (e.g. no measurable nuclei for % positive)."""
+    notes = []
+    exc = t["excluded"].astype(bool)
+    for (n, tr), g in t.groupby(["n", "treatment"], sort=True):
+        ok = ~exc.loc[g.index]
+        if not ok.any():
+            notes.append(f"{n} / {tr}: no usable field (all {len(g)} excluded: {_why(g)}); left out of every statistic")
+            continue
+        if "well" in g:
+            for w, gw in g.groupby("well"):
+                if not (~exc.loc[gw.index]).any():
+                    notes.append(f"{n} / {tr}: well {int(w)} has no usable field (all {len(gw)} excluded: {_why(gw)}); "
+                                 f"this condition rests on {g.loc[ok, 'well'].nunique()} well(s) in {n}")
+    live = t[~exc]
+    for m, met in metrics_live.items():
+        if met.column == "count" or met.column not in live:
+            continue
+        v = pd.to_numeric(live[met.column], errors="coerce")
+        has = v.notna().groupby([live["n"], live["treatment"]]).any()
+        none = has[~has]
+        if none.empty:
+            continue
+        by_tr: dict[str, list[str]] = {}
+        for (n, tr) in none.index:
+            by_tr.setdefault(tr, []).append(str(n))
+        for tr, ns in by_tr.items():
+            everywhere = not has.loc[(slice(None), tr)].any()
+            what = "no value in any field" + (" of any n" if everywhere else f" in {', '.join(ns)}")
+            why = " (e.g. no measurable nuclei)" if met.kind == "fraction" else ""
+            notes.append(f"{met.label}: {tr} has {what}{why}; "
+                         + ("not testable for this readout" if everywhere else "those n's are left out of its comparisons"))
+    return notes
+
+
+def _why(g: pd.DataFrame) -> str:
+    src = g["source"].astype(str) if "source" in g else pd.Series("", index=g.index)
+    kinds = sorted({"QC low" if "QC low" in s else ("negative control" if "negative control" in s else "manual")
+                    for s in src})
+    return ", ".join(kinds)
+
+
 def _cell_lines(t: pd.DataFrame) -> list[str]:
     if "cell_line" not in t:
         return []
@@ -453,6 +497,9 @@ def _build_into(out: Path, project: Path, gen: dict, image_table: pd.DataFrame, 
             ls = sorted(set(g["cell_line"]) - {""})
             line_of_n[n] = ls[0] if len(ls) == 1 else ("; ".join(ls) if ls else "")
     cov = models.config(settings, live["treatment"].unique()).density
+    data_notes = coverage_notes(t, metrics_live)
+    for x in data_notes:
+        print(f"  note: {x}")
     order_all = analysis.treatment_order(live["treatment"], a["treatment_order"])  # stable colours across plots
 
     for n in ns_all:
@@ -532,6 +579,10 @@ def _build_into(out: Path, project: Path, gen: dict, image_table: pd.DataFrame, 
                 continue
             res = models.analyse(vals, met, settings, positions_ok)
             results[key(m)] = res
+            for x in models.boundary_notes(vals, met):
+                x = f"{met.label}{f' ({line})' if len(blocks) > 1 else ''}: {x}"
+                if x not in data_notes:
+                    data_notes.append(x)
             means = vals.groupby("treatment")["value"].mean()
             main_ref = cfg.primary_ref if cfg.primary_ref in set(vals["treatment"]) else \
                 next((c for c in cfg.controls if c in set(vals["treatment"])), None)
@@ -584,6 +635,7 @@ def _build_into(out: Path, project: Path, gen: dict, image_table: pd.DataFrame, 
         notes.append(f"negative control '{neg}' set but not present in the data")
     if mixed_line_note:
         notes.append(mixed_line_note)
+    notes += data_notes
     if len(blocks) > 1:
         notes.append(f"cell lines are never pooled: all-n analysis run separately for {', '.join(b[0] for b in blocks)} "
                      f"(folders {', '.join((b[1].relative_to(out)).as_posix() for b in blocks)})")

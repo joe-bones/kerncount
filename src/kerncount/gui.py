@@ -576,8 +576,12 @@ def attention_items(prj: Path, s: dict, man: dict, gen: str | None, qc: list[dic
     mis = [r for r in al if "mis-paired" in r.get("flags", "") or (fnum(r.get("corr")) is not None and fnum(r.get("corr")) < 0.2)]
     shift = [r for r in al if r not in mis and "shifted" in r.get("flags", "")]
     if mis:
+        folders = sorted({f"{r['n']} / {r['treatment']}" for r in mis if "folder fails the channel check" in r.get("flags", "")})
         items.append(dict(level="error", key="mispaired", title=f"{len(mis)} field(s) with mis-paired channel files",
-                          text="The marker image does not show the same cells as its DAPI image, so these fields keep their "
+                          text=(f"Whole folders fail the channel check ({'; '.join(folders)}): they may hold only one "
+                                "channel, or a missing or extra file shifted the pairing; their marker readouts are left "
+                                "empty and their counts come from every second file. " if folders else "")
+                               + "The marker image does not show the same cells as its DAPI image, so these fields keep their "
                                "count but get no marker readouts: " + "; ".join(
                                    f"{r['n']} / {r['treatment']} / field {r['image']} (files {r.get('files', '')}, r = {r.get('corr', '')})" for r in mis)
                                + ". Check the files: a missing or duplicated file shifts the pairing.",
@@ -590,7 +594,30 @@ def attention_items(prj: Path, s: dict, man: dict, gen: str | None, qc: list[dic
                                "per-nucleus values; large ones do (channels.align = \"correct\" shifts them back).",
                           evidence=[ev("alignment table", type="table", path="intensity/alignment.csv")]))
     # design flags
-    flagged = [r for r in design if r.get("flags", "").strip()]
+    # files the folder scan could not use (interleaved: a leftover unpaired file; non-numbered files; empty folders)
+    lay = [r for r in read_dicts(prj / "layout.csv")
+           if any(k in r.get("note", "") for k in ("leftover", "skipped non-numbered", "no images found"))
+           and r.get("include", "yes").strip().lower() in ("yes", "y", "true", "1", "")]
+    if lay:
+        items.append(dict(level="warn", key="files", title=f"{len(lay)} folder(s) with files that were not used",
+                          text="; ".join(f"{r.get('n', '')} / {r.get('treatment', '')} ({r.get('treatment_folder', '')}): "
+                                         + " | ".join(x for x in r.get("note", "").split(" | ")
+                                                      if any(k in x for k in ("leftover", "skipped", "no images")))
+                                         for r in lay[:8])
+                               + (f"; and {len(lay) - 8} more" if len(lay) > 8 else "")
+                               + ". With channels in separate files, an unpaired file means one channel file is missing "
+                                 "or extra: check that the pairs (marker, then DAPI) are still in step.",
+                          evidence=[ev("Layout", type="go", section="layout")]))
+    gone = [r for r in design if r.get("flags", "").strip() and str(r.get("images", "")).strip() == "0"]
+    if gone:
+        items.append(dict(level="warn", key="absent", title=f"{len(gone)} condition(s) missing from an n",
+                          text="; ".join(f"{r['n']} / {r['treatment']}: {r['flags']}" for r in gone[:8])
+                               + (f"; and {len(gone) - 8} more" if len(gone) > 8 else "")
+                               + ". The statistics use the n's that have each condition (a comparison needs ≥ 2 n "
+                                 "with both groups); check that no folder was left out by mistake.",
+                          evidence=[ev("design_check.csv", type="table", path="design_check.csv"),
+                                    ev("Layout", type="go", section="layout")]))
+    flagged = [r for r in design if r.get("flags", "").strip() and r not in gone]
     if flagged:
         items.append(dict(level="warn", key="design", title=f"{len(flagged)} condition(s) with an unusual design",
                           text="; ".join(f"{r['n']} / {r['treatment']}: {r['flags']}" for r in flagged[:8])

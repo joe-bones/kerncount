@@ -411,6 +411,12 @@ def check_design(prj: Project, df: pd.DataFrame) -> pd.DataFrame:
     except ValueError as e:
         raise SystemExit(f"Plate design: {e}") from None
     desc = design.describe(assigned)
+    layout = discover.read_table(prj.path / "layout.csv") if (prj.path / "layout.csv").exists() else None
+    gone = design.absent(assigned, prj.settings, layout)
+    if len(gone):  # conditions an n lacks (missing reference / treatment, empty folder): flagged, never silent
+        desc = pd.concat([desc, gone], ignore_index=True) if len(desc) else gone
+        for r in gone.itertuples():
+            log(f"  WARNING: {r.n} / {r.treatment}: {r.flags}")
     desc.to_csv(prj.path / "design_check.csv", index=False, sep=prj.delim)
     for note in design.spec(prj.settings).notes:
         log(f"  note: {note}")

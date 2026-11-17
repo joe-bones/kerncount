@@ -254,7 +254,7 @@ class Scale:
             return expit(mu)
         if self.kind == "difference":
             return mu
-        return np.exp(mu) - self.shift
+        return np.maximum(np.exp(mu) - self.shift, 0.0)  # an offset never makes a mean (or its CI) negative
 
     @property
     def estimate_type(self) -> str:
@@ -1510,7 +1510,7 @@ def _analyse(df, metric, settings, positions_ok, leave_one_out, density=True) ->
     if n_bad:  # log impossible for some wells: analyse the whole metric as a raw-scale difference (I3)
         metric = raw_scale_metric(metric)
     p = prepare(df, metric, cfg, positions_ok)
-    notes = list(p.notes)
+    notes = list(p.notes) + boundary_notes(df, metric)
     if n_bad:
         notes.insert(0, f"{RAW_SCALE_NOTE} ({n_bad} {cfg.unit} value(s) <= 0)")
     dens = None
@@ -1561,6 +1561,28 @@ def _analyse(df, metric, settings, positions_ok, leave_one_out, density=True) ->
         res.loo, res.loo_summary = loo(df, metric, settings, positions_ok, use_model=cfg.primary_test == "mixed",
                                        start=f.spec, full=res.contrasts, theta0=f.reml.theta)
     return res
+
+
+def boundary_notes(df: pd.DataFrame, metric: Metric) -> list[str]:
+    """Conditions sitting at the edge of the scale in every field (docs/design.md, "Unusual designs"): no nuclei at
+    all (count 0: ratios rest on the +0.5 offset), or 0% / 100% positive (the empirical logit keeps them finite, so
+    the odds ratio is arbitrary; the percentage-point difference is the readout)."""
+    if metric.kind not in ("count", "fraction") or "value" not in df:
+        return []
+    v = pd.to_numeric(df["value"], errors="coerce")
+    out = []
+    for t, g in v.groupby(df["treatment"], sort=True):
+        g = g.dropna()
+        if g.empty:
+            continue
+        if metric.kind == "count" and (g == 0).all():
+            out.append(f"{t}: 0 nuclei in every field; its ratios rest on the +{COUNT_OFFSET:g} offset (read them as "
+                       "'close to 0', an upper bound)")
+        elif metric.kind == "fraction" and ((g == 0).all() or (g == 1).all()):
+            pct = "0%" if (g == 0).all() else "100%"
+            out.append(f"{t}: {pct} in every field; the empirical logit keeps it finite, so its odds ratios are "
+                       "arbitrary: read the percentage-point difference")
+    return out
 
 
 LOO_COLUMNS = ["dropped_n", "family", "comparison", "estimate_type", "estimate", "ci_low", "ci_high",
