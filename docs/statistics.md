@@ -130,9 +130,11 @@ y = treatment                      (fixed; + timepoint when >= 2 timepoints are 
   + field residual
 ```
 
-- **Treatment classes** (`[analysis] classes`). **Default `"auto"`: one class per non-control treatment, the
-  control groups (`reference` + `normalise_to`) pooled in `controls`.** Each comparison then rests on the
-  n-to-n variability of its own treatment (plus the controls'), like the ratio paired t-test but using all wells.
+- **Treatment classes** (`[analysis] classes`). **Default `"auto"`: one class per treatment, each control
+  (`reference` + `normalise_to`) included as its own class.** Each comparison then rests on the n-to-n
+  variability of its own two groups, like the ratio paired t-test but using all wells. Pooling the controls (the
+  previous "auto") let a vehicle that varies between n's borrow the stability of Control: "vs LyoVec" had a type
+  I error of 0.13 at 4 n's when LyoVec varies and Control does not (row "vehicle varies" below; now nominal).
   Pooling several treatments in one class was shown to give a type I error of 0.16 for a treatment that varies
   more than the rest of its class (table below); `"auto"` removes that failure mode. Other settings: `{}` =
   `controls` vs everything else (`treatments`; the earlier default), or a table `{ mirna = ["miR-*"] }` (`*` is a
@@ -156,6 +158,28 @@ y = treatment                      (fixed; + timepoint when >= 2 timepoints are 
 - **Fallbacks** (recorded as `model`): class-specific variances → one common n × treatment variance → without
   position → RM ANOVA. Failure = an error, no convergence, or a singular fixed-effect covariance. A variance
   estimated at zero is *not* a failure; it is listed in the notes ("estimated as zero (boundary)").
+
+### Background-subtracted intensities: some well means ≤ 0 (raw scale)
+A positive-kind metric (intensities, areas, ...) is analysed on the log scale, so its effects are ratios. A
+background-subtracted intensity of a dim stain can have well means at or below 0 (e.g. true mean 1, field SD 3).
+The log of those wells is impossible; dropping them (as before) keeps only the brighter wells and biases the
+effect toward 1. Now, when **any analysed well mean is ≤ 0** (field unit: any field < 0;
+`models.needs_raw_scale`), the whole metric is analysed **on the raw scale as a difference** (identity link,
+intensity units; `metrics` kind `difference`):
+
+- effects are **differences** in intensity units (`estimate_type = "difference"`, 0 = no effect); means are raw
+  means; variance components are on the raw scale (no CV); per-n effects are differences of the field means with
+  their technical intervals; there is no % of reference;
+- it is flagged everywhere: `model_status[...]` `raw_scale = true`, `effect_type = "difference"` and
+  `raw_scale_warning`; the manifest's `estimands[m].headline = "difference"`; the model notes and
+  `<m>_model_info.csv` start with "RAW SCALE (difference) ..."; every plot footer of the metric; `stats_long.csv`
+  `note` of every model row; the layer ladder draws that layer on its own linear axis (orange panel, "DIFFERENCE,
+  raw units", 0 = no effect) and says so in its footer; the classical ratio t-test notes the n's it had to leave
+  out (a ratio of a mean ≤ 0 is impossible);
+- the equivalence margin for such a metric is ± margin × the comparator mean (not testable when that mean ≤ 0).
+
+Tested with a true mean of 1, field SD 3, 4 n's (`tests/test_estimands.py`): the +2 difference is recovered
+with a CI covering it, and an all-positive copy of the same data stays on the log scale.
 
 ### Degrees of freedom (why the p-values are honest with 3–6 n's)
 The usual Wald z test treats the variance estimates as exact; with 4 n's that roughly triples the false-positive
@@ -205,7 +229,9 @@ Control does not, both in the pooled `controls` class) the rate reaches 0.057 at
 
 ### Multiplicity: comparison families
 Within each family the p-values are adjusted by the **single-step multivariate t** method (Dunnett-type; the
-correlations come from the model, each comparison uses its own df) and simultaneous 95% CIs are given
+correlations come from the model, each comparison uses its own df; the numerical integration is kept within the
+exact bounds raw p ≤ p_adj ≤ min(1, k × raw p), so a far-tail p_adj is never below the raw p nor exactly 0) and
+simultaneous 95% CIs are given
 (`ci_low_adj`, `ci_high_adj`; dashed on the forest plots). Families:
 
 | family | setting | comparisons |
@@ -218,13 +244,22 @@ correlations come from the model, each comparison uses its own df) and simultane
 
 ### Equivalence test for the vehicle (TOST)
 "Not significant" for LyoVec vs Control does **not** mean "no vehicle effect"; with 3 n's almost nothing is
-significant. The vehicle check asks the right question: is the ratio vehicle / control inside the margin
-(`equivalence_margin = 0.2` → between 1/1.2 = 0.83 and 1.2)? Two one-sided t tests (TOST) with the model's SE and
-df; the 90% CI is reported.
+significant. The vehicle check asks the right question: is the vehicle / control effect inside the margin? Two
+one-sided t tests (TOST) with the model's SE and df, Holm-adjusted across the vehicle pairs (m pairs).
 
-- **equivalent**: the whole 90% CI lies inside the margin (TOST p < 0.05);
-- **not equivalent**: the whole 90% CI lies outside the margin;
+- **margin**: count and positive metrics: the ratio within `[1/(1 + equivalence_margin), 1 + equivalence_margin]`
+  (0.2 → 0.83–1.20); **fractions** (% positive): the difference within **± `equivalence_margin_pp`
+  percentage points** (default 5; odds ratios are not used: an odds-ratio margin means very different things at
+  5% and at 50% positive); raw-scale metrics (section 3, background-subtracted intensities): ± margin × the
+  comparator mean, in intensity units. Rows carry `margin_low` / `margin_high`.
+- **equivalent**: the Holm-adjusted TOST p < 0.05, i.e. the whole (1 − 2·0.05/m) CI lies inside the margin (90%
+  CI for one pair, 95% for two; the level is in `test` and `note`);
+- **not equivalent**: that CI lies wholly outside the margin;
 - **inconclusive**: anything else — the data cannot tell. With 3–4 n's this is the expected answer.
+
+The verdict and the reported CI use the same adjusted level (earlier versions called a pair "equivalent" from
+the unadjusted 90% CI even when its Holm-adjusted p was above 0.05). Fraction intervals and p come from the same
+draws of the model means as the percentage-point CIs (4000 draws, fixed seed).
 
 ### Outputs per metric (`all_n/`)
 | file | content |
@@ -234,8 +269,8 @@ df; the 90% CI is reported.
 | `<m>_variance_components.csv/.png` | variance per level (n, n × treatment per class, well, position, field) on the log scale, SD, ≈ CV, % of total, approximate CI (Wald on log-variance from the expected information; flagged "too uncertain" or "at zero" when not meaningful; residual: chi-square) |
 | `<m>_diagnostics.png` | residuals vs fitted, normal QQ, estimated random effects per n |
 | `<m>_model_info.csv` | model used, formula, df rule, convergence, estimation, notes, failed attempts |
-| `<m>_loo.csv`, `<m>_loo_summary.csv` | leave-one-n-out with the primary test (estimate, CI, p, adjusted p for every drop) and per comparison `stable = yes/no` (same direction **and** same significance whichever n is dropped) |
-| `<m>_per_n_ratios.csv`, `<m>_per_n_ratio_vs_<control>.png` | the effect in every n: `ratio` (model scale), `ratio_of_means`, `pp_difference` (fractions), technical interval `tech_ci_low/high` + `interval` (descriptive) |
+| `<m>_loo.csv`, `<m>_loo_summary.csv` | leave-one-n-out with the primary test (estimate, CI, p, adjusted p for every drop) and per comparison `stable = yes/no` (same direction **and** same significance whichever n is dropped); with 2 n's `stable = "not testable"` (dropping one leaves one n: no test). Each refit is a multi-start REML fit like the main one (every default start plus the full fit's variances; only the slow statsmodels start is skipped) |
+| `<m>_per_n_ratios.csv`, `<m>_per_n_ratio_vs_<control>.png` | the effect in every n: `ratio` (model scale), `ratio_of_means`, `pp_difference` (fractions), `difference` (raw-scale metrics), technical interval `tech_ci_low/high` + `interval` (descriptive) |
 | `<fraction>_density_adjusted_means.csv`, `_density_adjusted_contrasts.csv`, `_density.png` | density-adjusted model (section 3, density) |
 | `count_position_effect.png` | the position pattern per n |
 
@@ -262,6 +297,9 @@ The all-n level keeps **exactly the same files, columns and plot layout** whatev
 If the per-image table carries a `cell_line` column (from the design layer; "" = unknown) with more than one
 non-empty value, the all-n analysis runs once per cell line in **`all_n/<cell line>/`** (rows with an empty
 cell line form `all_n/unknown/`). One line (or no column): `all_n/` as before. Per-n folders are unaffected.
+One named line plus n's without a cell line stay one block (there is nothing to split them by), but it is
+labelled **"U251 + unlabelled"** (`cell_line` in stats_long / manifest), never plain "U251", with a warning and a
+note naming the unlabelled n's. The planner follows the same blocks (docs/planner.md).
 Manifest: `cell_lines`, `all_n_folders` (cell_line, path, n_count), `cell_line` on every file entry,
 `model_status` keyed `<cell line>/<metric>`; `stats_long.csv` has a `cell_line` column.
 
@@ -320,13 +358,13 @@ One row per test result, for interactive filtering. Columns:
 | `test` | plain name of the test (e.g. `Dunnett vs LyoVec (RM ANOVA, pooled error; Prism standard)`) |
 | `comparison` | `A vs B`, a treatment (estimated means), a factor (omnibus) or `all` |
 | `estimate` | the effect |
-| `estimate_type` | `ratio`, `odds_ratio`, `difference` (raw-scale difference of means), `pp_difference` (difference in percentage points; the headline for fractions), `mean` (absolute estimated mean); empty for omnibus tests. A model comparison of a fraction has two rows with the same test: `pp_difference` (headline) and `odds_ratio` |
+| `estimate_type` | `ratio`, `odds_ratio`, `difference` (raw-scale difference of means: the RM ANOVA / Dunnett rows, and **every model row of a raw-scale metric**, section 3), `pp_difference` (difference in percentage points; the headline for fractions), `mean` (absolute estimated mean); empty for omnibus tests. A model comparison of a fraction has two rows with the same test: `pp_difference` (headline) and `odds_ratio` |
 | `ci_low`, `ci_high` | 95% CI (90% for the equivalence test); empty if not available |
 | `p`, `p_adj` | raw and family-adjusted p |
 | `significance` | stars (`ns`, `*` … `****`) or the equivalence verdict |
 | `N` | n's in the comparison (fields for per-n ratios) |
 | `model` | `classical`, `classical (fields as replicates)`, `descriptive`, or the mixed model description |
-| `note` | df, "without nX" for leave-one-out, "needs ≥ 2 n", density overlap / flag, technical-interval label, etc. |
+| `note` | df, "without nX" for leave-one-out, "needs ≥ 2 n", density overlap / flag, technical-interval label, "RAW SCALE: difference, some well means <= 0" (raw-scale metrics), etc. |
 | `estimand` | (new) what the estimate is, e.g. `ratio of mean nuclei per field`, `difference in percentage points (pooled per well; logit model)`, `difference in mean nuclei per field` |
 | `cell_line` | (new) cell line of the all-n analysis / of the n; empty with one (unknown) cell line |
 
@@ -419,6 +457,13 @@ readable summary (mean per column and n, cut-off rule and value per n and channe
   stale one would contradict `intensity/` (rewritten on every run). The log line and `generation.json`
   (`rebuilt_because`) say exactly what changed, e.g. `Ki67 cut-off (mean) in n1: lod 36.7 -> manual 120`;
 - a generation built by an older kerncount (no `inputs`): left as it is, with a note and the rebuild command.
+
+A generation is **built in `generations/gN.tmp/` and swapped in by renaming** (`fileio.swap_in`): a build that
+fails leaves the old `gN` untouched (and no `.tmp`), and on Windows a file of `gN` open in Excel gives the error
+"cannot replace gN: is a file in gN open in Excel?" with the new results waiting in `gN.tmp` (the old folder is
+not touched). Files in the old `gN` that kerncount did not write (not in its manifest, e.g. your own notes or an
+edited copy of a table) are never deleted: they are copied to **`gN/_kept/`** (path kept) and listed in the log;
+earlier `_kept/` files stay.
 
 ## 7. Excel workbook (`results.xlsx`)
 All previous sheets are kept (all-n sheets gain `metric` / `cell_line` columns). Added in this revision:

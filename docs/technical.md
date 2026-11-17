@@ -63,7 +63,15 @@ project/
 - Existing generation folders are **never overwritten by default**. If you change a manual column
   after its generation was built, `run` warns you. To rebuild it on purpose:
   `kerncount run <experiment> --rebuild g2`, or `--rebuild all`.
-- Before `counts.csv` is rewritten, the previous version is backed up to `_work/backups/`.
+- Before `counts.csv` is rewritten, the previous version is backed up to `_work/backups/`. The same holds for
+  `settings.toml` and `layout.csv` (`init --force`, `--force-layout`, the page's reset / fresh-scan buttons) and
+  `wells.csv` (`wells-template --force`): `_work/backups/<name>_<date-time>.<ext>`, never overwritten.
+- A generation is built in `generations/gN.tmp/` and renamed into place only when complete. Files you put
+  into a generation folder yourself are moved to `gN/_kept/` on a rebuild, never deleted. On Windows, a file of
+  gN open in Excel stops the swap with a clear message (close it and run again).
+- Bare experiment names are looked up in `data/` first (`kerncount run Ki67` uses `data/Ki67` even when the
+  working directory has a `Ki67` folder); a symlinked `data/<experiment>` is kept as the link (settings store
+  `../../data/<experiment>`), not its current target.
 - If your Excel saves CSV with `;`, that is fine; it is detected automatically.
 
 ### Inside a generation
@@ -90,7 +98,9 @@ g1/
 
 ## How counting works
 
-1. **StarDist** (a deep-learning model for fluorescent nuclei; pretrained model downloaded on first run) segments every nucleus. The
+1. **StarDist** (a deep-learning model for fluorescent nuclei; pretrained model downloaded on first run and saved
+   next to the package, or in `~/.kerncount/models` when the package folder is read-only, e.g. a system-wide
+   install or an app bundle; `KERNCOUNT_MODELS` overrides) segments every nucleus. The
    image is first rescaled so that nuclei are about 30 px across, which makes it independent of
    magnification and camera.
 2. **Over-split repair** merges objects that touch when they are one lobed or fragmented nucleus:

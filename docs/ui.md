@@ -23,13 +23,18 @@ reopens exactly that view.
 | **Intensity & cut-off** (`intensity`, fluorescence only) | tabs: *Cut-offs & flat field* (cut-off rule and value per n and measure, % positive with / without flat field, locks and their history; flat-field maps with their magnitude; cut-off sweep), *Distributions & density*, *Channel checks* (alignment plot, flagged and mis-paired fields with their files), and the **blinded tuning view** (below). | `tab`; tuning: `ch, measure, scope, k, seed, field, cutoff` |
 | **Review images** (`review`) | review sheets per n and treatment; every field shows its source file(s) (`source_file`, `source_file_<channel>`), duplicates are marked; the lightbox steps through fields with arrow keys and takes corrections. Fluorescence experiments: **Show Ki67 positivity** draws the marker image with positive / negative / saturated outlines at the cut-off in force, with the condition shown (this is the non-blinded view). | `n, t, field, overlay, q` |
 | **Corrections** (`corrections`) | the manual-count editor that builds generations (g1 + round 1 → g2 …), unchanged; field numbers carry their source files as a tooltip. | |
-| **Planner** (`planner`) | from `sampling/gN/planner.json` via `planner.load / evaluate / curve`: sliders and selects for n, wells, fields, effect (a ratio or the observed effect of a treatment), reference, reference wells, alpha, target power and field positions; live power, CI half-width, smallest detectable ratio and effort, each with its pessimistic–optimistic band; a live SVG chart of the curve (vary n / wells / fields; power or CI width, with the band, target line and "your design" marker); the plain-language notes; "Recommendations for the next experiment" from `REPORT.txt`; the static planner plots and tables; and the sampling run. Without ≥ 2 n with the reference the page says so and shows the report only. | `gen, n, wells, fields, effect, ref, rw, alpha, power, pos, vary, show` |
+| **Planner** (`planner`) | from `sampling/gN/planner.json` (several cell lines: one plan each, chosen with the **cell-line** pills; n's left out by enforced acceptance are named) via `planner.load / evaluate / curve`: sliders and selects for n, wells, fields, effect (a ratio or the observed effect of a treatment), reference, reference wells, alpha, target power and field positions, and the **"Power for a star"** checkbox (on by default = `[planner] adjust_for_family`: power and smallest detectable ratio at the family-adjusted level of the stars; off = one unadjusted test; the test, critical value and df are printed under the notes); live power, CI half-width, smallest detectable ratio and effort, each with its pessimistic–optimistic band; a live SVG chart of the curve (vary n / wells / fields; power or CI width, with the band, target line and "your design" marker); the plain-language notes; "Recommendations for the next experiment" from `REPORT.txt`; the static planner plots and tables; and the sampling run. Without ≥ 2 n with the reference the page says so and shows the report only. | `gen, cl, n, wells, fields, effect, ref, rw, alpha, power, pos, adj, vary, show` |
 | **Plate maps** (`plates`) | a form (plates, format 6/12/24/48/96, wells per condition, reference wells or auto, avoid edge, balance, seed, negative-control name and wells) → `platemap.plan_project` in-process → the plate PNGs, edge-use table, README (seed and the command that recreates the maps), PDF/CSV downloads; earlier plans in `plans/`. | `plan` |
 | **Layout**, **Settings**, **All files** | layout.csv editor (n, date, timepoint, treatment, include); every setting as a form (all form-item kinds: bool, int, float, choice, multi, list, num_or, measure, names, table, text, with help text and defaults; settings that re-detect nuclei are marked); after saving, the page lists the steps that need re-running with a Start button each; the project folder browser. | `sec` (jump to a settings section) |
 
 Visual language: absolute = blue, relative = orange, model = purple, comparisons = teal, robustness = green,
 diagnostics = grey, design = brown, layers = magenta (`--k-*` in `app.css`); n's always use the plot colours.
-Confirmations are in-page (`confirmBox`); the browser's own dialogs are never used.
+Confirmations are in-page (`confirmBox`); the browser's own dialogs are never used. Anything that overwrites a
+file you may have edited asks first and says what is reset: **Set up → "start over"** (settings.toml, i.e. every
+setting *including the experiment metadata* — cell line, magnification, pixel size, seeding density, stain,
+negative control — and layout.csv), "rewrite the layout only", **Settings → reset**, **use the fresh scan**, and
+**overwrite wells.csv**. The old file is copied to `_work/backups/<name>_<date-time>` first (also from the
+command line: `init --force`, `wells-template --force`); the message names the copy.
 
 ### The Attention panel
 
@@ -53,13 +58,44 @@ readouts / design / review → a run (detections reused) with `--rebuild all`; a
 All answers come from `127.0.0.1` only. Every request must be addressed to `127.0.0.1:<port>` or
 `localhost:<port>` (Host header; an Origin header, if present, must match too), which blocks other websites and DNS
 rebinding. Every API call and file needs the per-session token (`X-Token` header, or `?t=` for GETs such as images);
-`/` embeds it in the page. File paths are resolved inside the project folder (`gui.inside`) and generation names
-must match `g<number>`.
+`/` puts it in a `<meta name="kerncount-token">` tag. File paths are resolved inside the project folder
+(`gui.inside`) and generation names must match `g<number>`.
+
+**Content-Security-Policy.** Every response carries `Content-Security-Policy: default-src 'self'; img-src 'self'
+data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action
+'self'; frame-ancestors 'none'`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy:
+no-referrer`. So the page runs no inline script at all: there is no `<script>` block and no `on*=` attribute.
+Templates attach handlers with `on("click", fn)` (app.js), which stores the function and writes
+`data-on-click="<id>"`; one delegated listener per event type (click, change, input, dblclick; `<img>` errors in
+the capture phase) calls it with `this` = the element, like an inline handler (returning false prevents the
+default). The static buttons of `index.html` are wired in app.js. A test fails if any `on…=` attribute or inline
+script comes back.
+
+**Project files are never active content** (`/file`): only passive types are shown in the page (images, CSV/TXT/
+TOML/MD/LOG as `text/plain`, JSON); HTML, HTM, XHTML, SVG, XML, XSL, JS/MJS, PDF and anything unknown are sent as
+a download (`Content-Disposition: attachment`, `application/octet-stream` / PDF), and every file response carries
+its own `Content-Security-Policy: default-src 'none'; …; sandbox`. File names in `Content-Disposition` follow
+RFC 5987: an ASCII fallback (`filename="dose_5.csv"`; quotes, backslashes, `;`, control and non-ASCII characters
+replaced) plus the exact name `filename*=UTF-8''dose%E2%89%A55.csv`; all headers are built (and checked to be
+encodable) before the status line is sent, so an odd name gives a clean error, never a half-sent response.
+
+**Internal files are never served**: `_work/` (detection caches, the tuning audit trail, backups) is refused by
+`/file`, `/api/text`, `/api/table`, `/api/open` and left out of `/api/files` (also `_WORK/…` spellings, which
+open the same folder on macOS / Windows). `cutoffs.json` is listed, but `/file` and `/api/text` return a
+sanitized summary (locks and history with whitelisted keys, `fields` as a count), never the raw file.
+
+**Writes** of `cutoffs.json`, `settings.toml`, `layout.csv` and `counts.csv` from the page take a per-file lock
+(read-modify-write from two tabs cannot interleave) and are atomic (temporary file in the same folder, then
+`os.replace`; permissions kept): a reader never sees half a file (`kerncount.fileio`).
+
+**Job command lines** put the options first and the experiment after `--` (`run --rebuild g2 -- <experiment>`),
+so a name can never be read as an option; experiment names and `negative_control` may not start with `-`
+(refused by the page and the settings form).
 
 | method | path | answer |
 |---|---|---|
 | GET | `/`, `/static/<file>` | the page (token embedded), the scripts and styles (only files directly in `web/`) |
-| GET | `/file?exp&path[&dl]` | a file inside the project |
+| GET | `/file?exp&path[&dl]` | a file inside the project (passive types inline, everything else as an attachment; `_work/` refused; `cutoffs.json` sanitized) |
 | GET | `/api/state`, `/api/log?since` | experiments (with `intensity` flag), running job; job log lines |
 | GET | `/api/project?exp` | settings, form schema (`items`), generations, n colours, sampling / planner generations |
 | GET | `/api/overview?exp` | experiment home: metadata, n's, design summary, generations, attention items, cut-offs |
@@ -69,13 +105,13 @@ must match `g<number>`.
 | GET | `/api/intensity?exp` | `intensity/manifest.json`, locks (without file names) and their history |
 | GET | `/api/tuning/info?exp` | marker channels, lock scopes (n's), locks, history |
 | GET | `/api/tuning/range?exp&channel&measure` | slider range: `min, max, lod_median` |
-| POST | `/api/tuning/sample` `{experiment, channel, k, seed, n}` | `{seed, channel, fields: [{field_id, nuclei}]}` |
+| POST | `/api/tuning/sample` `{experiment, channel, k, seed, n}` | `{seed, channel, fields: [{field_id}]}` |
 | GET | `/api/tuning/render?exp&field&channel&cutoff&measure` | PNG (token-checked) |
-| GET | `/api/tuning/preview?exp&cutoff&channel&measure&n&fields` | overall % positive in the scope and in the sampled fields; the automatic rule's % |
+| GET | `/api/tuning/preview?exp&cutoff&channel&measure&n&fields` | overall % positive in the scope and in the sampled fields (only for ≥ 3 fields); the automatic rule's % |
 | POST | `/api/tuning/lock`, `/api/tuning/unlock` | lock (via `tuning.lock`) / remove a lock; both append to `history` in `cutoffs.json` |
 | GET | `/api/field_overlay?exp&n&treatment&image&channel` | PNG of a known field with outlines at the cut-off in force (non-blinded; review page only) |
-| GET | `/api/planner?exp&gen` | design, options, effects, components, notes, recommendations, sampling manifest; `ok` / `error` |
-| POST | `/api/planner/evaluate` `{experiment, gen, n, wells, fields, effect, reference_wells, alpha, target_power, reference, positions, vary}` | `{result: planner.evaluate(...), curve: planner.curve(...), vary}` |
+| GET | `/api/planner?exp&gen&cl` | design, options (incl. `adjust_for_family`), `family_size`, `cell_lines`, `cell_line`, `base` (folder of the plan's files), `excluded_ns`, effects, components, notes, recommendations, sampling manifest; `ok` / `error` |
+| POST | `/api/planner/evaluate` `{experiment, gen, cell_line, n, wells, fields, effect, reference_wells, alpha, target_power, reference, positions, adjust_for_family, vary}` | `{result: planner.evaluate(...), curve: planner.curve(...), vary}` |
 | GET | `/api/plans?exp` | earlier plate maps (plates, files, README, edge use) and form defaults |
 | POST | `/api/platemap` | `platemap.plan_project(...)` in-process (validated options); returns the new folder |
 | POST | `/api/start` `{action: init / run / regen / sampling / wells-template / platemap, options}`, `/api/stop`, `/api/quit` | jobs (`python -m kerncount.cli ...` subprocess, one at a time) |
@@ -87,24 +123,31 @@ On the review workspace a page loads in well under a second; the tuning slider r
 
 ## How blinding is guaranteed (cut-off tuning)
 
-1. **Opaque ids only.** `/api/tuning/sample` returns `{seed, channel, fields: [{field_id, nuclei}]}`: the salted
-   hash ids of `kerncount.tuning` (salt in `_work/tuning_salt`), in random order (round robin over conditions inside
-   the module). The server rebuilds the answer field by field, so the requested `n` (the lock scope) is not echoed and
-   nothing else from the module's internals passes through.
+1. **Opaque, per-session ids only.** `/api/tuning/sample` returns `{seed, channel, fields: [{field_id}]}`: salted
+   hash ids of `kerncount.tuning` in random order (round robin over conditions inside the module). The salt lives
+   only in the server's memory and is new for every session, so an id cannot be matched to a field across sessions
+   and nothing on disk maps ids to fields (an older `_work/tuning_salt` file is deleted). The server rebuilds the
+   answer field by field, so the requested `n` (the lock scope) is not echoed. **No nucleus count per field**: it
+   tracks the treatment (treatments that kill cells leave sparse fields), so it is neither returned nor shown.
 2. **No per-condition result.** `/api/tuning/preview` returns only overall numbers: the % positive of the whole scope
-   (every n, or the one n chosen as the lock scope), of the sampled fields together, and of the automatic rule.
+   (every n, or the one n chosen as the lock scope), of the sampled fields together (only for 3 or more fields, so it
+   cannot be used to count the nuclei of one field), and of the automatic rule.
 3. **Images carry no label.** `/api/tuning/render` returns PNG bytes of the marker image with outlines; the field
    is addressed only by its opaque id.
-4. **Locks without file names.** `tuning.lock` records the fields' files in `cutoffs.json` for the audit trail;
-   every answer the page receives (`/api/tuning/lock`, `/api/tuning/info`, `/api/intensity`) strips them
-   (`fields` becomes a count).
-5. **The page shows nothing else.** The tuning tab shows the field index, opaque id and nucleus count, the slider,
+4. **Locks without file names.** `cutoffs.json` stores the value, time, scope and the *number* of fields. The
+   fields' files (the audit trail) go to `_work/cutoff_fields.json`, which the server never serves; file names an
+   older version left in `cutoffs.json` are moved there on the next tuning visit. Every answer the page receives
+   (`/api/tuning/lock`, `/api/tuning/info`, `/api/intensity`, and `/file` or `/api/text` of `cutoffs.json`) is a
+   whitelist of keys with `fields` as a count.
+5. **The page shows nothing else.** The tuning tab shows the field index, the opaque id, the slider,
    and the overall %; it never calls the review, overlay or results endpoints and displays nothing else. The only n
    names on the tab are the lock-scope choices the user makes ("every n" or one n) and the scope of earlier locks,
    which say nothing about the field on screen.
 6. **Tested.** `tests/test_gui.py::test_tuning_endpoints_are_blinded` runs the pipeline on a small synthetic
    interleaved project and checks that no tuning answer contains a condition name, a folder name, a file name or
-   an n label.
+   an n label; `test_sample_lock_read_files_never_leaks_conditions` follows the whole path sample → lock → read
+   every file the page can reach (`cutoffs.json` incl. a legacy one with field ids and files, `_work/…` through
+   `/file`, `/api/text`, `/api/table`, the recursive file list) and checks that ids change with the session.
 
 The non-blinded per-field overlay of the review page uses a separate endpoint (`/api/field_overlay`, addressed by
 n / condition / field, via `tuning.field_id`), so the two views cannot be mixed up. The lock confirmation explains
@@ -113,7 +156,9 @@ the run.
 
 ## Tests
 
-`tests/test_gui.py` (default suite): token, Host and Origin checks on every kind of endpoint; path confinement
+`tests/test_gui.py` (default suite): token, Host and Origin checks on every kind of endpoint; the CSP / frame
+headers and that no inline script or handler is left; active project files served as attachments and RFC 5987
+names (`dose≥5.csv`, a name with `"`); backups when the page resets or replaces a file; path confinement
 (`/file`, `/api/table`, `/static`, generation names, unknown experiments); the scripts parse (`node --check` when
 node is installed) and never use the browser's dialogs; manifest / stats_long serving; the experiment home and its
 attention items; the planner endpoints (bands ordered, curve, input validation); the plate-map endpoint and job
