@@ -152,7 +152,7 @@ def test_d_all_zero_counts_and_all_or_nothing_fractions_are_explained():
 def _no_nan_headline(out):
     """Every all-n model row either has an estimate or says why not."""
     sl = out["stats_long"]
-    m = sl[(sl["level"] == "all_n") & (sl["model"] != "classical")]
+    m = sl[(sl["level"] == "all_n") & (sl["family"].str.startswith("vs ") | (sl["family"] == "estimated means"))]
     bad = m[m["estimate"].isna() & m["note"].fillna("").eq("")]
     assert bad.empty, bad[["metric", "family", "comparison"]].to_string()
 

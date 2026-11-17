@@ -209,7 +209,7 @@ RENDER.stats = async function (b, e, tok) {
     ${one ? `<div class="notice n1"><b>Only one n:</b> all-n rows carry estimates only; their CIs, p-values and stars say “needs ≥ 2 n”.</div>` : ""}
     <div class="selrow">
       <label class="f">Generation ${genPills(gen)}</label>
-      ${sel("level", "level", "Level", uniq("level"), x => x === "all_n" ? "all n" : "within one n")}
+      ${sel("level", "level", "Level", uniq("level"), x => x === "all_n" ? "all n" : "per n")}
       ${sel("n", "n", "n", uniq("n"))}
       ${uniq("cell_line").length > 1 ? sel("cl", "cell_line", "Cell line", uniq("cell_line")) : ""}
       ${sel("metric", "metric", "Metric", uniq("metric"), mlabel)}

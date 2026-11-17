@@ -45,7 +45,7 @@ LADDER = [  # (key, short label, what this step changes compared with the previo
     ("nucleus_mean_bgsub", "4 Nucleus, corrected", "nucleus correction: shrunk outline, local background, flat field"),
     ("frac_positive", "5 % positive", "the positivity cut-off"),
 ]
-EXTRAS = [("stained_area_mean", "Stained-area MFI"), ("field_total", "Total stain / field")]
+EXTRAS = [("stained_area_mean", "Stained-area MFI"), ("field_total", "Total signal / field")]
 SIG = 0.05
 SAME_PCT, SAME_PP = 2.0, 1.0  # |effect| below 2 % (intensities) / 1 percentage point and not significant: "no change"
 TECH = "technical 95% interval from the fields (descriptive)"

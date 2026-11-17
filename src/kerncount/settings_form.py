@@ -301,7 +301,7 @@ def _num(v, as_int=False):
 
 
 def coerce(values: dict) -> dict:
-    """Turn form values (strings, booleans, lists) into typed settings; raise ValueError naming the bad field."""
+    """Turn form values (strings, booleans, lists) into typed settings; raise ValueError naming the bad form item."""
     out: dict[str, dict] = {}
     for sec, keys in values.items():
         if sec not in FORM_ITEMS:

@@ -189,15 +189,20 @@ ADR 0001, "Readout ladder". Every marker channel gets five per-image layers, eac
 plus two stain-area readouts. They are ordinary registry metrics, so each gets every statistic (absolute values,
 effects vs each reference, per n and all n, the n = 1 rules).
 
-| layer | column | what it is | what the next step changes |
+| layer (label in plots and the browser) | column | what it is | what the next step changes |
 |---|---|---|---|
-| 1 | `intensity_<ch>_field_raw` | mean of the whole image as acquired | flat field + background |
-| 2 | `intensity_<ch>_field_corrected` | mean of C over the field | per nucleus instead of per field |
-| 3 | `intensity_<ch>_nucleus_mean_raw` | median of the nuclei's raw means (whole DAPI outline) | shrunk outline, local background, flat field |
-| 4 | `intensity_<ch>_nucleus_mean_bgsub` | median of the nuclei's corrected signal | the positivity cut-off |
-| 5 | `readout_frac_positive_<ch>` | % positive nuclei | |
-| extra | `intensity_<ch>_stained_area_mean` | mean of C over the stained area | |
-| extra | `intensity_<ch>_field_total` | sum of C over the stained area | |
+| 1 Field, raw | `intensity_<ch>_field_raw` | mean of the whole image as acquired | flat field + background |
+| 2 Field, corrected | `intensity_<ch>_field_corrected` | mean of C over the field | per nucleus instead of per field |
+| 3 Nucleus, raw | `intensity_<ch>_nucleus_mean_raw` | median of the nuclei's raw means (whole DAPI outline) | shrunk outline, local background, flat field |
+| 4 Nucleus, corrected | `intensity_<ch>_nucleus_mean_bgsub` | median of the nuclei's corrected signal | the positivity cut-off |
+| 5 % positive | `readout_frac_positive_<ch>` | % positive nuclei | |
+| extra: Stained-area MFI | `intensity_<ch>_stained_area_mean` | mean of C over the stained area | |
+| extra: Total signal / field | `intensity_<ch>_field_total` | sum of C over the stained area | |
+
+The metric labels of the same columns (results explorer, statistics table) are longer: "<ch> field MFI, raw",
+"<ch> field MFI, corrected", "<ch> per nucleus, raw (median; Fiji-like)", "<ch> per nucleus (median,
+background-subtracted)", "% <ch>-positive nuclei", "<ch> MFI in the <ch>-stained area", "<ch> total signal per
+field" (`classify.channel_metric_info`).
 
 **Whole-field layers** (`intensity.field_layers`, no segmentation, no DAPI; cached per field in
 `_work/<n>/<treatment>/NN_layers.json`, redone when the files or the flat field change):
