@@ -360,9 +360,9 @@ def test_platemap_endpoint(srv):
         assert srv.call("/api/platemap", body={**body, **bad})[0] == 400, bad
     assert gui.build_args("platemap", "E", {"plates": 2, "plate_format": "24", "reference_wells": "auto", "seed": "3",
                                             "avoid_edge": True, "negative_control": "neg"}) == \
-        ["platemap", "E", "--plates", "2", "--wells", "2", "--format", "24", "--reference-wells", "auto",
-         "--avoid-edge", "--seed", "3", "--negative-control", "neg", "--control-wells", "2"]
-    assert gui.build_args("wells-template", "E", {"force": True}) == ["wells-template", "E", "--force"]
+        ["platemap", "--plates", "2", "--wells", "2", "--format", "24", "--reference-wells", "auto",
+         "--avoid-edge", "--seed", "3", "--negative-control=neg", "--control-wells", "2", "--", "E"]
+    assert gui.build_args("wells-template", "E", {"force": True}) == ["wells-template", "--force", "--", "E"]
 
 
 # one form item per kind: (section, key, value sent by the page, value expected in settings.toml)
