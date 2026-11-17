@@ -41,7 +41,7 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
         "stain": dict(kind="text", label="Stain / antibodies",
                       help="e.g. Ki-67 (rabbit) + anti-rabbit AF488, DAPI. For the record only."),
         "notes": dict(kind="text", label="Notes", help="Anything worth knowing about this experiment."),
-        "negative_control": dict(kind="text", label="Negative-control condition",
+        "negative_control": dict(kind="text", no_dash=True, label="Negative-control condition",
                                  help="Name of the condition with negative-control wells (stained without the specific "
                                       "signal). If present in an n, its nuclei set that n's positivity cut-off and it is "
                                       "left out of the statistics. Empty = no control wells."),
@@ -306,6 +306,8 @@ def coerce(values: dict) -> dict:
             if meta is None:
                 continue
             k, where = meta["kind"], f"{SECTION_TITLES[sec]} → {meta.get('label', key)}"
+            if meta.get("no_dash") and str(v).strip().startswith("-"):
+                raise ValueError(f"{where}: may not start with - (it would be read as a command-line option)")
             try:
                 if k == "bool":
                     val = bool(v)

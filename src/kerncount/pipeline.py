@@ -490,12 +490,63 @@ def sampling(project_dir: Path, generation: str | None = None, iterations: int =
     used = used[~used["excluded"].astype(bool)].assign(value=lambda d: d["count"])
     out = prj.path / "sampling" / g.name
     log(f"Sampling analysis on {g.name} ({iterations} subsamples per design)...")
-    summary = sampling_mod.run(used[["n", "treatment", "image", "value"]], prj.settings, out, iterations=iterations,
-                               project_dir=prj.path)
-    log(summary.round(3).to_string(index=False))
+    blocks, dropped = sampling_blocks(used, g, prj.settings)
+    if dropped:
+        log(f"  acceptance enforced: {', '.join(dropped)} left out (as in the all-n statistics)")
     from . import planner
 
-    log("Planning the next experiment (planner.json, design_forward.csv, ...)")
-    planner.run(used[["n", "treatment", "image", "value"]], prj.settings, out, project_dir=prj.path)
-    log(f"\nReport: {out / 'REPORT.txt'}")
+    multi = len(blocks) > 1
+    index = out / "cell_lines.json"
+    for line, sub in blocks:
+        where = out / _line_slug(line) if multi else out
+        if multi:
+            log(f"\n=== cell line {line}: {sub['n'].nunique()} n's (cell lines are never pooled)")
+        summary = sampling_mod.run(sub[["n", "treatment", "image", "value"]], prj.settings, where,
+                                   iterations=iterations, project_dir=prj.path)
+        log(summary.round(3).to_string(index=False))
+        log("Planning the next experiment (planner.json, design_forward.csv, ...)")
+        planner.run(sub[["n", "treatment", "image", "value"]], prj.settings, where, project_dir=prj.path,
+                    cell_line=line, excluded_ns=dropped)
+        log(f"Report: {where / 'REPORT.txt'}")
+    out.mkdir(parents=True, exist_ok=True)
+    if multi:
+        index.write_text(json.dumps(dict(cell_lines=[dict(cell_line=line, path=_line_slug(line),
+                                                          n_count=int(sub["n"].nunique())) for line, sub in blocks],
+                                         excluded_ns=dropped), indent=1), encoding="utf-8")
+    elif index.exists():
+        index.unlink()
     return out
+
+
+def _line_slug(line) -> str:
+    import re
+
+    return re.sub(r"[^\w.\-]+", "_", str(line or "unknown")).strip("_") or "unknown"
+
+
+def sampling_blocks(used: pd.DataFrame, gen_dir: Path, settings: dict) -> tuple[list, list[str]]:
+    """The data the sampling analysis and the planner use, as the all-n statistics do: n's excluded by ENFORCED
+    acceptance criteria are dropped (acceptance.csv of the generation, [acceptance] enforce now), and every cell
+    line is planned on its own (never pooled). Returns ([(cell_line or None, rows), ...], dropped n's).
+    One labelled line plus unlabelled n's stays one block, labelled "<line> + unlabelled" (as the statistics)."""
+    from . import acceptance
+
+    dropped = []
+    acc_p = Path(gen_dir) / "acceptance.csv"
+    if acc_p.exists():
+        try:
+            dropped = list(acceptance.summary(pd.read_csv(acc_p), settings)["excluded"])
+        except (KeyError, ValueError):
+            dropped = []
+    used = used[~used["n"].isin(dropped)]
+    line = used["cell_line"].fillna("").astype(str).str.strip() if "cell_line" in used else pd.Series("", index=used.index)
+    labels = sorted(set(line) - {""})
+    if len(labels) <= 1:
+        lab = labels[0] if labels else None
+        if labels and (line == "").any():
+            lab = f"{labels[0]} + unlabelled"
+        return [(lab, used)], dropped
+    blocks = [(lab, used[line == lab]) for lab in labels]
+    if (line == "").any():
+        blocks.append(("unknown", used[line == ""]))
+    return blocks, dropped

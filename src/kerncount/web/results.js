@@ -23,9 +23,9 @@ function pickGen() {
   const gens = genList();
   return gens.includes(S.params.gen) ? S.params.gen : gens[gens.length - 1];
 }
-function genPills(gen, onclick = "setP({gen:'$'})") {
+function genPills(gen, pick = g => setP({ gen: g })) {
   const gens = genList();
-  return gens.length > 1 ? `<div class="pills">${gens.map(g => `<button class="pill ${g === gen ? "active" : ""}" onclick="${onclick.replace("$", g)}">${g}</button>`).join("")}</div>` : `<span class="tag">${esc(gen)}</span>`;
+  return gens.length > 1 ? `<div class="pills">${gens.map(g => `<button class="pill ${g === gen ? "active" : ""}" ${on("click", () => pick(g))}>${esc(g)}</button>`).join("")}</div>` : `<span class="tag">${esc(gen)}</span>`;
 }
 
 // metric groups: Counts; Readouts; Intensity per channel (with % positive)
@@ -53,12 +53,12 @@ function plotCard(f, base = "", extra = "") {
   const path = base + f.path, pdf = f.pdf ? base + f.pdf : "";
   return `<div class="plot k-${esc(f.kind)}">
     <div class="ph"><div class="pt">${esc(f.title)}</div><div class="pd">${esc(f.description || "")}</div></div>
-    <img loading="lazy" src="${fileUrl(path)}" onclick='openImage(${js(path)},${js(f.title)},${js(f.description || "")},${js(pdf)})' alt="${esc(f.title)}">
+    <img loading="lazy" src="${fileUrl(path)}" ${on("click", function (event) { openImage((path),(f.title),(f.description || ""),(pdf)) })} alt="${esc(f.title)}">
     <div class="pf"><span class="tag" style="background:var(--kcs);color:var(--kc)">${esc(KIND_LABEL[f.kind] || f.kind)}</span>${extra}<span class="spacer"></span>
       ${pdf ? `<a class="btn small" href="${fileUrl(pdf, 1)}">PDF</a>` : ""}<a class="btn small" href="${fileUrl(path, 1)}">PNG</a></div></div>`;
 }
 function tableButtons(files, base = "") {
-  return files.length ? `<div class="tbllist">${files.map(f => `<button class="btn" title="${esc(f.description || "")}" onclick='viewTable(${js(base + f.path)})'>${esc(f.title.replace(/^(All n|n\d+)[^:]*: /, ""))}</button>`).join("")}</div>` : "";
+  return files.length ? `<div class="tbllist">${files.map(f => `<button class="btn" title="${esc(f.description || "")}" ${on("click", function (event) { viewTable((base + f.path)) })}>${esc(f.title.replace(/^(All n|n\d+)[^:]*: /, ""))}</button>`).join("")}</div>` : "";
 }
 const isPng = f => f.path.endsWith(".png"), isCsv = f => f.path.endsWith(".csv");
 
@@ -102,15 +102,15 @@ RENDER.results = async function (b, e, tok) {
     <div class="selrow">
       <label class="f">Generation ${genPills(gen)}</label>
       <label class="f">Level <div class="pills">
-        <button class="pill ${level === "all_n" ? "active" : ""}" onclick="setP({level:'all_n'})">All n${folders.length > 1 ? " (per cell line)" : ""}</button>
-        <button class="pill ${level === "n" ? "active" : ""}" ${ns.length ? "" : "disabled"} onclick="setP({level:'n'})">Per n</button>
-        <button class="pill ${level === "treatment" ? "active" : ""}" ${F.some(f => f.level === "treatment") ? "" : "disabled"} onclick="setP({level:'treatment'})">Per treatment</button></div></label>
-      ${level === "all_n" && folders.length > 1 ? `<label class="f">Cell line <select onchange="setP({folder:this.value})">${folders.map(f => `<option value="${esc(f.path)}" ${f === folder ? "selected" : ""}>${esc(f.cell_line || "unknown")} (${f.n_count} n)</option>`).join("")}</select></label>` : ""}
-      ${level !== "all_n" ? `<label class="f">n <div class="pills">${ns.map(x => `<button class="pill ${x === n ? "active" : ""}" onclick='setP({n:${js(x)}})'><span class="ndot" style="background:${esc(colours[x] || nColour(x))}"></span>${esc(shortN(x))}</button>`).join("")}</div></label>` : ""}
-      ${level === "treatment" ? `<label class="f">Treatment <select onchange="setP({t:this.value})">${ts.map(x => `<option ${x === t ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>` : ""}
-      <label class="f">Metric <select onchange="setP({metric:this.value})" style="max-width:340px">${groups.map(([g, l]) => `<optgroup label="${esc(g)}">${l.map(m => `<option value="${esc(m.id)}" ${m.id === metric ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</optgroup>`).join("")}</select></label>
+        <button class="pill ${level === "all_n" ? "active" : ""}" ${on("click", function (event) { setP({level:'all_n'}) })}>All n${folders.length > 1 ? " (per cell line)" : ""}</button>
+        <button class="pill ${level === "n" ? "active" : ""}" ${ns.length ? "" : "disabled"} ${on("click", function (event) { setP({level:'n'}) })}>Per n</button>
+        <button class="pill ${level === "treatment" ? "active" : ""}" ${F.some(f => f.level === "treatment") ? "" : "disabled"} ${on("click", function (event) { setP({level:'treatment'}) })}>Per treatment</button></div></label>
+      ${level === "all_n" && folders.length > 1 ? `<label class="f">Cell line <select ${on("change", function (event) { setP({folder:this.value}) })}>${folders.map(f => `<option value="${esc(f.path)}" ${f === folder ? "selected" : ""}>${esc(f.cell_line || "unknown")} (${f.n_count} n)</option>`).join("")}</select></label>` : ""}
+      ${level !== "all_n" ? `<label class="f">n <div class="pills">${ns.map(x => `<button class="pill ${x === n ? "active" : ""}" ${on("click", function (event) { setP({n:(x)}) })}><span class="ndot" style="background:${esc(colours[x] || nColour(x))}"></span>${esc(shortN(x))}</button>`).join("")}</div></label>` : ""}
+      ${level === "treatment" ? `<label class="f">Treatment <select ${on("change", function (event) { setP({t:this.value}) })}>${ts.map(x => `<option ${x === t ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>` : ""}
+      <label class="f">Metric <select ${on("change", function (event) { setP({metric:this.value}) })} style="max-width:340px">${groups.map(([g, l]) => `<optgroup label="${esc(g)}">${l.map(m => `<option value="${esc(m.id)}" ${m.id === metric ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</optgroup>`).join("")}</select></label>
     </div>
-    <div class="kindbar" style="margin-bottom:12px">${KINDS.map(([k, l, d]) => `<button class="kpill k-${k} ${k === view ? "active" : ""}" title="${esc(d)}" ${counts[k] ? "" : "disabled"} onclick="setP({view:'${k}'})"><i></i>${l}<span class="cnt">${counts[k] || ""}</span></button>`).join("")}</div>
+    <div class="kindbar" style="margin-bottom:12px">${KINDS.map(([k, l, d]) => `<button class="kpill k-${k} ${k === view ? "active" : ""}" title="${esc(d)}" ${counts[k] ? "" : "disabled"} ${on("click", function (event) { setP({view:String(k)}) })}><i></i>${l}<span class="cnt">${counts[k] || ""}</span></button>`).join("")}</div>
     <div class="metricbox"><b>${esc(mi.label)}</b> <span class="muted">· ${esc(mi.unit)}${mi.kind && mi.kind !== mi.unit ? " · " + esc(mi.kind) : ""}</span>
       <div class="small">${esc(mi.description || "")}</div>
       ${est.effect ? `<div class="small"><b>Effect:</b> ${esc(est.effect)} · <b>Means:</b> ${esc(est.mean)}${est.headline === "pp_difference" ? ` · <span class="tag purple">headline: percentage points</span>` : ""}</div>` : ""}
@@ -125,12 +125,12 @@ RENDER.results = async function (b, e, tok) {
       : `<div class="plots">${shown.filter(isPng).map(f => plotCard(f, G)).join("")}</div>`}
     ${shown.filter(isCsv).length ? `<h3>Tables</h3>${tableButtons(shown.filter(isCsv), G)}` : ""}
     ${level !== "all_n" ? `<h3>${level === "treatment" ? "This treatment" : "This n"}</h3><div class="tbllist">${tableButtons(here.filter(f => !f.metric && isCsv(f)), G)}
-      <button class="btn" onclick='nav("review",${js(level === "treatment" ? { n, t } : { n })})'>Review images${level === "treatment" ? " of " + esc(t) : ""} →</button></div>` : ""}
+      <button class="btn" ${on("click", function (event) { nav("review",(level === "treatment" ? { n, t } : { n })) })}>Review images${level === "treatment" ? " of " + esc(t) : ""} →</button></div>` : ""}
     <details style="margin-top:14px"><summary class="small">Generation files: workbook, long statistics table, counts used</summary>
       <div class="row" style="margin-top:6px"><a class="btn" href="${fileUrl(`generations/${gen}/results.xlsx`, 1)}">results.xlsx</a>
-        <button onclick="nav('stats',{gen:'${gen}'})">Statistics table</button>
-        <button onclick="viewTable('generations/${gen}/counts_used.csv')">Counts used</button>
-        <button onclick="viewText('generations/${gen}/README.txt')">How to read this</button></div></details>`;
+        <button ${on("click", function (event) { nav('stats',{gen:String(gen)}) })}>Statistics table</button>
+        <button ${on("click", function (event) { viewTable(`generations/${gen}/counts_used.csv`) })}>Counts used</button>
+        <button ${on("click", function (event) { viewText(`generations/${gen}/README.txt`) })}>How to read this</button></div></details>`;
 };
 
 // ---------------------------------------------------------------- Statistics table (stats_long.csv)
@@ -200,8 +200,8 @@ RENDER.stats = async function (b, e, tok) {
   S.statsView = rows;
   const limit = +(P.limit || 300);
   const mlabel = id => metricInfo(man, id).label;
-  const sel = (key, col, label, opts, lab = x => x) => `<label class="f">${label}<select onchange="setP({${key}:this.value,limit:''})"><option value="">all</option>${opts.map(o => `<option value="${esc(o)}" ${String(P[key] || "") === o ? "selected" : ""}>${esc(lab(o))}</option>`).join("")}</select></label>`;
-  const th = (col, label, cls = "") => `<th class="sort ${cls}" onclick="setP({sort:'${col}',dir:'${sortCol === col && dir === 1 ? "desc" : "asc"}'})">${label}${sortCol === col ? (dir === 1 ? " ▲" : " ▼") : ""}</th>`;
+  const sel = (key, col, label, opts, lab = x => x) => `<label class="f">${label}<select ${on("change", function (event) { setP({ [key]: this.value, limit: '' }) })}><option value="">all</option>${opts.map(o => `<option value="${esc(o)}" ${String(P[key] || "") === o ? "selected" : ""}>${esc(lab(o))}</option>`).join("")}</select></label>`;
+  const th = (col, label, cls = "") => `<th class="sort ${cls}" ${on("click", function (event) { setP({sort:String(col),dir:String(sortCol === col && dir === 1 ? "desc" : "asc")}) })}>${label}${sortCol === col ? (dir === 1 ? " ▲" : " ▼") : ""}</th>`;
   const one = (man.n_count || 0) < 2;
   b.innerHTML = `
     <p class="muted" style="margin-top:0">Every statistical result of ${esc(gen)} in one table (<code>stats_long.csv</code>). Filter, sort, click a row to open the plot it belongs to.
@@ -215,14 +215,14 @@ RENDER.stats = async function (b, e, tok) {
       ${sel("metric", "metric", "Metric", uniq("metric"), mlabel)}
       ${sel("fam", "family", "Family", uniq("family"))}
       ${sel("et", "estimate_type", "Estimate type", uniq("estimate_type"))}
-      <label class="f">Significance<select onchange="setP({sig:this.value,limit:''})">${[["", "all"], ["sig", "significant (* or equivalent)"], ["ns", "not significant"], ["need2", "needs ≥ 2 n"], ["none", "no test"]].map(([v, l]) => `<option value="${v}" ${sig === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-      <label class="f">Test<select onchange="setP({src:this.value,limit:''})">${[["", "all tests"], ["model", "mixed model (headline stars)"], ["classical", "classical (ANOVA, t-tests)"], ["descriptive", "descriptive (no test)"]].map(([v, l]) => `<option value="${v}" ${src === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-      <label class="f">Comparison contains<input id="stQ" value="${esc(P.q || "")}" size="14" onchange="setP({q:this.value,limit:''})" placeholder="e.g. miR-132"></label>
-      <button onclick="setP({level:'',n:'',cl:'',metric:'',fam:'',et:'',sig:'',q:'',src:'',sort:'',dir:'',limit:''})">Clear filters</button>
+      <label class="f">Significance<select ${on("change", function (event) { setP({sig:this.value,limit:''}) })}>${[["", "all"], ["sig", "significant (* or equivalent)"], ["ns", "not significant"], ["need2", "needs ≥ 2 n"], ["none", "no test"]].map(([v, l]) => `<option value="${v}" ${sig === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label class="f">Test<select ${on("change", function (event) { setP({src:this.value,limit:''}) })}>${[["", "all tests"], ["model", "mixed model (headline stars)"], ["classical", "classical (ANOVA, t-tests)"], ["descriptive", "descriptive (no test)"]].map(([v, l]) => `<option value="${v}" ${src === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label class="f">Comparison contains<input id="stQ" value="${esc(P.q || "")}" size="14" ${on("change", function (event) { setP({q:this.value,limit:''}) })} placeholder="e.g. miR-132"></label>
+      <button ${on("click", function (event) { setP({level:'',n:'',cl:'',metric:'',fam:'',et:'',sig:'',q:'',src:'',sort:'',dir:'',limit:''}) })}>Clear filters</button>
     </div>
     <div class="bar"><b>${rows.length}</b> <span class="muted">of ${T.objs.length} results</span>
       <span class="small muted">· ${rows.filter(isSignif).length} significant · ${rows.filter(needs2).length} need ≥ 2 n</span>
-      <span class="spacer"></span><button onclick="exportStats('${gen}')">Export this view (CSV)</button></div>
+      <span class="spacer"></span><button ${on("click", function (event) { exportStats(String(gen)) })}>Export this view (CSV)</button></div>
     <div class="tablewrap" style="max-height:none"><table class="grid" id="statsTbl"><thead><tr>
       ${th("level", "Level · n")}${filt.metric ? "" : th("metric", "Metric")}${th("family", "Family · test")}${th("comparison", "Comparison")}
       ${th("estimate", "Estimate", "num")}<th class="num">95% CI</th>${th("p", "p", "num")}${th("p_adj", "p adj.", "num")}${th("significance", "Sig.")}${th("N", "N", "num")}<th>Estimand</th><th>Note</th></tr></thead>
@@ -235,7 +235,7 @@ RENDER.stats = async function (b, e, tok) {
         <td class="num">${fmtP(r.p)}</td><td class="num">${fmtP(r.p_adj)}</td><td>${sigBadge(r.significance)}</td><td class="num">${r.N !== "" && !isNaN(+r.N) ? +(+r.N).toFixed(1) : esc(r.N)}</td>
         <td class="small muted">${esc(r.estimand)}</td>
         <td class="small">${needs2(r) ? `<span class="need2">needs ≥ 2 n</span> ` : ""}<span class="muted">${esc((r.note || "").replace(/;?\s*needs ≥ 2 n( containing both groups)?/, ""))}</span></td></tr>`).join("")}</tbody></table></div>
-    ${rows.length > limit ? `<div style="margin:10px 0"><button onclick="setP({limit:${limit + 300}})">Show ${Math.min(300, rows.length - limit)} more</button> <span class="muted small">${rows.length - limit} not shown</span></div>` : ""}`;
+    ${rows.length > limit ? `<div style="margin:10px 0"><button ${on("click", function (event) { setP({limit:(limit + 300)}) })}>Show ${Math.min(300, rows.length - limit)} more</button> <span class="muted small">${rows.length - limit} not shown</span></div>` : ""}`;
   $("statsTbl").addEventListener("click", ev => { const tr = ev.target.closest("tr[data-i]"); if (tr) openRelated(gen, T.objs[+tr.dataset.i]); });
 };
 function exportStats(gen) {
@@ -317,9 +317,9 @@ RENDER.layers = async function (b, e, tok) {
       Raw layers compress effects towards 100% (a fixed background sits in both conditions); field layers also scale with how many cells are in the field.</p>
     <div class="selrow">
       <label class="f">Generation ${genPills(gen)}</label>
-      ${chans.length > 1 ? `<label class="f">Channel <div class="pills">${chans.map(c => `<button class="pill ${c === ch ? "active" : ""}" onclick='setP({ch:${js(c)}})'>${esc(c)}</button>`).join("")}</div></label>` : ""}
-      <label class="f">Level <div class="pills">${levels.map(l => { const [a, v] = l.split("|"); return `<button class="pill ${l === lvl ? "active" : ""}" onclick='setP({lvl:${js(l)}})'>${a === "all_n" ? "All n" + (v !== "all_n" ? " · " + esc(v.split("/").pop()) : "") : `<span class="ndot" style="background:${esc(M.colours[v] || nColour(v))}"></span>${esc(shortN(v))}`}</button>`; }).join("")}</div></label>
-      <label class="f">Compared with <div class="pills">${refs.map(r => `<button class="pill ${r === ref ? "active" : ""}" onclick='setP({ref:${js(r)}})'>${esc(r)}</button>`).join("")}</div></label>
+      ${chans.length > 1 ? `<label class="f">Channel <div class="pills">${chans.map(c => `<button class="pill ${c === ch ? "active" : ""}" ${on("click", function (event) { setP({ch:(c)}) })}>${esc(c)}</button>`).join("")}</div></label>` : ""}
+      <label class="f">Level <div class="pills">${levels.map(l => { const [a, v] = l.split("|"); return `<button class="pill ${l === lvl ? "active" : ""}" ${on("click", function (event) { setP({lvl:(l)}) })}>${a === "all_n" ? "All n" + (v !== "all_n" ? " · " + esc(v.split("/").pop()) : "") : `<span class="ndot" style="background:${esc(M.colours[v] || nColour(v))}"></span>${esc(shortN(v))}`}</button>`; }).join("")}</div></label>
+      <label class="f">Compared with <div class="pills">${refs.map(r => `<button class="pill ${r === ref ? "active" : ""}" ${on("click", function (event) { setP({ref:(r)}) })}>${esc(r)}</button>`).join("")}</div></label>
     </div>
     <div class="ladder">${lay.layers.map((x, i) => `${i ? `<div class="arrow" title="${esc(x.step)}">→</div>` : ""}<div class="lstep"><b>${esc(x.label)}</b>${x.step ? `<span class="muted">${esc(x.step)}</span>` : `<span class="muted">as acquired</span>`}</div>`).join("")}
       ${(lay.extras || []).length ? `<div class="arrow">·</div>${lay.extras.map(x => `<div class="lstep" style="background:#fafafa"><b>${esc(x.label)}</b><span class="muted">extra</span></div>`).join("")}` : ""}</div>
@@ -334,9 +334,9 @@ RENDER.layers = async function (b, e, tok) {
         <td class="small nw">${esc((r[cIx.changes_at] || "").replace(/->/g, "→").replace(/; /g, ", ")) || `<span class="tag ok">none</span>`}</td><td class="small" style="min-width:320px">${esc(r[cIx.summary])}</td></tr>`).join("")}</tbody></table></div>
       <p class="small muted">Red rows: the direction flips between layers. Yellow rows: same direction, but the call (significance or "no change") changes.</p>`
       : `<div class="muted">No concordance table for this selection.</div>`}
-    <div class="row" style="margin:8px 0 0">${here.filter(isCsv).map(f => `<button class="small" onclick='viewTable(${js("generations/" + gen + "/" + f.path)})'>${esc(f.title.replace(/^[^:]*: /, ""))}</button>`).join("")}</div>
+    <div class="row" style="margin:8px 0 0">${here.filter(isCsv).map(f => `<button class="small" ${on("click", function (event) { viewTable(("generations/" + gen + "/" + f.path)) })}>${esc(f.title.replace(/^[^:]*: /, ""))}</button>`).join("")}</div>
     <h2>Density: is a difference just crowding?</h2>
     <p class="small muted" style="margin-top:0">Field layers and % positive can follow how crowded a field is. Compare the conditions at similar density before trusting a difference.</p>
     ${dens.length || gdens.length ? `<div class="plots">${gdens.map(f => plotCard(f, G)).join("")}${dens.map(f => plotCard({ ...f, kind: "design" }, "intensity/")).join("")}</div>` : `<div class="muted">No density plots.</div>`}
-    <div class="row" style="margin-top:10px"><button onclick="nav('results',{gen:'${gen}',metric:'count',level:'${lk === "all_n" ? "all_n" : "n"}'${lk === "n" ? `,n:${js(lv)}` : ""}})">Cell counts for comparison →</button></div>`;
+    <div class="row" style="margin-top:10px"><button ${on("click", function (event) { nav('results', { gen: String(gen), metric: 'count', level: lk === "all_n" ? "all_n" : "n", ...(lk === "n" ? { n: lv } : {}) }) })}>Cell counts for comparison →</button></div>`;
 };

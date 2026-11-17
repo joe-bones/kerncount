@@ -11,7 +11,39 @@ const S = { state: null, exp: null, sec: "home", params: {}, project: null, ov: 
             lbOverlay: false };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => "&#" + c.charCodeAt(0) + ";");
-const js = v => esc(JSON.stringify(v));  // a value inside an onclick='...' attribute
+const js = v => esc(JSON.stringify(v));  // a JSON value inside an HTML attribute
+// The page runs under Content-Security-Policy script-src 'self': no inline <script>, no inline on* attributes.
+// Templates attach handlers with on("click", fn), which stores fn and returns data-on-click="<id>"; one delegated
+// listener per event type runs it with `this` = the element (as an inline handler would; returning false prevents
+// the default). Handlers whose element left the page are dropped once newer ones pile up.
+const TOKEN = (document.querySelector('meta[name="kerncount-token"]') || {}).content || "";
+const HANDLERS = new Map();
+let HID = 0;
+function on(type, fn) {
+  const id = String(++HID);
+  HANDLERS.set(id, fn);
+  if (HANDLERS.size > 4000) setTimeout(pruneHandlers, 0);
+  return `data-on-${type}="${id}"`;
+}
+function pruneHandlers() {
+  const live = new Set();
+  document.querySelectorAll("[data-on-click],[data-on-change],[data-on-dblclick],[data-on-error],[data-on-input]").forEach(el => {
+    for (const a of el.attributes) if (a.name.startsWith("data-on-")) live.add(a.value);
+  });
+  const keepFrom = HID - 2000;  // recent ones may sit in HTML that is about to be inserted
+  for (const id of HANDLERS.keys()) if (+id < keepFrom && !live.has(id)) HANDLERS.delete(id);
+}
+function dispatch(ev, bubble) {
+  let el = ev.target;
+  while (el && el.nodeType === 1) {
+    const id = el.getAttribute("data-on-" + ev.type), fn = id && HANDLERS.get(id);
+    if (fn && fn.call(el, ev) === false) ev.preventDefault();
+    if (!bubble || ev.cancelBubble) return;
+    el = el.parentElement;
+  }
+}
+for (const t of ["click", "change", "dblclick", "input"]) document.addEventListener(t, ev => dispatch(ev, true));
+document.addEventListener("error", ev => dispatch(ev, false), true);  // <img> errors do not bubble: capture them
 const qs = o => Object.entries(o).map(([k, v]) => encodeURIComponent(k) + "=" + encodeURIComponent(v)).join("&");
 const fileUrl = (path, dl) => "/file?" + qs({ exp: S.exp, path, t: TOKEN, ...(dl ? { dl: 1 } : {}) });
 const genNum = g => parseInt(String(g).slice(1), 10);
@@ -44,7 +76,7 @@ function toast(msg, err = false) {
 // in-page confirmation (the browser dialogs are never used)
 function confirmBox(html, onYes, yesLabel = "Yes, go ahead", noLabel = "Cancel") {
   openModal(`<div style="margin-bottom:14px">${html}</div>
-    <div class="row"><button class="primary" id="cfYes">${esc(yesLabel)}</button><button onclick="closeModal()">${esc(noLabel)}</button></div>`, "narrow");
+    <div class="row"><button class="primary" id="cfYes">${esc(yesLabel)}</button><button ${on("click", function (event) { closeModal() })}>${esc(noLabel)}</button></div>`, "narrow");
   $("cfYes").onclick = () => { closeModal(); onYes(); };
 }
 
@@ -120,12 +152,12 @@ async function refreshState() {
 }
 function renderSide() {
   if (!S.state) return;
-  const html = S.state.experiments.map(e => `<button class="exp ${e.name === S.exp ? "active" : ""}" onclick='go(${js(e.name)})'>
+  const html = S.state.experiments.map(e => `<button class="exp ${e.name === S.exp ? "active" : ""}" ${on("click", function (event) { go((e.name)) })}>
       <span class="nm">${esc(e.name)}</span>
       <span class="st">${!e.initialised ? "not set up" : !e.generations.length ? "set up, not run" : e.generations.length + " generation(s)"}${e.intensity ? " · intensity" : ""}</span></button>
       ${e.name === S.exp ? `<div class="secnav">${SECTIONS.map(([g, items]) => {
         const its = items.filter(([, , show]) => !show || show(e));
-        return its.length ? `<div class="grp">${esc(g)}</div>` + its.map(([k, t]) => `<a class="${k === S.sec ? "active" : ""} ${!e.initialised && k !== "home" ? "dis" : ""}" onclick="nav('${k}')">${esc(t)}</a>`).join("") : "";
+        return its.length ? `<div class="grp">${esc(g)}</div>` + its.map(([k, t]) => `<a class="${k === S.sec ? "active" : ""} ${!e.initialised && k !== "home" ? "dis" : ""}" ${on("click", function (event) { nav(String(k)) })}>${esc(t)}</a>`).join("") : "";
       }).join("")}</div>` : ""}`).join("")
     || `<div class="muted small" style="padding:0 8px">No experiments yet.</div>`;
   if ($("expList").dataset.h !== html) { $("expList").innerHTML = html; $("expList").dataset.h = html; }
@@ -183,6 +215,20 @@ async function startJob(action, options = {}) {
   toast(`${action} started — progress in the log below`);
   await refreshState();
 }
+// "start over" and other overwrites: say exactly what is reset; the old files are kept in _work/backups/
+const BACKUP_TXT = "The current files are copied to <code>_work/backups/</code> (with the date and time) before they are replaced.";
+const SETTINGS_LOST = `<li><code>settings.toml</code>: <b>every setting</b>, including the <b>experiment metadata</b> (cell line, magnification, camera pixel size, seeding density, stain / antibody, negative control, timepoint) and the channel layout, the counting, intensity, statistics, acceptance and planner settings (the raw images folder is kept)</li>`;
+function setUp(force, forceLayout) {
+  if (!force && !forceLayout) return startJob("init", {});
+  const items = (force ? SETTINGS_LOST : "") + `<li><code>layout.csv</code>: treatment names, n names, exclusions and per-n / per-condition overrides you edited (a fresh scan of the folders replaces it)</li>`;
+  confirmBox(`<b>${force ? "Start over" : "Rewrite the layout"}?</b> This resets:<ul>${items}</ul>Counts, manual corrections (counts.csv), cached detections and generations are not touched. ${BACKUP_TXT}`,
+    () => startJob("init", { force, force_layout: forceLayout }), force ? "Start over" : "Rewrite layout.csv");
+}
+function wellsTemplate(force) {
+  if (!force) return startJob("wells-template", {});
+  confirmBox(`<b>Overwrite wells.csv?</b> The well and position you set by hand for each image are replaced by the template. ${BACKUP_TXT}`,
+    () => startJob("wells-template", { force: true }), "Overwrite wells.csv");
+}
 async function quitApp() {
   confirmBox("Stop kerncount? Any running job is cancelled. You can start it again from the kerncount program.", async () => {
     await post("/api/quit");
@@ -226,8 +272,8 @@ function renderWelcome(m) {
       <p class="muted small">The folder that holds <code>data\\</code> (your raw images, one folder per experiment) and
       <code>analysis\\</code> (all results). Results are written next to your data, never into it.</p>
       <div class="row"><input id="wsIn" style="flex:1;min-width:300px" value="${esc(ws)}" placeholder="e.g. C:\\Users\\me\\Documents\\kerncount-work">
-      <button onclick="browseWs()">Browse…</button><button class="primary" onclick="setWs(false)">Use this folder</button></div>
-      <div class="small" style="margin-top:6px"><a href="#" onclick="setWs(true);return false">Create a new workspace here</a> (makes an empty <code>data</code> folder)</div>
+      <button ${on("click", function (event) { browseWs() })}>Browse…</button><button class="primary" ${on("click", function (event) { setWs(false) })}>Use this folder</button></div>
+      <div class="small" style="margin-top:6px"><a href="#" ${on("click", function (event) { setWs(true);return false })}>Create a new workspace here</a> (makes an empty <code>data</code> folder)</div>
     </div>
     ${ws ? `<div class="card"><h3>How it works</h3><ol>
       <li>Put each experiment's images in <code>data\\&lt;experiment&gt;\\&lt;one folder per n&gt;\\&lt;one folder per treatment&gt;\\1.tif …</code>
@@ -251,9 +297,9 @@ async function setWs(create) {
 // ---------------------------------------------------------------- experiment home
 
 function evidenceBtn(ev) {
-  if (ev.type === "table") return `<button class="small" onclick='viewTable(${js(ev.path)})'>${esc(ev.label)}</button>`;
-  if (ev.type === "image") return `<button class="small" onclick='openImage(${js(ev.path)})'>${esc(ev.label)}</button>`;
-  if (ev.type === "go") return `<button class="small" onclick='nav(${js(ev.section)}, ${js(ev.params || {})})'>${esc(ev.label)} →</button>`;
+  if (ev.type === "table") return `<button class="small" ${on("click", function (event) { viewTable((ev.path)) })}>${esc(ev.label)}</button>`;
+  if (ev.type === "image") return `<button class="small" ${on("click", function (event) { openImage((ev.path)) })}>${esc(ev.label)}</button>`;
+  if (ev.type === "go") return `<button class="small" ${on("click", function (event) { nav((ev.section), (ev.params || {})) })}>${esc(ev.label)} →</button>`;
   return "";
 }
 function metaVal(v, unit) {
@@ -285,7 +331,7 @@ RENDER.home = async function (b, e, tok) {
         <div><div class="k">Negative control</div>${metaVal(m.negative_control ? `${m.negative_control} (${m.negative_control_type.replace("_", " ")})` : "")}</div>
         <div><div class="k">Main reference</div>${metaVal(m.reference)}</div>
         <div><div class="k">Controls</div>${metaVal(m.controls)}</div>
-      </div><div class="small" style="margin-top:8px"><a class="link" onclick="nav('settings',{sec:'experiment'})">Edit experiment details →</a>${m.notes ? ` · <span class="muted">${esc(m.notes)}</span>` : ""}</div></div>
+      </div><div class="small" style="margin-top:8px"><a class="link" ${on("click", function (event) { nav('settings',{sec:'experiment'}) })}>Edit experiment details →</a>${m.notes ? ` · <span class="muted">${esc(m.notes)}</span>` : ""}</div></div>
     </div>
     <h2>Attention ${att.length ? `<span class="tag ${att.some(a => a.level === "error") ? "fail" : att.some(a => a.level === "warn") ? "medium" : "blue"}">${att.length}</span>` : ""}</h2>
     ${att.length ? att.map(a => `<div class="att ${a.level}"><div class="ico">${a.level === "error" ? "!" : a.level === "warn" ? "!" : "i"}</div>
@@ -298,17 +344,17 @@ RENDER.home = async function (b, e, tok) {
           <td class="num">${n.conditions.length}</td><td class="num">${n.qc_images ?? n.images}</td>
           <td class="num">${n.qc_images ? pct(n.qc_low / n.qc_images, 0) : "–"}</td>
           <td>${n.acceptance ? `<span class="tag ${esc(n.acceptance)}" title="${esc(n.acceptance_detail)}">${esc(n.acceptance)}</span>` : `<span class="muted small">not checked</span>`}</td></tr>`).join("")}</tbody></table>
-        <p class="small muted" style="margin-bottom:0">Dot colour = the colour of that n in every plot. Timepoints come from the n-folder names (edit them in <a class="link" onclick="nav('layout')">Layout</a>).</p></div>
+        <p class="small muted" style="margin-bottom:0">Dot colour = the colour of that n in every plot. Timepoints come from the n-folder names (edit them in <a class="link" ${on("click", function (event) { nav('layout') })}>Layout</a>).</p></div>
       <div class="card"><h3>Design</h3>
         <p style="margin:0 0 6px"><b>${d.conditions}</b> conditions · <b>${esc(d.wells || "?")}</b> wells × <b>${esc(d.fields_per_well || "?")}</b> fields per condition per n
           <span class="muted small">(${esc(d.fields_source || "")}; ${esc(d.layout)} numbering; ${esc(d.positions)} field positions)</span></p>
         <p style="margin:0 0 8px">${d.images} images in total. ${d.flagged ? `<span class="tag medium">${d.flagged} condition(s) flagged</span>` : `<span class="tag ok">no design flags</span>`}
           ${d.unbalanced ? `<span class="tag medium">${d.unbalanced} unbalanced</span>` : ""}</p>
-        <div class="row"><button class="small" onclick="viewTable('design_check.csv')">design_check.csv</button>
-          ${ov.wells_csv ? `<button class="small" onclick="viewTable('wells.csv')">wells.csv</button>` : ""}
-          <button class="small" onclick="nav('settings',{sec:'design'})">Design settings</button></div>
+        <div class="row"><button class="small" ${on("click", function (event) { viewTable('design_check.csv') })}>design_check.csv</button>
+          ${ov.wells_csv ? `<button class="small" ${on("click", function (event) { viewTable('wells.csv') })}>wells.csv</button>` : ""}
+          <button class="small" ${on("click", function (event) { nav('settings',{sec:'design'}) })}>Design settings</button></div>
         ${ov.intensity && ov.cutoffs.length ? `<h3>Positivity cut-offs</h3>${ov.cutoffs.filter(c => c.measure === "mean").map(c => `<div class="small">${nChip(c.n)} ${esc(c.channel)}: <b>${esc(c.rule_label)}</b> = ${(+c.value).toFixed(1)} → ${pct(c.frac_positive)} positive</div>`).join("")}
-          <div style="margin-top:6px"><button class="small" onclick="nav('intensity')">Intensity & cut-off →</button></div>` : ""}
+          <div style="margin-top:6px"><button class="small" ${on("click", function (event) { nav('intensity') })}>Intensity & cut-off →</button></div>` : ""}
       </div>
     </div>
     <div class="card"><h3>Generations</h3>
@@ -318,7 +364,7 @@ RENDER.home = async function (b, e, tok) {
             ${g.rebuilt_because ? `<div class="small muted">rebuilt because: ${esc([].concat(g.rebuilt_because).join("; "))}</div>` : ""}</td>
           <td class="small">${esc((g.built || "").replace("T", " "))}</td><td class="num">${g.n_count ?? "–"}</td>
           <td class="small">${esc(g.primary === "mixed" ? "mixed model" : g.primary === "rm_anova" ? "RM ANOVA" : g.primary || "–")}${g.reference ? ` vs ${esc(g.reference)}` : ""}</td>
-          <td style="white-space:nowrap">${g.has_manifest ? `<button class="small" onclick="nav('results',{gen:'${g.name}'})">Results</button> <button class="small" onclick="nav('stats',{gen:'${g.name}'})">Statistics</button>` : `<span class="muted small">built by an older version</span>`}
+          <td style="white-space:nowrap">${g.has_manifest ? `<button class="small" ${on("click", function (event) { nav('results',{gen:String(g.name)}) })}>Results</button> <button class="small" ${on("click", function (event) { nav('stats',{gen:String(g.name)}) })}>Statistics</button>` : `<span class="muted small">built by an older version</span>`}
             ${g.has_xlsx ? `<a class="btn small" href="${fileUrl(`generations/${g.name}/results.xlsx`, 1)}">Excel</a>` : ""}</td></tr>`).join("")}</tbody></table>`
         : `<div class="muted">No generations yet: run the analysis.</div>`}
       ${ov.notes.length ? `<div class="small muted" style="margin-top:8px">Notes of ${esc(ov.latest)}: ${ov.notes.map(esc).join(" · ")}</div>` : ""}
@@ -337,31 +383,31 @@ function runPanel(e) {
       ${step(1, e.initialised, "Set up", "Scan the raw image folders and create the project (layout + settings).",
         `<label class="small"><input type="checkbox" id="o_force"> start over: reset settings and layout</label>
          <label class="small"><input type="checkbox" id="o_forcelayout"> rewrite the layout only (after changing how channels are saved)</label>
-         <button class="${e.initialised ? "" : "primary"}" ${d} onclick="startJob('init',{force:$('o_force').checked,force_layout:$('o_forcelayout').checked})">${e.initialised ? "Re-scan folders" : "Set up"}</button>`)}
+         <button class="${e.initialised ? "" : "primary"}" ${d} ${on("click", function (event) { setUp($('o_force').checked, $('o_forcelayout').checked); })}>${e.initialised ? "Re-scan folders" : "Set up"}</button>`)}
       ${step(2, gens.length > 0, "Run the analysis", "Count nuclei, measure intensities, score quality, draw review images and build statistics. Always safe to re-run.",
         `<label><input type="checkbox" id="o_noreview"> skip review images (faster)</label>
          <label><input type="checkbox" id="o_reseg"> re-detect every nucleus (ignore cache)</label>
          <label class="small">overwrite generation(s): <input id="o_rebuild" size="8" placeholder="e.g. g2 or all"></label>
-         <button class="primary" ${e.initialised ? "" : "disabled"} ${d} onclick="startJob('run',{no_review:$('o_noreview').checked,resegment:$('o_reseg').checked,rebuild:$('o_rebuild').value})">Run analysis</button>`)}
+         <button class="primary" ${e.initialised ? "" : "disabled"} ${d} ${on("click", function (event) { startJob('run',{no_review:$('o_noreview').checked,resegment:$('o_reseg').checked,rebuild:$('o_rebuild').value}) })}>Run analysis</button>`)}
       ${step(3, false, "Rebuild generations", "Statistics only, from counts.csv (after corrections or statistics settings). Fast; no re-detection.",
         `<label class="small">overwrite generation(s): <input id="o_rebuild2" size="8" placeholder="e.g. g2 or all"></label>
-         <button ${e.counted ? "" : "disabled"} ${d} onclick="startJob('regen',{rebuild:$('o_rebuild2').value})">Rebuild</button>
-         <button class="small" ${e.counted ? "" : "disabled"} onclick="nav('corrections')">Corrections</button>`)}
+         <button ${e.counted ? "" : "disabled"} ${d} ${on("click", function (event) { startJob('regen',{rebuild:$('o_rebuild2').value}) })}>Rebuild</button>
+         <button class="small" ${e.counted ? "" : "disabled"} ${on("click", function (event) { nav('corrections') })}>Corrections</button>`)}
       ${step(4, e.sampling.length > 0, "Sampling and planner", "Variance components, power and subsampling on a generation: feeds the Planner.",
         `<label class="small">generation <select id="o_sgen">${gens.map(g => `<option ${g === last ? "selected" : ""}>${esc(g)}</option>`).join("")}</select>
            subsamples <input id="o_sit" value="1000" size="5"></label>
-         <button ${last ? "" : "disabled"} ${d} onclick="startJob('sampling',{generation:$('o_sgen').value,iterations:$('o_sit').value})">Run sampling</button>
-         <button class="small" ${e.sampling.length ? "" : "disabled"} onclick="nav('planner')">Planner</button>`)}
+         <button ${last ? "" : "disabled"} ${d} ${on("click", function (event) { startJob('sampling',{generation:$('o_sgen').value,iterations:$('o_sit').value}) })}>Run sampling</button>
+         <button class="small" ${e.sampling.length ? "" : "disabled"} ${on("click", function (event) { nav('planner') })}>Planner</button>`)}
       ${step(5, false, "Well template", "Write wells.csv (which well and position each image is) to edit by hand for unusual plate designs.",
         `<label class="small"><input type="checkbox" id="o_wforce"> overwrite an existing wells.csv</label>
-         <button ${e.initialised ? "" : "disabled"} ${d} onclick="startJob('wells-template',{force:$('o_wforce').checked})">Write wells template</button>`)}
+         <button ${e.initialised ? "" : "disabled"} ${d} ${on("click", function (event) { wellsTemplate($('o_wforce').checked); })}>Write wells template</button>`)}
       ${step(6, false, "Plate maps", "Randomised, balanced plate maps for the next experiment (one plate per n).",
-        `<button ${e.initialised ? "" : "disabled"} onclick="nav('plates')">Plate maps →</button>`)}
+        `<button ${e.initialised ? "" : "disabled"} ${on("click", function (event) { nav('plates') })}>Plate maps →</button>`)}
     </div>
     <h3>On this computer</h3>
-    <div class="row"><button onclick="openSys('data')">Open raw images folder</button>
-      <button ${e.initialised ? "" : "disabled"} onclick="openSys('folder')">Open project folder</button>
-      <button ${last ? "" : "disabled"} onclick="openSys('results')">Open latest results in Excel</button></div>`;
+    <div class="row"><button ${on("click", function (event) { openSys('data') })}>Open raw images folder</button>
+      <button ${e.initialised ? "" : "disabled"} ${on("click", function (event) { openSys('folder') })}>Open project folder</button>
+      <button ${last ? "" : "disabled"} ${on("click", function (event) { openSys('results') })}>Open latest results in Excel</button></div>`;
 }
 
 // ---------------------------------------------------------------- Layout
@@ -372,11 +418,11 @@ RENDER.layout = async function (b) {
   const hasNew = S.project && S.project.files["layout.new.csv"];
   b.innerHTML = `
     ${hasNew ? `<div class="notice">A fresh scan of the raw folders was saved as <code>layout.new.csv</code> (the folders changed since set-up).
-       <button class="small" onclick="viewTable('layout.new.csv')">Compare</button>
-       <button class="small" onclick="useNewLayout()">Use the fresh scan</button></div>` : ""}
+       <button class="small" ${on("click", function (event) { viewTable('layout.new.csv') })}>Compare</button>
+       <button class="small" ${on("click", function (event) { useNewLayout() })}>Use the fresh scan</button></div>` : ""}
     <p class="muted">One row per raw folder. Fix the <b>n</b>, <b>timepoint</b> or <b>treatment</b> name if it was read wrongly; untick <b>include</b> to leave a folder out.
       Then run the analysis again.</p>
-    <div class="bar"><button class="primary" id="saveLayout" onclick="saveLayout()">Save layout</button><span class="muted small" id="layoutState"></span></div>
+    <div class="bar"><button class="primary" id="saveLayout" ${on("click", function (event) { saveLayout() })}>Save layout</button><span class="muted small" id="layoutState"></span></div>
     <div class="tablewrap"><table class="grid" id="layoutTbl"><thead><tr><th>n folder</th><th>treatment folder</th><th>n</th><th>date</th>${"timepoint" in ix ? "<th>timepoint</th>" : ""}<th>treatment</th><th>include</th><th class="num">images</th><th>note</th></tr></thead>
     <tbody>${t.rows.map((r, i) => `<tr data-i="${i}">
       <td>${esc(r[ix.n_folder])}</td><td>${esc(r[ix.treatment_folder])}</td>
@@ -403,7 +449,7 @@ async function saveLayout() {
   document.querySelectorAll("#layoutTbl tr.changed").forEach(tr => tr.classList.remove("changed"));
 }
 async function useNewLayout() {
-  confirmBox("Replace <code>layout.csv</code> with the fresh scan? Any names you edited in the current layout are lost.", async () => {
+  confirmBox(`Replace <code>layout.csv</code> with the fresh scan? Names, exclusions and overrides you edited in the current layout are replaced. ${BACKUP_TXT}`, async () => {
     await post("/api/layout_use_new", { experiment: S.exp }); S.project = null; render();
   });
 }
@@ -417,14 +463,14 @@ function tomlTable(v) {  // kind "table": { name = ["a", "b"] } shown as TOML in
 }
 function itemInput(sec, f, v) {
   const id = `f_${sec}_${f.key}`;
-  const setBtn = s => `<button class="small" type="button" onclick="$('${id}').value=${esc(JSON.stringify(s))};$('${id}').dispatchEvent(new Event('input',{bubbles:true}))">${s === "" ? "clear" : esc(s)}</button>`;
+  const setBtn = s => `<button class="small" type="button" ${on("click", function (event) { $(String(id)).value=(s);$(String(id)).dispatchEvent(new Event('input',{bubbles:true})) })}>${s === "" ? "clear" : esc(s)}</button>`;
   switch (f.kind) {
     case "bool": return `<label><input type="checkbox" id="${id}" ${v ? "checked" : ""}> on</label>`;
     case "choice": return `<select id="${id}">${f.options.map(o => `<option ${o === v ? "selected" : ""} value="${esc(o)}">${esc(o === "" ? "(empty)" : o)}</option>`).join("")}</select>`;
     case "multi": return f.options.map(o => `<label class="chk"><input type="checkbox" data-multi="${id}" value="${esc(o)}" ${(v || []).includes(o) ? "checked" : ""}> ${esc(o)}</label>`).join("");
     case "names": {  // "all", or some of the options
       const all = v === "all" || v == null;
-      return `<label class="chk"><input type="checkbox" id="${id}_all" ${all ? "checked" : ""} onchange="document.querySelectorAll('[data-names=${id}]').forEach(x=>{x.disabled=this.checked})"> <b>all</b></label><br>` +
+      return `<label class="chk"><input type="checkbox" id="${id}_all" ${all ? "checked" : ""} ${on("change", function (event) { document.querySelectorAll(`[data-names="${id}"]`).forEach(x => { x.disabled = this.checked; }) })}> <b>all</b></label><br>` +
         f.options.map(o => `<label class="chk"><input type="checkbox" data-names="${id}" value="${esc(o)}" ${all || (v || []).includes(o) ? "checked" : ""} ${all ? "disabled" : ""}> ${esc(o)}</label>`).join("");
     }
     case "list": return `<input type="text" id="${id}" value="${esc((v || []).join(", "))}" style="width:100%" placeholder="comma-separated">`;
@@ -449,10 +495,10 @@ RENDER.settings = async function (b) {
   const p = S.project;
   b.innerHTML = `<p class="muted" style="margin-top:0">Every setting of this experiment. Changes are saved to <code>settings.toml</code>; after saving, kerncount tells you which steps to re-run.
       Settings marked <span class="tag fail">re-detects</span> make the next run re-detect every nucleus (slow); the others reuse the detections.</p>
-    <div class="bar"><button class="primary" onclick="saveSettings()">Save settings</button>
+    <div class="bar"><button class="primary" ${on("click", function (event) { saveSettings() })}>Save settings</button>
       <span class="muted small" id="setState"></span><span class="spacer"></span>
-      <select onchange="document.getElementById('sec_'+this.value).scrollIntoView()"><option>Jump to section…</option>${p.schema.map(s => `<option value="${s.section}">${esc(s.title)}</option>`).join("")}</select>
-      <button onclick="resetSettings()">Reset to defaults…</button></div>
+      <select ${on("change", function (event) { document.getElementById('sec_'+this.value).scrollIntoView() })}><option>Jump to section…</option>${p.schema.map(s => `<option value="${s.section}">${esc(s.title)}</option>`).join("")}</select>
+      <button ${on("click", function (event) { resetSettings() })}>Reset to defaults…</button></div>
     <div id="rerun"></div>
     ${p.schema.map(sec => `<div class="form-sec" id="sec_${sec.section}"><h3>${esc(sec.title)} <span class="key small muted">[${sec.section}]</span></h3>${sec.items.map(f => {
       const v = (p.settings[sec.section] || {})[f.key];
@@ -462,7 +508,7 @@ RENDER.settings = async function (b) {
     <details class="card"><summary>Advanced: edit settings.toml as text</summary>
       <p class="muted small">For settings not shown above. The file must stay valid TOML.</p>
       <textarea id="rawToml" rows="24" spellcheck="false">${esc(p.settings_text)}</textarea>
-      <div class="row" style="margin-top:8px"><button onclick="saveRawSettings()">Save text</button></div></details>`;
+      <div class="row" style="margin-top:8px"><button ${on("click", function (event) { saveRawSettings() })}>Save text</button></div></details>`;
   const mark = el => { el.classList.add("changed"); $("setState").textContent = "unsaved changes"; };
   b.querySelectorAll(".form-item").forEach(el => { el.addEventListener("input", () => mark(el)); el.addEventListener("change", () => mark(el)); el.addEventListener("click", ev => { if (ev.target.tagName === "BUTTON") mark(el); }); });
   if (S.params.sec && $("sec_" + S.params.sec)) $("sec_" + S.params.sec).scrollIntoView();
@@ -472,7 +518,7 @@ function showRerun(r) {
   const box = $("rerun"); if (!box) return;
   if (!r.changed.length) { box.innerHTML = `<div class="notice info">Saved. Nothing changed that needs a re-run.</div>`; return; }
   box.innerHTML = `<div class="notice ${r.steps.some(s => s.slow) ? "" : "info"}"><b>Saved ${r.changed.length} change(s).</b> To use them:
-    ${r.steps.map(s => `<div class="row" style="margin-top:6px"><button class="small primary" ${S.running ? "disabled" : ""} onclick='startJob(${js(s.action)}, ${js(s.options)})'>Start</button>
+    ${r.steps.map(s => `<div class="row" style="margin-top:6px"><button class="small primary" ${S.running ? "disabled" : ""} ${on("click", function (event) { startJob((s.action), (s.options)) })}>Start</button>
       <span>${esc(s.label)} <span class="muted small">(because of: ${esc(s.why)})</span></span></div>`).join("")}</div>`;
 }
 async function saveSettings() {
@@ -493,7 +539,7 @@ async function saveRawSettings() {
   S.project = null; S.ov = null; S.rerun = r; await render(); S.rerun = null; window.scrollTo(0, 0);
 }
 function resetSettings() {
-  confirmBox("Reset <b>all</b> settings of this experiment to the defaults? (The raw images folder is kept.)", async () => {
+  confirmBox(`<b>Reset all settings to the defaults?</b> This resets:<ul>${SETTINGS_LOST}</ul>${BACKUP_TXT}`, async () => {
     await post("/api/settings_reset", { experiment: S.exp }); S.project = null; S.ov = null; render();
   }, "Reset settings");
 }
@@ -600,15 +646,15 @@ RENDER.corrections = async function (b) {
       Existing: ${gensExist.map(g => `<span class="tag">${g}</span>`).join("") || "none"}</p>
     ${c.ignored.length ? `<div class="notice">${c.ignored.join(", ")} ha${c.ignored.length > 1 ? "ve" : "s"} values but come${c.ignored.length > 1 ? "" : "s"} after an empty round, so ${c.ignored.length > 1 ? "they are" : "it is"} ignored. Move them into ${c.newCol} (in Excel) to use them.</div>` : ""}
     <div class="bar">
-      <select id="roundSel" onchange="changeRound(this)">${roundOptions()}</select>
-      <button class="primary" ${nPending ? "" : "disabled"} onclick="saveCorrections(false)">Save ${nPending || ""} change${nPending === 1 ? "" : "s"}</button>
-      <button ${S.running ? "disabled" : ""} onclick="${nPending ? "saveCorrections(true)" : "buildGeneration()"}">${nPending ? "Save &amp; " : ""}build g${k + 1}</button>
+      <select id="roundSel" ${on("change", function (event) { changeRound(this) })}>${roundOptions()}</select>
+      <button class="primary" ${nPending ? "" : "disabled"} ${on("click", function (event) { saveCorrections(false) })}>Save ${nPending || ""} change${nPending === 1 ? "" : "s"}</button>
+      <button ${S.running ? "disabled" : ""} ${on("click", () => nPending ? saveCorrections(true) : buildGeneration())}>${nPending ? "Save &amp; " : ""}build g${k + 1}</button>
       <span class="muted small">${nThis} image(s) corrected in ${S.round}</span>
       <span class="spacer"></span>
-      <select onchange="S.filters.n=this.value;render()"><option value="">all n</option>${ns.map(n => `<option ${n === F.n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
-      <select onchange="S.filters.t=this.value;render()"><option value="">all treatments</option>${ts.map(t => `<option ${t === F.t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
-      <select onchange="S.filters.q=this.value;render()"><option value="">all QC</option>${["low", "medium", "high"].map(q => `<option ${q === F.q ? "selected" : ""}>${q}</option>`).join("")}</select>
-      <label class="small"><input type="checkbox" ${F.only ? "checked" : ""} onchange="S.filters.only=this.checked;render()"> only corrected</label>
+      <select ${on("change", function (event) { S.filters.n=this.value;render() })}><option value="">all n</option>${ns.map(n => `<option ${n === F.n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+      <select ${on("change", function (event) { S.filters.t=this.value;render() })}><option value="">all treatments</option>${ts.map(t => `<option ${t === F.t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
+      <select ${on("change", function (event) { S.filters.q=this.value;render() })}><option value="">all QC</option>${["low", "medium", "high"].map(q => `<option ${q === F.q ? "selected" : ""}>${q}</option>`).join("")}</select>
+      <label class="small"><input type="checkbox" ${F.only ? "checked" : ""} ${on("change", function (event) { S.filters.only=this.checked;render() })}> only corrected</label>
     </div>
     <div class="split">
       <div class="tablewrap"><table class="grid" id="corrTbl"><thead><tr><th>n</th><th>treatment</th><th>field</th><th class="num">auto</th><th>QC</th>
@@ -669,7 +715,7 @@ function selectRow(key, scroll) {
       <span class="tag ${esc(r[ix.qc_level])}">QC ${esc(r[ix.qc_level])}</span><span class="spacer"></span>
       <span class="small muted">auto ${esc(r[ix.auto_count])}</span></div>
     ${it && srcShort(it) ? `<div class="small muted" style="margin-bottom:6px" title="${esc(srcTitle(it))}">file: ${esc(srcShort(it))}</div>` : ""}
-    <img src="${fileUrl(path)}" onclick='openLightboxFor(${js(key)})' onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'muted',textContent:'No review image (run without “skip review images”).'}))">
+    <img src="${fileUrl(path)}" ${on("click", function (event) { openLightboxFor((key)) })} ${on("error", function (event) { this.replaceWith(Object.assign(document.createElement('div'),{className:'muted',textContent:'No review image (run without “skip review images”).'})) })}>
     <div class="small muted" style="margin-top:6px">Left: original. Right: what was counted. Click to enlarge.</div>`;
 }
 const slugify = s => String(s).replace(/[^\p{L}\p{N}_.\-]+/gu, "_").replace(/^_+|_+$/g, "");
@@ -693,23 +739,23 @@ RENDER.review = async function (b, e) {
   const T = S.reviewT && N.treatments.find(t => t.treatment === S.reviewT);
   const markers = e.intensity ? Object.keys((N.treatments[0].images[0] || {}).marker || {}) : [];
   const tally = imgs => ["high", "medium", "low"].map(q => [q, imgs.filter(i => i.qc === q).length]).filter(x => x[1]).map(([q, c]) => `<span class="tag ${q}">${c} ${q}</span>`).join("");
-  let html = `<div class="bar"><div class="pills">${R.map(x => `<button class="pill ${x.n === S.reviewN ? "active" : ""}" onclick='S.reviewN=${js(x.n)};S.reviewT=null;render()'><span class="ndot" style="background:${esc(nColour(x.n))}"></span>${esc(x.n)}</button>`).join("")}</div>
-    <span class="spacer"></span><div class="pills">${["all", "low", "medium", "high"].map(q => `<button class="pill ${S.reviewQ === q ? "active" : ""}" onclick="S.reviewQ='${q}';render()">${q === "all" ? "all QC" : "QC " + q}</button>`).join("")}</div></div>`;
+  let html = `<div class="bar"><div class="pills">${R.map(x => `<button class="pill ${x.n === S.reviewN ? "active" : ""}" ${on("click", function (event) { S.reviewN=(x.n);S.reviewT=null;render() })}><span class="ndot" style="background:${esc(nColour(x.n))}"></span>${esc(x.n)}</button>`).join("")}</div>
+    <span class="spacer"></span><div class="pills">${["all", "low", "medium", "high"].map(q => `<button class="pill ${S.reviewQ === q ? "active" : ""}" ${on("click", function (event) { S.reviewQ=String(q);render() })}>${q === "all" ? "all QC" : "QC " + q}</button>`).join("")}</div></div>`;
   if (!T) {
     const ofQ = imgs => imgs.filter(i => S.reviewQ === "all" || i.qc === S.reviewQ).length;
     html += `<p class="muted">One sheet per treatment; border colour = quality (<span class="tag high">high</span><span class="tag medium">medium</span><span class="tag low">low</span>). Click a treatment to go through its fields.
         ${markers.length ? `Fluorescence experiments: open a field and press <b>Show ${esc(markers[0])} positivity</b> to see which nuclei are counted as positive.` : ""}</p>
-      <div class="gallery">${N.treatments.map(t => `<div class="thumb" onclick='S.reviewT=${js(t.treatment)};render()'>
+      <div class="gallery">${N.treatments.map(t => `<div class="thumb" ${on("click", function (event) { S.reviewT=(t.treatment);render() })}>
         ${t.overview ? `<img loading="lazy" src="${fileUrl(t.overview)}">` : `<div class="muted" style="padding:30px">no overview sheet</div>`}
         <div class="cap"><b>${esc(t.treatment)}</b><span>${tally(t.images)}</span>${S.reviewQ !== "all" ? `<span class="small muted">${ofQ(t.images)} QC ${esc(S.reviewQ)}</span>` : ""}</div></div>`).join("")}</div>`;
   } else {
     const imgs = T.images.filter(i => S.reviewQ === "all" || i.qc === S.reviewQ);
     S.lbList = imgs.map(i => ({ ...i, n: N.n, treatment: T.treatment }));
-    html += `<div class="row" style="margin-bottom:10px"><button onclick="S.reviewT=null;render()">← all treatments</button>
+    html += `<div class="row" style="margin-bottom:10px"><button ${on("click", function (event) { S.reviewT=null;render() })}>← all treatments</button>
         <b style="font-size:15px">${esc(T.treatment)}</b> ${tally(T.images)}<span class="spacer"></span>
-        ${T.overview ? `<button onclick='openImage(${js(T.overview)},${js(T.treatment + " overview")})'>Overview sheet</button>` : ""}</div>
+        ${T.overview ? `<button ${on("click", function (event) { openImage((T.overview),(T.treatment + " overview")) })}>Overview sheet</button>` : ""}</div>
       ${imgs.length ? "" : `<div class="muted">No QC-${esc(S.reviewQ)} fields in this treatment.</div>`}
-      <div class="gallery small">${imgs.map((i, j) => `<div class="thumb q-${esc(i.qc)}" onclick="openLightbox(${j})">
+      <div class="gallery small">${imgs.map((i, j) => `<div class="thumb q-${esc(i.qc)}" ${on("click", function (event) { openLightbox((j)) })}>
         ${i.path ? `<img loading="lazy" src="${fileUrl(i.path)}">` : `<div class="muted" style="padding:30px">no image</div>`}
         <div class="cap"><b>field ${i.image}</b><span>${esc(i.count)} <span class="muted">(${esc(i.low)}–${esc(i.high)})</span></span><span class="tag ${esc(i.qc)}">${esc(i.qc)}</span></div>
         ${i.duplicate ? `<div class="src" style="color:var(--red)" title="byte-identical raw file">identical to ${esc(i.duplicate)}</div>` : ""}
@@ -745,14 +791,14 @@ function drawLightbox() {
   openModal(`<div class="modal-head"><span class="title">${nChip(i.n)} ${esc(i.treatment)} · field ${i.image}</span>
       <span class="tag ${esc(i.qc)}">QC ${esc(i.qc)}</span><span>count <b>${esc(i.count)}</b> <span class="muted">(plausible ${esc(i.low)}–${esc(i.high)})</span></span>
       <span class="spacer"></span><span class="small muted"><span class="kbd">←</span> <span class="kbd">→</span> browse · <span class="kbd">Esc</span> close</span>
-      <button onclick="lbStep(-1)" ${S.lb ? "" : "disabled"}>‹ Prev</button><button onclick="lbStep(1)" ${S.lb < S.lbList.length - 1 ? "" : "disabled"}>Next ›</button><button onclick="closeModal()">Close</button></div>
+      <button ${on("click", function (event) { lbStep(-1) })} ${S.lb ? "" : "disabled"}>‹ Prev</button><button ${on("click", function (event) { lbStep(1) })} ${S.lb < S.lbList.length - 1 ? "" : "disabled"}>Next ›</button><button ${on("click", function (event) { closeModal() })}>Close</button></div>
     <div class="small" style="margin-bottom:6px"><span class="muted">file${Object.keys(i.sources || {}).length > 1 ? "s" : ""}:</span> <span title="${esc(srcTitle(i))}">${esc(srcShort(i)) || "–"}</span>
       ${i.flags ? ` · <span class="muted">flags:</span> ${esc(i.flags)}` : ""}${i.duplicate ? ` · <span class="tag fail">identical file: ${esc(i.duplicate)}</span>` : ""}${i.check ? ` · <span class="tag medium">${esc(i.check)}</span>` : ""}</div>
     ${mk ? `<div class="row small" style="margin-bottom:6px">
-        <button class="small ${S.lbOverlay ? "primary" : ""}" onclick="S.lbOverlay=!S.lbOverlay;drawLightbox()">${S.lbOverlay ? "Show review image" : `Show ${esc(mk)} positivity`}</button>
+        <button class="small ${S.lbOverlay ? "primary" : ""}" ${on("click", function (event) { S.lbOverlay=!S.lbOverlay;drawLightbox() })}>${S.lbOverlay ? "Show review image" : `Show ${esc(mk)} positivity`}</button>
         <span>${esc(mk)}-positive: <b>${pct(mv.positive)}</b> of ${esc(mv.measured || "–")} measured nuclei (cut-off rule: ${esc(mv.rule || "–")})</span>
         ${S.lbOverlay ? `<span class="legend"><span><i style="border-color:#28dc3c"></i>positive</span><span><i style="border-color:#969696"></i>negative</span><span><i style="border-color:#ff9600"></i>saturated (excluded)</span></span>` : ""}</div>` : ""}
-    ${S.lbOverlay && mk ? `<img class="full" src="${ovUrl}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'notice',textContent:'No marker measurements for this field (mis-paired files?).'}))">`
+    ${S.lbOverlay && mk ? `<img class="full" src="${ovUrl}" ${on("error", function (event) { this.replaceWith(Object.assign(document.createElement('div'),{className:'notice',textContent:'No marker measurements for this field (mis-paired files?).'})) })}>`
       : i.path ? `<img class="full" src="${fileUrl(i.path)}">` : `<div class="muted">no review image</div>`}
     ${r ? `<div class="row" style="margin-top:10px"><span>In g${k}: <b>${esc(valueAt(r, k))}</b></span>
       <label>Correction for <select id="lbRound">${roundOptions()}</select>
@@ -779,18 +825,18 @@ function lbStep(d) { S.lb = Math.max(0, Math.min(S.lbList.length - 1, S.lb + d))
 
 const fmtSize = n => n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : n > 1e3 ? Math.round(n / 1e3) + " kB" : n + " B";
 function fileTable(files, base) {
-  return `<table class="grid filelist"><tbody>${files.map(f => `<tr><td><a onclick='previewFile(${js(f.path)})'>${esc(f.path.slice(base.length).replace(/^\//, ""))}</a></td>
+  return `<table class="grid filelist"><tbody>${files.map(f => `<tr><td><a ${on("click", function (event) { previewFile((f.path)) })}>${esc(f.path.slice(base.length).replace(/^\//, ""))}</a></td>
     <td class="num muted small">${f.size != null ? fmtSize(f.size) : ""}</td><td style="width:1%"><a class="small" href="${fileUrl(f.path, 1)}">download</a></td></tr>`).join("")}</tbody></table>`;
 }
 RENDER.files = async function (b) {
   const files = await get("/api/files", { exp: S.exp, dir: S.dir });
   const parts = S.dir ? S.dir.split("/") : [];
   b.innerHTML = `<div class="row" style="margin-bottom:10px"><b>Path:</b>
-      <a href="#" onclick="S.dir='';render();return false">${esc(S.exp)}</a>${parts.map((p, i) => ` / <a href="#" onclick='S.dir=${js(parts.slice(0, i + 1).join("/"))};render();return false'>${esc(p)}</a>`).join("")}
-      <span class="spacer"></span><button onclick="openSys(null, S.dir || '.')">Open in file browser</button></div>
-    <table class="grid filelist"><tbody>${S.dir ? `<tr><td><a onclick='S.dir=${js(parts.slice(0, -1).join("/"))};render()'>⬑ up</a></td><td></td><td></td></tr>` : ""}
-    ${files.map(f => f.dir ? `<tr><td>📁 <a onclick='S.dir=${js(f.path)};render()'>${esc(f.name)}</a></td><td></td><td></td></tr>`
-      : `<tr><td>📄 <a onclick='previewFile(${js(f.path)})'>${esc(f.name)}</a></td><td class="num small muted">${fmtSize(f.size)}</td>
+      <a href="#" ${on("click", function (event) { S.dir='';render();return false })}>${esc(S.exp)}</a>${parts.map((p, i) => ` / <a href="#" ${on("click", function (event) { S.dir=(parts.slice(0, i + 1).join("/"));render();return false })}>${esc(p)}</a>`).join("")}
+      <span class="spacer"></span><button ${on("click", function (event) { openSys(null, S.dir || '.') })}>Open in file browser</button></div>
+    <table class="grid filelist"><tbody>${S.dir ? `<tr><td><a ${on("click", function (event) { S.dir=(parts.slice(0, -1).join("/"));render() })}>⬑ up</a></td><td></td><td></td></tr>` : ""}
+    ${files.map(f => f.dir ? `<tr><td>📁 <a ${on("click", function (event) { S.dir=(f.path);render() })}>${esc(f.name)}</a></td><td></td><td></td></tr>`
+      : `<tr><td>📄 <a ${on("click", function (event) { previewFile((f.path)) })}>${esc(f.name)}</a></td><td class="num small muted">${fmtSize(f.size)}</td>
          <td style="width:1%"><a class="small" href="${fileUrl(f.path, 1)}">download</a></td></tr>`).join("")}</tbody></table>`;
 };
 
@@ -800,7 +846,7 @@ function openModal(html, cls = "") { $("modalBox").className = "modal-box " + cl
 function closeModal() { $("modal").classList.add("hidden"); $("modalBox").innerHTML = ""; S.lb = null; }
 function openImage(path, title, desc, pdf) {
   openModal(`<div class="modal-head"><span class="title">${esc(title || path)}</span><span class="spacer"></span>
-    ${pdf ? `<a class="btn" href="${fileUrl(pdf, 1)}">PDF</a>` : ""}<a class="btn" href="${fileUrl(path, 1)}">Download</a><button onclick="closeModal()">Close</button></div>
+    ${pdf ? `<a class="btn" href="${fileUrl(pdf, 1)}">PDF</a>` : ""}<a class="btn" href="${fileUrl(path, 1)}">Download</a><button ${on("click", function (event) { closeModal() })}>Close</button></div>
     ${desc ? `<div class="small muted" style="margin:-4px 0 8px">${esc(desc)}</div>` : ""}<img class="full" src="${fileUrl(path)}">`);
 }
 function fmtCell(v) {
@@ -812,7 +858,7 @@ async function viewTable(path) {
   const t = await get("/api/table", { exp: S.exp, path });
   const numeric = t.columns.map((_, j) => t.rows.slice(0, 50).every(r => r[j] === "" || r[j] === undefined || r[j] === "nan" || !isNaN(+r[j])));
   openModal(`<div class="modal-head"><span class="title">${esc(path)}</span><span class="muted small">${t.total} rows${t.truncated ? " (first " + t.rows.length + " shown)" : ""}</span>
-      <span class="spacer"></span><a class="btn" href="${fileUrl(path, 1)}">Download</a><button onclick="closeModal()">Close</button></div>
+      <span class="spacer"></span><a class="btn" href="${fileUrl(path, 1)}">Download</a><button ${on("click", function (event) { closeModal() })}>Close</button></div>
     ${t.total ? `<div class="tablewrap"><table class="grid"><thead><tr>${t.columns.map((c, j) => `<th class="${numeric[j] ? "num" : ""}">${esc(c)}</th>`).join("")}</tr></thead>
     <tbody>${t.rows.map(r => `<tr>${r.map((v, j) => `<td class="${numeric[j] ? "num" : ""}" title="${esc(v)}">${esc(fmtCell(v))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
       : `<div class="muted">This table is empty.</div>`}`);
@@ -820,7 +866,7 @@ async function viewTable(path) {
 async function viewText(path) {
   const t = await get("/api/text", { exp: S.exp, path });
   openModal(`<div class="modal-head"><span class="title">${esc(path)}</span><span class="spacer"></span>
-    <a class="btn" href="${fileUrl(path, 1)}">Download</a><button onclick="closeModal()">Close</button></div><pre class="text">${esc(t.text)}</pre>`);
+    <a class="btn" href="${fileUrl(path, 1)}">Download</a><button ${on("click", function (event) { closeModal() })}>Close</button></div><pre class="text">${esc(t.text)}</pre>`);
 }
 function previewFile(path) {
   const ext = path.split(".").pop().toLowerCase();
@@ -844,6 +890,13 @@ window.addEventListener("hashchange", applyHash);
 
 // start after every script file has loaded (results.js, intensity.js, plan.js add their sections to RENDER)
 window.addEventListener("DOMContentLoaded", async () => {
+  // the static page's buttons (index.html has no inline handlers)
+  $("btnWorkspace").addEventListener("click", () => go(null));
+  $("btnQuit").addEventListener("click", () => quitApp());
+  $("btnNewExp").addEventListener("click", () => newExperiment());
+  $("logHead").addEventListener("click", ev => toggleLog(ev));
+  $("stopBtn").addEventListener("click", ev => stopJob(ev));
+  $("modal").addEventListener("click", ev => { if (ev.target === $("modal")) closeModal(); });
   await refreshState();
   const h = parseHash(), ex = S.state.experiments;
   if (!(h.exp && ex.find(e => e.name === h.exp)) && ex.length === 1) history.replaceState(null, "", hashFor(ex[0].name, "home", {}));

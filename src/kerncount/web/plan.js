@@ -6,8 +6,8 @@
 
 RENDER.planner = async function (b, e, tok) {
   const P = S.params;
-  if (!S.plan || S.plan.gen !== (P.gen || S.plan.gen) || S.plan.exp !== S.exp) {
-    S.plan = await get("/api/planner", { exp: S.exp, gen: P.gen || "" });
+  if (!S.plan || S.plan.gen !== (P.gen || S.plan.gen) || S.plan.exp !== S.exp || (P.cl && S.plan.cell_line !== P.cl)) {
+    S.plan = await get("/api/planner", { exp: S.exp, gen: P.gen || "", cl: P.cl || "" });
     S.plan.exp = S.exp;
   }
   if (tok !== S.renderTok) return;
@@ -15,18 +15,19 @@ RENDER.planner = async function (b, e, tok) {
   const runCard = `<div class="card"><h3>Sampling analysis</h3><p class="small muted" style="margin-top:0">Splits the variation into field / well / n, estimates power for other designs and subsamples your data. The planner below is built from it.</p>
     <div class="row"><label>Generation <select id="sGen">${gens.map(g => `<option ${g === gens[gens.length - 1] ? "selected" : ""}>${esc(g)}</option>`).join("")}</select></label>
       <label>Subsamples per design <input id="sIt" value="1000" size="6"></label>
-      <button class="primary" ${S.running || !gens.length ? "disabled" : ""} onclick="startJob('sampling',{generation:$('sGen').value,iterations:$('sIt').value})">Run sampling analysis</button></div></div>`;
+      <button class="primary" ${S.running || !gens.length ? "disabled" : ""} ${on("click", function (event) { startJob('sampling',{generation:$('sGen').value,iterations:$('sIt').value}) })}>Run sampling analysis</button></div></div>`;
   if (!pl.gen) { b.innerHTML = `<div class="notice info">No planner yet: run the sampling analysis on a generation first.</div>${runCard}`; return; }
-  const files = pl.files || [], base = `sampling/${pl.gen}/`;
+  const files = pl.files || [], base = pl.base || `sampling/${pl.gen}/`;
   const plots = files.filter(f => f.path.endsWith(".png")).map(f => ({ ...f, kind: "model" }));
   const tables = files.filter(f => /\.(csv|txt)$/.test(f.path));
   const statics = `<h2>Recommendations for the next experiment</h2>
     ${pl.recommendations ? `<pre class="text">${esc(pl.recommendations)}</pre>` : `<div class="muted">No recommendations in REPORT.txt.</div>`}
     ${plots.length ? `<h2>Planner plots</h2><div class="plots">${plots.map(f => plotCard(f, base)).join("")}</div>` : ""}
-    <h3>Tables and report</h3><div class="tbllist">${tables.map(f => `<button class="btn" title="${esc(f.description)}" onclick='previewFile(${js(base + f.path)})'>${esc(f.title)}</button>`).join("")}</div>
+    <h3>Tables and report</h3><div class="tbllist">${tables.map(f => `<button class="btn" title="${esc(f.description)}" ${on("click", function (event) { previewFile((base + f.path)) })}>${esc(f.title)}</button>`).join("")}</div>
     ${runCard}`;
-  const head = `<div class="selrow"><label class="f">Based on sampling of ${pl.generations.length > 1 ? `<div class="pills">${pl.generations.map(g => `<button class="pill ${g === pl.gen ? "active" : ""}" onclick="S.plan=null;setP({gen:'${g}'})">${g}</button>`).join("")}</div>` : `<span class="tag">${esc(pl.gen)}</span>`}</label>
-      <span class="small muted">${esc(pl.metric || "")} · ${pl.design.n_count} n · ${pl.design.conditions} conditions · ${pl.design.wells} wells × ${pl.design.fields_per_well} fields now</span></div>`;
+  const head = `<div class="selrow"><label class="f">Based on sampling of ${pl.generations.length > 1 ? `<div class="pills">${pl.generations.map(g => `<button class="pill ${g === pl.gen ? "active" : ""}" ${on("click", function (event) { S.plan=null;setP({gen:String(g)}) })}>${g}</button>`).join("")}</div>` : `<span class="tag">${esc(pl.gen)}</span>`}</label>
+      ${(pl.cell_lines || []).length > 1 ? `<label class="f">Cell line <div class="pills">${pl.cell_lines.map(c => `<button class="pill ${c.cell_line === pl.cell_line ? "active" : ""}" ${on("click", () => { S.plan = null; setP({ cl: c.cell_line }); })}>${esc(c.cell_line)} <span class="muted">(${c.n_count} n)</span></button>`).join("")}</div></label>` : (pl.cell_line ? `<span class="tag">${esc(pl.cell_line)}</span>` : "")}
+      <span class="small muted">${esc(pl.metric || "")} · ${pl.design.n_count} n · ${pl.design.conditions} conditions · ${pl.design.wells} wells × ${pl.design.fields_per_well} fields now${(pl.excluded_ns || []).length ? ` · left out (acceptance enforced): ${esc(pl.excluded_ns.join(", "))}` : ""}</span></div>`;
   if (!pl.ok) {
     b.innerHTML = head + `<div class="notice n1"><b>Not enough data to plan yet${pl.design.n_count < 2 ? ": needs ≥ 2 n" : ""}.</b> The planner needs at least two n's that contain the reference and the treatments, because the n-to-n variation can only be estimated from several independent experiments. (${esc(pl.error || "")})</div>` + statics;
     return;
@@ -38,7 +39,7 @@ RENDER.planner = async function (b, e, tok) {
     n: +(P.n || Math.max(d.n_count + 1, 3)), wells: +(P.wells || d.wells), fields: +(P.fields || d.fields_per_well),
     effect: P.effect || String(o.effects.includes(0.7) ? 0.7 : o.effects[0]), rw: P.rw || "", alpha: +(P.alpha || o.alpha),
     power: +(P.power || o.target_power), vary: ["n", "wells", "fields"].includes(P.vary) ? P.vary : "n", show: P.show === "ci" ? "ci" : "power",
-    positions: P.pos || "",
+    positions: P.pos || "", adjust: P.adj === "0" ? false : P.adj === "1" ? true : o.adjust_for_family !== false,
   };
   const isTreat = v.effect.startsWith("t:");
   const slider = (key, label, min, max, step, val, hint, fmt = x => x) => `<div class="ctl"><div class="lab"><span>${label}</span><span class="val" id="v_${key}">${fmt(val)}</span></div>
@@ -60,13 +61,14 @@ RENDER.planner = async function (b, e, tok) {
           <select data-k="rw" style="width:100%"><option value="">same as treatments</option><option value="auto" ${v.rw === "auto" ? "selected" : ""}>auto (Dunnett √k)</option>${[1, 2, 3, 4, 5, 6, 8].map(x => `<option value="${x}" ${v.rw === String(x) ? "selected" : ""}>${x}</option>`).join("")}</select></div>
         <div class="row"><div class="ctl" style="flex:1"><div class="lab"><span>alpha</span></div><select data-k="alpha">${[0.01, 0.05, 0.1].map(x => `<option ${x === v.alpha ? "selected" : ""}>${x}</option>`).join("")}</select></div>
           <div class="ctl" style="flex:1"><div class="lab"><span>target power</span></div><select data-k="power">${[0.7, 0.8, 0.9, 0.95].map(x => `<option ${x === v.power ? "selected" : ""}>${x}</option>`).join("")}</select></div></div>
+        <div class="ctl"><label class="small" title="On: power and smallest detectable effect for a star on the headline plot, i.e. at the multiple-comparison level the statistics use (single-step multivariate t over the ${pl.family_size || ""} comparisons vs the reference). Off: one unadjusted test."><input type="checkbox" data-k="adj" ${v.adjust ? "checked" : ""}> Power for a <b>star</b> (adjusted for the ${pl.family_size || ""} comparisons)</label></div>
         <div class="ctl"><div class="lab"><span>Field positions</span></div><select data-k="pos" style="width:100%"><option value="">as now (${esc(d.positions_default)})</option><option value="standardised" ${v.positions === "standardised" ? "selected" : ""}>standardised (same spots in every well)</option><option value="random" ${v.positions === "random" ? "selected" : ""}>random</option></select></div>
       </div>
       <div>
         <div class="metrics4" id="planOut"><div class="mcard"><div class="k">Power</div><div class="v">…</div></div></div>
         <div class="card"><div class="row" style="margin-bottom:6px"><b id="chartTitle">Chart</b><span class="spacer"></span>
-          <span class="small muted">vary</span><div class="pills">${["n", "wells", "fields"].map(x => `<button class="pill ${v.vary === x ? "active" : ""}" onclick="setP({vary:'${x}'},false);planUpdate()">${x === "n" ? "n" : x}</button>`).join("")}</div>
-          <span class="small muted">show</span><div class="pills"><button class="pill ${v.show === "power" ? "active" : ""}" onclick="setP({show:'power'},false);planUpdate()">power</button><button class="pill ${v.show === "ci" ? "active" : ""}" onclick="setP({show:'ci'},false);planUpdate()">CI width</button></div></div>
+          <span class="small muted">vary</span><div class="pills">${["n", "wells", "fields"].map(x => `<button class="pill ${v.vary === x ? "active" : ""}" ${on("click", function (event) { setP({vary:String(x)},false);planUpdate() })}>${x === "n" ? "n" : x}</button>`).join("")}</div>
+          <span class="small muted">show</span><div class="pills"><button class="pill ${v.show === "power" ? "active" : ""}" ${on("click", function (event) { setP({show:'power'},false);planUpdate() })}>power</button><button class="pill ${v.show === "ci" ? "active" : ""}" ${on("click", function (event) { setP({show:'ci'},false);planUpdate() })}>CI width</button></div></div>
           <div id="planChart" style="min-height:300px"></div>
           <div class="small muted">Shaded band: pessimistic to optimistic (10–90% of the uncertainty in the variance estimates); line: expected. With few n's plan with the pessimistic end.</div></div>
         <div class="card" id="planNotes"></div>
@@ -75,7 +77,7 @@ RENDER.planner = async function (b, e, tok) {
   $("planCtl").addEventListener("input", ev => {
     const el = ev.target, k = el.dataset.k; if (!k) return;
     if (el.type === "range") $("v_" + k).textContent = el.value;
-    setP({ [k]: el.value }, false);
+    setP({ [k]: el.type === "checkbox" ? (el.checked ? "1" : "0") : el.value }, false);
     clearTimeout(S.planTimer); S.planTimer = setTimeout(planUpdate, el.type === "range" ? 40 : 0);
   });
   $("planCtl").addEventListener("change", ev => { if (ev.target.tagName === "SELECT" && ["effect", "ref"].includes(ev.target.dataset.k)) render(); });
@@ -86,7 +88,8 @@ async function planUpdate() {
   const P = S.params, pl = S.plan, d = pl.design, o = pl.options;
   const body = { experiment: S.exp, gen: pl.gen, n: P.n || Math.max(d.n_count + 1, 3), wells: P.wells || d.wells, fields: P.fields || d.fields_per_well,
     effect: (P.effect || String(o.effects.includes(0.7) ? 0.7 : o.effects[0])).replace(/^t:/, ""), reference_wells: P.rw || "",
-    alpha: P.alpha || o.alpha, target_power: P.power || o.target_power, reference: P.ref || "", positions: P.pos || "", vary: P.vary || "n" };
+    alpha: P.alpha || o.alpha, target_power: P.power || o.target_power, reference: P.ref || "", positions: P.pos || "", vary: P.vary || "n",
+    cell_line: pl.cell_line || "", adjust_for_family: P.adj === "0" ? false : P.adj === "1" ? true : o.adjust_for_family !== false };
   const seq = (S.planSeq = (S.planSeq || 0) + 1);
   let r;
   try { r = await post("/api/planner/evaluate", body, true); } catch (e) { return; }
@@ -101,10 +104,10 @@ async function planUpdate() {
     <div class="mcard"><div class="k">Effort</div><div class="v">${Math.round(x.cost).toLocaleString()}</div><div class="b">${esc((pl.costs && pl.costs.unit) || "units")} · ${x.wells_per_n} wells per n · ${x.images} images per condition</div></div>`;
   $("planNotes").innerHTML = `<h3>What this means</h3>
     <p style="margin-top:0">With <b>${x.n}</b> n's, <b>${x.wells}</b> well(s) × <b>${x.fields}</b> field(s) per condition and <b>${x.reference_wells}</b> reference well(s), a true ${esc(x.effect_label)} vs ${esc(x.reference)}
-      would be found significant (p &lt; ${body.alpha}) in about <b>${pw(x.power.mid)}</b> of experiments (pessimistic ${pw(x.power.low)}).
+      would ${x.adjust_for_family ? `get a <b>star</b> on the headline plot (adjusted p &lt; ${body.alpha}, ${x.family_size} comparisons vs ${esc(x.reference)})` : `be significant in one unadjusted test (p &lt; ${body.alpha}; not the chance of a star)`} in about <b>${pw(x.power.mid)}</b> of experiments (pessimistic ${pw(x.power.low)}).
       ${Math.round(100 * x.measurement_share)}% of the noise in one n's ratio is measurement (wells and fields); the rest is n-to-n biology, which only more n's reduce.</p>
     ${x.notes.length ? `<ul>${x.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
-    <div class="small muted">t critical value ${x.t_critical.toFixed(2)} (df ${x.n - 1}) · treatment class ${esc(x.cls)} · positions ${esc(x.positions)}</div>`;
+    <div class="small muted">Test: ${esc(x.test)} · critical value ${x.t_critical.toFixed(2)} (df ${x.df.toFixed(1)}${x.adjust_for_family ? `; unadjusted ${x.t_critical_unadjusted.toFixed(2)}` : ""}) · treatment class ${esc(x.cls)} · positions ${esc(x.positions)}</div>`;
   drawPlanChart(r.curve, r.vary, P.show === "ci" ? "ci" : "power", +body[r.vary === "n" ? "n" : r.vary], tp);
 }
 
@@ -168,16 +171,16 @@ RENDER.plates = async function (b, e, tok) {
         <div style="margin-top:8px"><label class="chk"><input type="checkbox" id="pm_edge" ${df.avoid_edge ? "checked" : ""}> avoid edge wells (inner wells first)</label>
           <label class="chk"><input type="checkbox" id="pm_bal" checked> balance across plates</label></div>
         <p class="small muted">Conditions: ${pi.conditions.map(c => `<span class="tag ${pi.references.includes(c) ? "blue" : ""}">${esc(c)}</span>`).join("") || "none found"}<br>Blue = reference (gets the reference wells). The negative control gets its own wells on every plate and is left out of the statistics.</p>
-        <button class="primary" id="pmGo" onclick="makePlates()">Generate plate maps</button> <span class="small muted" id="pmState"></span></div>
+        <button class="primary" id="pmGo" ${on("click", function (event) { makePlates() })}>Generate plate maps</button> <span class="small muted" id="pmState"></span></div>
       <div class="card"><h3>Earlier plans</h3>
-        ${pi.plans.length ? `<table class="grid"><tbody>${pi.plans.map(p => `<tr class="click ${p === sel ? "sel" : ""}" onclick='setP({plan:${js(p.name)}})'><td>${esc(p.name.replace("platemap_", ""))}</td><td class="small muted">${p.plates.length} plate(s)</td></tr>`).join("")}</tbody></table>`
+        ${pi.plans.length ? `<table class="grid"><tbody>${pi.plans.map(p => `<tr class="click ${p === sel ? "sel" : ""}" ${on("click", function (event) { setP({plan:(p.name)}) })}><td>${esc(p.name.replace("platemap_", ""))}</td><td class="small muted">${p.plates.length} plate(s)</td></tr>`).join("")}</tbody></table>`
           : `<div class="muted">None yet.</div>`}</div>
     </div>
     ${sel ? `<h2>${esc(sel.name)}</h2>
       <div class="row" style="margin-bottom:10px">${sel.files.filter(f => /\.(pdf|csv)$/.test(f)).map(f => `<a class="btn small" href="${fileUrl(f, 1)}">${esc(baseName(f))}</a>`).join("")}
-        <button class="small" onclick='viewText(${js(sel.path + "/README.txt")})'>README</button></div>
+        <button class="small" ${on("click", function (event) { viewText((sel.path + "/README.txt")) })}>README</button></div>
       <div class="plots">${sel.plates.map(p => `<div class="plot platecard k-design"><div class="ph"><div class="pt">${esc(baseName(p).replace(".png", "").replace("_", " "))}</div></div>
-        <img loading="lazy" src="${fileUrl(p)}" onclick='openImage(${js(p)},${js(baseName(p))},"",${js(p.replace(/\.png$/, ".pdf"))})'>
+        <img loading="lazy" src="${fileUrl(p)}" ${on("click", function (event) { openImage((p),(baseName(p)),"",(p.replace(/\.png$/, ".pdf"))) })}>
         <div class="pf"><span class="spacer"></span><a class="btn small" href="${fileUrl(p.replace(/\.png$/, ".pdf"), 1)}">PDF (A4)</a><a class="btn small" href="${fileUrl(p.replace(/\.png$/, ".csv"), 1)}">CSV</a></div></div>`).join("")}</div>
       ${sel.edge ? `<h3>Edge-well use per condition (over all plates)</h3><div class="tablewrap" style="max-height:none"><table class="grid"><thead><tr>${sel.edge.columns.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead>
         <tbody>${sel.edge.rows.map(r => `<tr>${r.map(v => `<td>${esc(fmtCell(v))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : ""}

@@ -438,13 +438,18 @@ def _mvt_cover(c: float, k: int, rho: float, dfree: float) -> float:
     return float((wz[None, :] * pr ** k).sum() / len(s))
 
 
-def family_critical(k: int, rho: float, dfree: float, alpha: float = 0.05) -> float:
+def family_critical(k: int, rho: float, dfree: float, alpha: float = 0.05, coarse: bool = False) -> float:
     """Critical value of the single-step multivariate-t adjustment (Dunnett-type, as models._mvt_adjust) for a
     family of k comparisons with common correlation rho and dfree df: P(max |T_i| < c) = 1 - alpha. k = 1 gives the
-    ordinary t critical value. Cached; rho rounded to 0.01, df to 0.1."""
+    ordinary t critical value. Cached; rho rounded to 0.01, df to 0.1 (coarse, for the design grids: rho to 0.05,
+    df to 0.5 - the critical value changes by < 0.5% over such a step)."""
     k = max(int(k), 1)
-    dfree = max(round(float(dfree), 1), 1.0)
-    rho = min(max(round(float(rho), 2), 0.0), 0.95)
+    if coarse:
+        dfree = max(round(2 * float(dfree)) / 2, 1.0)
+        rho = min(max(round(20 * float(rho)) / 20, 0.0), 0.95)
+    else:
+        dfree = max(round(float(dfree), 1), 1.0)
+        rho = min(max(round(float(rho), 2), 0.0), 0.95)
     key = (k, rho, dfree, round(alpha, 6))
     if key not in _CRIT_CACHE:
         lo = float(stats.t.ppf(1 - alpha / 2, dfree))
@@ -474,7 +479,8 @@ def _shared_var(plan: dict, ref: str, fields, reference_wells, standardised: boo
     return float((plan.get("ref_bio") or {}).get(ref, 0.0) or 0.0) + pt["well"] / wr + f / (wr * k)
 
 
-def family_test(plan: dict, ref: str, n, V_mid, shared, alpha: float = 0.05, adjust: bool = True) -> dict:
+def family_test(plan: dict, ref: str, n, V_mid, shared, alpha: float = 0.05, adjust: bool = True,
+                coarse: bool = False) -> dict:
     """Critical value and df of the test behind a star (vectorised over n / V_mid / shared).
 
     adjust = True (the headline plot): mixed-model contrast at the family's single-step multivariate-t level.
@@ -501,10 +507,30 @@ def family_test(plan: dict, ref: str, n, V_mid, shared, alpha: float = 0.05, adj
         rho = np.where(V_mid > 0, B / np.where(V_mid > 0, V_mid, 1), 0.0)
         dfree = np.where(A ** 2 + B ** 2 > 0, (A + B) ** 2 / ((A ** 2 + B ** 2) / np.maximum(n - 1, 1)), n - 1)
     dfree = np.clip(dfree, np.maximum(n - 1, 1), np.maximum(2 * (n - 1), 1))
-    tc = np.vectorize(lambda r, d: family_critical(k, r, d, alpha), otypes=[float])(rho, dfree)
+    tc = np.vectorize(lambda r, d: family_critical(k, r, d, alpha, coarse), otypes=[float])(rho, dfree)
     if np.ndim(tc) == 0:
         return dict(tc=float(tc), df=float(dfree), k=k, rho=float(rho))
     return dict(tc=tc, df=dfree, k=k, rho=rho)
+
+
+def adjusting(plan: dict, adjust: bool | None = None) -> bool:
+    """[planner] adjust_for_family (default true) unless overridden."""
+    return plan["options"].get("adjust_for_family", True) if adjust is None else bool(adjust)
+
+
+def crit_fn(plan: dict, ref: str, V_mid: float, fields, reference_wells, std: bool, alpha: float = 0.05,
+            adjust: bool | None = None, coarse: bool = True):
+    """ns -> (critical value, df) of the planned test at the design (fields, reference_wells) whose per-n variance
+    is V_mid: the family-adjusted mixed-model contrast (family_test) or, with adjust off, None (= the unadjusted
+    paired t test, n_needed's default)."""
+    if not adjusting(plan, adjust):
+        return None
+    shared = _shared_var(plan, ref, fields, reference_wells, std)
+
+    def f(ns):
+        fam = family_test(plan, ref, ns, V_mid, shared, alpha, True, coarse)
+        return fam["tc"], fam["df"]
+    return f
 
 
 def test_label(r: dict) -> str:
@@ -627,7 +653,7 @@ def evaluate(plan: dict, n: int, wells: int, fields: int, effect, reference_well
     V = np.array([min(q[0], V_mid), V_mid, max(q[1], V_mid)])  # optimistic, expected, pessimistic
     sd = np.sqrt(V)
     le = abs(math.log(ratio))
-    adjust = plan["options"].get("adjust_for_family", True) if adjust_for_family is None else bool(adjust_for_family)
+    adjust = adjusting(plan, adjust_for_family)
     fam = family_test(plan, ref, n, V_mid, _shared_var(plan, ref, fields, reference_wells, std), alpha, adjust)
     tc, dfree = float(fam["tc"]), float(fam["df"])
     pw = power_t(le, sd, n, tc, dfree)
@@ -712,18 +738,35 @@ def curve(plan: dict, vary: str = "n", fixed: dict | None = None, effect=0.7, va
     return out
 
 
-def load(project_dir, generation: str | None = None) -> dict:
-    """Read sampling/<generation>/planner.json (default: the latest generation that has one) and return the plan,
-    with numpy copies of the draws cached under "_np" for fast evaluate() calls. Raises FileNotFoundError."""
+def plan_path(gen_dir: Path, cell_line: str | None = None) -> Path:
+    """planner.json of one generation: sampling/gN/planner.json, or with several cell lines (sampling/gN/
+    cell_lines.json) sampling/gN/<line folder>/planner.json (cell_line None = the first line)."""
+    gen_dir = Path(gen_dir)
+    idx = gen_dir / "cell_lines.json"
+    if idx.exists():
+        lines = json.loads(idx.read_text(encoding="utf-8")).get("cell_lines", [])
+        hit = next((x for x in lines if cell_line in (x["cell_line"], x["path"])), lines[0] if lines and
+                   cell_line is None else None)
+        if hit is None:
+            raise FileNotFoundError(f"no plan for cell line {cell_line!r} in {gen_dir}")
+        return gen_dir / hit["path"] / "planner.json"
+    return gen_dir / "planner.json"
+
+
+def load(project_dir, generation: str | None = None, cell_line: str | None = None) -> dict:
+    """Read sampling/<generation>/planner.json (default: the latest generation that has one; with several cell
+    lines the one of `cell_line`, default the first) and return the plan, with numpy copies of the draws cached
+    under "_np" for fast evaluate() calls. Raises FileNotFoundError."""
     root = Path(project_dir) / "sampling"
     if generation:
-        path = root / generation / "planner.json"
+        path = plan_path(root / generation, cell_line)
     else:
-        cands = sorted((p for p in root.glob("g*") if p.name[1:].isdigit() and (p / "planner.json").exists()),
+        cands = sorted((p for p in root.glob("g*") if p.name[1:].isdigit() and
+                        ((p / "planner.json").exists() or (p / "cell_lines.json").exists())),
                        key=lambda p: int(p.name[1:]))
         if not cands:
             raise FileNotFoundError(f"no planner.json under {root} - run `kerncount sampling` first")
-        path = cands[-1] / "planner.json"
+        path = plan_path(cands[-1], cell_line)
     plan = json.loads(path.read_text(encoding="utf-8"))
     plan["_np"] = _np_draws(plan)
     return plan
@@ -917,12 +960,17 @@ def _bands(plan, key, W, K, WR, std=None):
     return np.minimum(q[0][inv], mid), mid, np.maximum(q[1][inv], mid)
 
 
-def n_needed(log_eff, V, target=0.8, alpha=0.05, cap=60):
-    """Smallest n (2..cap) with power >= target, per V (NaN if not reached by cap)."""
+def n_needed(log_eff, V, target=0.8, alpha=0.05, cap=60, crit=None):
+    """Smallest n (2..cap) with power >= target, per V (NaN if not reached by cap). crit: ns -> (critical value,
+    df) of the planned test (crit_fn: family-adjusted); None = the unadjusted paired t test (df = n - 1)."""
     V = np.atleast_1d(np.asarray(V, float))
     out = np.full(V.shape, np.nan)
     ns = np.arange(2, cap + 1)
-    pw = power(log_eff, np.sqrt(V)[:, None], ns[None, :], alpha)
+    if crit is None:
+        pw = power(log_eff, np.sqrt(V)[:, None], ns[None, :], alpha)
+    else:
+        tc, dfree = crit(ns)
+        pw = power_t(log_eff, np.sqrt(V)[:, None], ns[None, :], np.asarray(tc)[None, :], np.asarray(dfree)[None, :])
     ok = pw >= target
     hit = ok.any(axis=1)
     out[hit] = ns[ok[hit].argmax(axis=1)]
@@ -931,19 +979,26 @@ def n_needed(log_eff, V, target=0.8, alpha=0.05, cap=60):
 
 def forward_tables(plan: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     """design_forward (power / CI width / cost for planning and observed effects over the design grid) and mde
-    (minimum detectable ratio at target power) tables. Reference wells = treatment wells in the grid."""
+    (minimum detectable ratio at target power) tables. Reference wells = treatment wells in the grid. Power and MDE
+    are for the planned test ([planner] adjust_for_family: a star at the family-adjusted level, else one
+    unadjusted paired t test); CI half-width = the 95% CI of one comparison."""
     o = plan["options"]
     alpha, target = o["alpha"], o["target_power"]
     N, Wg, Kg = _grid(plan)
     cost = _cost(plan, N, Wg, Kg, Wg)
-    tc = stats.t.ppf(1 - alpha / 2, N - 1)
-    nc = np.array([nc_for_power(n - 1, target, alpha) for n in N])
+    adjust = adjusting(plan)
+    std = plan["design"]["positions_default"] == "standardised"
     fwd, mde = [], []
     for key in plan["bio"]:
         ref, cls = key.split("|", 1)
         lo, mid, hi = _bands(plan, key, Wg, Kg, Wg)
         sd = np.sqrt(np.stack([lo, mid, hi]))
-        hw = _pct(tc * sd / np.sqrt(N))
+        fam = family_test(plan, ref, N, mid, _shared_var(plan, ref, Kg, Wg, std), alpha, adjust, coarse=True)
+        tc, dfree = np.broadcast_to(fam["tc"], N.shape), np.broadcast_to(fam["df"], N.shape)
+        pairs = {}
+        nc = np.array([pairs.setdefault((float(a), float(b)), nc_for_power(b, target, alpha, a))
+                       for a, b in zip(tc, dfree)])
+        hw = _pct(stats.t.ppf(0.975, dfree) * sd / np.sqrt(N))
         md = np.exp(-nc * sd / np.sqrt(N))
         base = pd.DataFrame(dict(reference=ref, cls=cls, n=N, wells=Wg, fields_per_well=Kg, reference_wells=Wg,
                                  images_per_condition=Wg * Kg, cost=cost, sd_log_ratio_low=sd[0],
@@ -954,7 +1009,7 @@ def forward_tables(plan: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         efx += [(e["treatment"], e["ratio"]) for e in plan["effects"]
                 if e["reference"] == ref and e["cls"] == cls and e["n_pairs"] >= 2]
         for label, ratio in efx:
-            p = power(abs(math.log(ratio)), sd, N[None, :], alpha)
+            p = power_t(abs(math.log(ratio)), sd, N[None, :], tc[None, :], dfree[None, :])
             fwd.append(base.assign(effect=label, effect_ratio=ratio, power_low=p[2], power_mid=p[1], power_high=p[0]))
     cols = ["reference", "cls", "effect", "effect_ratio", "n", "wells", "fields_per_well", "reference_wells",
             "images_per_condition", "power_low", "power_mid", "power_high", "ci_halfwidth_pct_low",
@@ -1049,6 +1104,8 @@ def allocation(plan: dict) -> tuple[pd.DataFrame, dict]:
     kcomp = C - 1
     dunnett = max(int(round(W * math.sqrt(kcomp))), W)
     V0 = meanV(W, W)
+    main = keys[0].split("|", 1)[0]
+    crit = lambda V, wr: crit_fn(plan, main, V, K, wr, std, o["alpha"])  # noqa: E731
     rows = []
     for wt in range(1, 7):
         for wr in range(wt, 4 * wt + 1):
@@ -1059,7 +1116,8 @@ def allocation(plan: dict) -> tuple[pd.DataFrame, dict]:
             rows.append(dict(treatment_wells=wt, reference_wells=wr, wells_used=used, fits_plate=used <= cap_all,
                              fits_inner_wells=used <= cap_inner, mean_V=V, sd_log_ratio=math.sqrt(V),
                              variance_vs_current=V / V0,
-                             n_needed=_py(n_needed(abs(math.log(eff)), V, o["target_power"], o["alpha"])[0]),
+                             n_needed=_py(n_needed(abs(math.log(eff)), V, o["target_power"], o["alpha"],
+                                                   crit=crit(V, wr))[0]),
                              rule="current" if (wt == W and wr == W) else
                              ("dunnett_sqrt_k" if (wt == W and wr == dunnett) else "")))
     tab = pd.DataFrame(rows)
@@ -1077,7 +1135,8 @@ def allocation(plan: dict) -> tuple[pd.DataFrame, dict]:
                                     reference_wells=int(best["reference_wells"]), wells_used=int(best["wells_used"]),
                                     gain_variance_pct=100 * (1 - best["mean_V"] / V0),
                                     n_needed=best["n_needed"], fits_inner_wells=bool(best["fits_inner_wells"])),
-                   n_needed_current=_py(n_needed(abs(math.log(eff)), V0, o["target_power"], o["alpha"])[0]),
+                   n_needed_current=_py(n_needed(abs(math.log(eff)), V0, o["target_power"], o["alpha"],
+                                                 crit=crit(V0, W))[0]),
                    plate_format=cap_all, inner_wells=cap_inner, treatments=T, references=R, focus_effect=eff)
     return tab, summary
 
@@ -1146,8 +1205,11 @@ def position_effect(plan: dict) -> dict:
                V_random=Vr, V_standardised=Vs, V_reduction_pct=100 * (1 - Vs / Vr),
                measurement_reduction_pct=100 * (1 - (Vs - bio) / max(Vr - bio, 1e-12)),
                fields_per_well_random_to_match=k_eq,
-               n_needed_random=_py(n_needed(abs(math.log(eff)), Vr, o["target_power"], o["alpha"])[0]),
-               n_needed_standardised=_py(n_needed(abs(math.log(eff)), Vs, o["target_power"], o["alpha"])[0]))
+               n_needed_random=_py(n_needed(abs(math.log(eff)), Vr, o["target_power"], o["alpha"],
+                                            crit=crit_fn(plan, d["main_reference"], Vr, K, W, False, o["alpha"]))[0]),
+               n_needed_standardised=_py(n_needed(abs(math.log(eff)), Vs, o["target_power"], o["alpha"],
+                                                  crit=crit_fn(plan, d["main_reference"], Vs, K, W, True,
+                                                               o["alpha"]))[0]))
     return out
 
 
@@ -1433,34 +1495,52 @@ def recommendations(plan: dict) -> list[str]:
     W, K, N = d["wells"], d["fields_per_well"], d["n_count"]
     key = _bio_key(main, cls)
     L = ["Recommendations for the next experiment", "=" * 70]
+    if plan.get("cell_line") or plan.get("excluded_ns"):
+        L.append("Data: " + "; ".join(x for x in (
+            f"cell line {plan['cell_line']} only (cell lines are never pooled)" if plan.get("cell_line") else "",
+            f"{', '.join(plan['excluded_ns'])} left out (enforced acceptance criteria)" if plan.get("excluded_ns")
+            else "") if x) + ".")
     if key not in plan["bio"]:
         return L + ["  Not enough data to plan (need at least 2 n's with the reference and treatments).", ""]
     alpha, target = o["alpha"], o["target_power"]
     b = plan["bio"][key]
     cur = evaluate(plan, max(N, 2), W, K, focus_effect(plan), alpha=alpha, target_power=target)
-    L += [f"Main comparison: each treatment vs {main}, ratio paired t-test across n's (df = n's - 1).",
+    std = d["positions_default"] == "standardised"
+    adj = adjusting(plan)
+    test_txt = (f"Main comparison: each treatment vs {main}; power = chance of a STAR on the headline plot (mixed-model "
+                f"contrast at the family-adjusted level: single-step multivariate t over {family_size(plan)} "
+                "comparisons, as the statistics; [planner] adjust_for_family = false gives one unadjusted test)."
+                if adj else
+                f"Main comparison: each treatment vs {main}, one unadjusted ratio paired t-test across n's (df = n's - 1; "
+                "[planner] adjust_for_family = false: NOT the chance of a star on the headline plot).")
+    crit = lambda V, k=K, w=W: crit_fn(plan, main, V, k, w, std, alpha)  # noqa: E731
+    L += [test_txt,
           f"Now: {N} n's x {W} wells x {K} fields. Noise in one n's log ratio: SD {cur['sd_log_ratio']['mid']:.2f} "
           f"(biological {math.sqrt(b['var']):.2f}, measurement {math.sqrt(max(cur['sd_log_ratio']['mid'] ** 2 - b['var'], 0)):.2f});",
           f"plausible range {cur['sd_log_ratio']['low']:.2f}-{cur['sd_log_ratio']['high']:.2f} (80% band; few n's make it wide).",
           "",
           f"1. How many n's? ({target:.0%} power, alpha {alpha:g}, {W} wells x {K} fields; expected [optimistic-pessimistic])"]
     pt = plan["components_point"]
-    std = d["positions_default"] == "standardised"
     for e in sorted(o["effects"], key=lambda e: -abs(math.log(e))):
         lo, mid, hi = _bands(plan, key, np.array([W]), np.array([K]), np.array([W]))
-        nn = [n_needed(abs(math.log(e)), v, target, alpha)[0] for v in (lo, mid, hi)]
+        nn = [n_needed(abs(math.log(e)), v, target, alpha, crit=crit(float(mid[0])))[0] for v in (lo, mid, hi)]
         L.append(f"   ratio {e:g} ({abs(1 - e):.0%} {'fewer' if e < 1 else 'more'}): {_n_txt(nn[1])} n's "
                  f"[{_n_txt(nn[0])}-{_n_txt(nn[2])}]")
     eff_obs = [e for e in plan["effects"] if e["reference"] == main and e["cls"] == cls and e["n_pairs"] >= 2]
     if eff_obs:
         med = float(np.exp(np.median([math.log(e["ratio"]) for e in eff_obs])))
         Vm = float(design_variance(pt, b["var"], W, K, W, std))
-        L.append(f"   observed effects (median ratio {med:.2f}): {_n_txt(n_needed(abs(math.log(med)), Vm, target, alpha)[0])} "
+        L.append(f"   observed effects (median ratio {med:.2f}): "
+                 f"{_n_txt(n_needed(abs(math.log(med)), Vm, target, alpha, crit=crit(Vm))[0])} "
                  "n's - but effects seen in few n's are usually overestimated")
     e0 = focus_effect(plan)
-    n_inf = n_needed(abs(math.log(e0)), max(b["var"], 1e-12), target, alpha)[0]
+    Vinf = max(b["var"], 1e-12)
+    n_inf = n_needed(abs(math.log(e0)), Vinf, target, alpha, crit=crit(Vinf, 10 ** 6, 10 ** 6))[0]
+    c3, c5 = (evaluate(plan, n, W, K, e0, alpha=alpha, target_power=target)["t_critical"] for n in (3, 5))
     L += [f"   Even with unlimited images per n, ratio {e0:g} needs {_n_txt(n_inf)} n's: the number of n's is the",
-          f"   bottleneck (t critical value {stats.t.ppf(1 - alpha / 2, 2):.2f} at 3 n's, {stats.t.ppf(1 - alpha / 2, 4):.2f} at 5).",
+          f"   bottleneck (critical value {c3:.2f} at 3 n's, {c5:.2f} at 5"
+          + (f"; unadjusted t {stats.t.ppf(1 - alpha / 2, 2):.2f} / {stats.t.ppf(1 - alpha / 2, 4):.2f})." if adj
+             else ")."),
           ""]
     ms = cur["measurement_share"]
     opt = s["cost"]["optimum"]
@@ -1471,8 +1551,8 @@ def recommendations(plan: dict) -> list[str]:
         V2 = float(design_variance(pt, b["var"], w2, k2, w2, std))
         V0 = float(design_variance(pt, b["var"], W, K, W, std))
         L.append(f"   {lab:<22}: noise {100 * (math.sqrt(V2 / V0) - 1):+.0f}%, "
-                 f"n's for ratio {e0:g}: {_n_txt(n_needed(abs(math.log(e0)), V2, target, alpha)[0])} "
-                 f"(now {_n_txt(n_needed(abs(math.log(e0)), V0, target, alpha)[0])})")
+                 f"n's for ratio {e0:g}: {_n_txt(n_needed(abs(math.log(e0)), V2, target, alpha, crit=crit(V2, k2, w2))[0])} "
+                 f"(now {_n_txt(n_needed(abs(math.log(e0)), V0, target, alpha, crit=crit(V0))[0])})")
     if opt["note"]:
         L.append(f"   Cost-optimal fields per well: {opt['note']}.")
     else:
@@ -1535,7 +1615,7 @@ def recommendations(plan: dict) -> list[str]:
         L += [f"   {', '.join(x.split('_')[0] for x in m['missing'])} lack{'s' if len(m['missing']) == 1 else ''} "
               f"{m['reference']}, so comparisons vs "
               f"{m['reference']} use {m['n_have']} instead of {m['n_all']} n's:",
-              f"   t critical {m['t_critical_have']:.2f} instead of {m['t_critical_all']:.2f}; CI half-width "
+              f"   critical value {m['t_critical_have']:.2f} instead of {m['t_critical_all']:.2f}; CI half-width "
               f"±{m['ci_halfwidth_pct_have']:.0f}% instead of ±{m['ci_halfwidth_pct_all']:.0f}%; power at ratio "
               f"{m['effect']:g}: {m['power_have']:.0%} instead of {m['power_all']:.0%}. Put every reference on every plate."]
     L.append("")
@@ -1548,7 +1628,8 @@ def recommendations(plan: dict) -> list[str]:
             for t, gt in g.groupby("treatment", sort=False):
                 p = {int(r.k_added): r.prob_p_below_alpha for r in gt.itertuples()}
                 parts.append(f"{t} {p.get(1, float('nan')):.0%}/{p.get(4, float('nan')):.0%}")
-            L.append(f"   vs {ref}, chance of p < {alpha:g} after +1 / +4 n's: " + "; ".join(parts))
+            L.append(f"   vs {ref}, chance of p < {alpha:g} after +1 / +4 n's (ratio paired t-test, unadjusted): "
+                     + "; ".join(parts))
     L += [f"   Optional stopping: if there were no effect at all, testing after every new n (from {mn['start_n']} up to "
           f"{mn['start_n'] + mn['k_max']} n's) and stopping at p < {alpha:g} gives a false positive in "
           f"{mn['false_positive_optional_stopping']:.0%} of series instead of {alpha:.0%}.",
@@ -1556,8 +1637,8 @@ def recommendations(plan: dict) -> list[str]:
     L += ["7. Caution",
           f"   All of this rests on {N} n's. The biological variance has only ~{b['df']:.0f} degrees of freedom, so its",
           "   95% interval is wide (see planner.json / variance_components.png); use the pessimistic numbers when",
-          "   the experiment matters. Classes pool treatments to stabilise the estimate"
-          f" ({plan['class_source']}).",
+          "   the experiment matters. Treatment classes: "
+          f"{plan['class_source']}.",
           "   The planner separates the field-position pattern from field noise, so its field / well SDs"
           f" ({math.sqrt(pt['field']):.2f} / {math.sqrt(pt['well']):.2f})",
           "   differ from section 1 of the sampling report below, which counts position as field noise.",
@@ -1567,13 +1648,16 @@ def recommendations(plan: dict) -> list[str]:
 
 
 def run(df: pd.DataFrame, settings: dict, out: Path, project_dir=None, seed: int = 0,
-        metric_label: str = "nuclei per field", sims: int = 4000) -> dict:
+        metric_label: str = "nuclei per field", sims: int = 4000, cell_line: str | None = None,
+        excluded_ns: list | None = None) -> dict:
     """Build the plan from df (n, treatment, image, value; well/position optional) and write planner.json,
     planner_components.csv, design_forward.csv, mde.csv, cost_frontier.csv, allocation.csv, more_n.csv, the plots,
-    manifest.json, and prepend 'Recommendations for the next experiment' to REPORT.txt (kept otherwise)."""
+    manifest.json, and prepend 'Recommendations for the next experiment' to REPORT.txt (kept otherwise).
+    cell_line / excluded_ns: what df is (one cell line; n's left out by enforced acceptance), for the record."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     plan = build(df, settings, project_dir, seed=seed, metric_label=metric_label)
+    plan["cell_line"], plan["excluded_ns"] = cell_line, list(excluded_ns or [])
     fwd, mde = forward_tables(plan)
     front, cost = cost_analysis(plan, fwd) if len(fwd) else (pd.DataFrame(), dict(cheapest={}, optimum=dict(note="no data")))
     alloc, alloc_sum = allocation(plan)

@@ -16,7 +16,7 @@ RENDER.intensity = async function (b, e, tok) {
   const im = I.manifest;
   if (!im.files) { b.innerHTML = `<div class="notice info">No intensity results: this experiment has no marker channel measured per nucleus (or it has not been run yet).</div>`; return; }
   const tab = ITABS.find(t => t[0] === S.params.tab) ? S.params.tab : "overview";
-  b.innerHTML = `<div class="tabs">${ITABS.map(([k, l]) => `<button class="tab ${k === tab ? "active" : ""}" onclick="setP({tab:'${k}'})">${l}</button>`).join("")}</div><div id="itab"></div>`;
+  b.innerHTML = `<div class="tabs">${ITABS.map(([k, l]) => `<button class="tab ${k === tab ? "active" : ""}" ${on("click", function (event) { setP({tab:String(k)}) })}>${l}</button>`).join("")}</div><div id="itab"></div>`;
   const body = $("itab");
   if (tab === "tune") return renderTune(body, tok);
   if (!S.ov) S.ov = await get("/api/overview", { exp: S.exp }).catch(() => null);
@@ -29,16 +29,16 @@ RENDER.intensity = async function (b, e, tok) {
       <p class="muted" style="margin-top:0">Which nuclei count as <b>${esc(im.channels.join(", "))}-positive</b>, and how uneven illumination was corrected. Cut-off precedence:
         negative-control wells → locked manual value → automatic detection limit (3 × background noise).</p>
       ${!I.negative_control ? `<div class="notice">No negative-control wells: “positive” means <b>detectably stained above background</b>, not “above non-specific staining”.
-        ${I.locks.length ? "" : `Set a cut-off by eye in the <a class="link" onclick="setP({tab:'tune'})">blinded tuning view</a> and lock it before looking at the statistics.`}</div>` : ""}
+        ${I.locks.length ? "" : `Set a cut-off by eye in the <a class="link" ${on("click", function (event) { setP({tab:'tune'}) })}>blinded tuning view</a> and lock it before looking at the statistics.`}</div>` : ""}
       <div class="card"><h3>Cut-off per n</h3>
         <table class="grid"><thead><tr><th>n</th><th>channel</th><th>measure</th><th>rule used</th><th class="num">cut-off</th><th class="num">% positive</th><th class="num">without flat field</th><th class="num">nuclei</th><th>detail</th></tr></thead>
         <tbody>${im.cutoffs.map(c => { const lk = lockFor(c); return `<tr><td>${nChip(c.n)}</td><td>${esc(c.channel)}</td><td>${c.measure === "p90" ? "90th percentile" : "mean"}</td>
           <td><span class="tag ${c.rule === "lod" ? "medium" : c.rule === "manual" ? "purple" : "ok"}">${esc(c.rule_label)}</span>${lk && c.rule !== "manual" ? `<div class="small" style="color:var(--k-model)">locked ${(+lk.cutoff).toFixed(1)}: applied at the next run</div>` : ""}</td>
           <td class="num">${(+c.value).toFixed(1)}</td><td class="num"><b>${pct(c.frac_positive)}</b></td><td class="num">${pct(c.frac_positive_without_flatfield)}</td>
           <td class="num">${esc(c.nuclei)}</td><td class="small muted">${esc(c.detail)}</td></tr>`; }).join("")}</tbody></table>
-        <div class="row" style="margin-top:8px"><button class="small" onclick="viewTable('intensity/cutoffs.csv')">cutoffs.csv</button>
-          <button class="small" onclick="viewTable('intensity/positive_by_condition.csv')">% positive per condition</button>
-          <button class="small primary" onclick="setP({tab:'tune'})">Tune the cut-off (blinded) →</button></div>
+        <div class="row" style="margin-top:8px"><button class="small" ${on("click", function (event) { viewTable('intensity/cutoffs.csv') })}>cutoffs.csv</button>
+          <button class="small" ${on("click", function (event) { viewTable('intensity/positive_by_condition.csv') })}>% positive per condition</button>
+          <button class="small primary" ${on("click", function (event) { setP({tab:'tune'}) })}>Tune the cut-off (blinded) →</button></div>
         ${lockHistory(I)}</div>
       <h2>Flat-field correction</h2>
       <p class="small muted" style="margin-top:0">The microscope lights the centre of the field more than the edges. kerncount estimates that pattern per n and channel from all fields and divides the background-subtracted intensities by it; counts are never corrected.</p>
@@ -50,7 +50,7 @@ RENDER.intensity = async function (b, e, tok) {
             <div><div class="k">check from nuclei: edge dimming</div><div class="v">${ff.nuclei_edge_dim_pct_before != null ? `${(+ff.nuclei_edge_dim_pct_before).toFixed(0)}% → ${(+ff.nuclei_edge_dim_pct_after).toFixed(0)}%` : "–"}</div></div>
             <div><div class="k">% positive with / without</div><div class="v">${pct(ff.frac_positive_with_flatfield)} / ${pct(ff.frac_positive_without_flatfield)}</div></div></div>
           ${f ? plotCard(f, I0) : ""}</div>`; }).join("") || `<div class="muted">No flat-field maps.</div>`}</div>
-      <div class="row"><button class="small" onclick="viewTable('intensity/flatfield.csv')">flatfield.csv</button></div>
+      <div class="row"><button class="small" ${on("click", function (event) { viewTable('intensity/flatfield.csv') })}>flatfield.csv</button></div>
       <h2>Cut-off sweep</h2>
       <p class="small muted" style="margin-top:0">How % positive per condition changes if the cut-off were ¼ to 4 × the one used. Curves that cross mean the ranking of conditions depends on the cut-off.</p>
       <div class="plots">${pngs("sweep").map(f => plotCard({ ...f, kind: "robustness" }, I0)).join("") || `<div class="muted">No sweep plots.</div>`}</div>`;
@@ -60,7 +60,7 @@ RENDER.intensity = async function (b, e, tok) {
       <div class="plots">${pngs("distribution").map(f => plotCard({ ...f, kind: "absolute" }, I0)).join("") || `<div class="muted">No distribution plots.</div>`}</div>
       <h3>% positive vs density</h3>
       <div class="plots">${pngs("density").map(f => plotCard({ ...f, kind: "design" }, I0)).join("") || `<div class="muted">No density plots.</div>`}</div>
-      <h3>Tables</h3><div class="row"><button onclick="viewTable('intensity/positive_by_condition.csv')">% positive per condition</button><button onclick="viewTable('intensity/positivity_sweep.csv')">Cut-off sweep table</button></div>`;
+      <h3>Tables</h3><div class="row"><button ${on("click", function (event) { viewTable('intensity/positive_by_condition.csv') })}>% positive per condition</button><button ${on("click", function (event) { viewTable('intensity/positivity_sweep.csv') })}>Cut-off sweep table</button></div>`;
   } else {
     const al = await get("/api/table", { exp: S.exp, path: "intensity/alignment.csv" });
     if (tok !== S.renderTok) return;
@@ -76,7 +76,7 @@ RENDER.intensity = async function (b, e, tok) {
         <tbody>${flagged.map(r => `<tr class="${bad(r) ? "bad" : "warn"}"><td>${nChip(r[ix.n])}</td><td>${esc(r[ix.treatment])}</td><td class="num">${esc(r[ix.image])}</td><td>${esc(r[ix.files])}</td>
           <td class="num">${esc(r[ix.shift_px])}</td><td class="num">${esc(r[ix.corr])}</td><td class="small">${esc(r[ix.flags])}</td></tr>`).join("")}</tbody></table>`
         : `<div class="notice ok">No field is flagged.</div>`}
-      <div class="row" style="margin-top:8px"><button class="small" onclick="viewTable('intensity/alignment.csv')">Full alignment table</button></div>`;
+      <div class="row" style="margin-top:8px"><button class="small" ${on("click", function (event) { viewTable('intensity/alignment.csv') })}>Full alignment table</button></div>`;
   }
 };
 
@@ -129,21 +129,21 @@ async function renderTune(body, tok) {
       Set the cut-off by eye so that green outlines mark the nuclei you would call ${esc(ch)}-positive, step through several fields, then <b>lock</b> it —
       before looking at any statistics. A run applies the lock.</div>
     <div class="row" style="margin-bottom:10px">
-      ${info.channels.length > 1 ? `<label>Channel <select onchange="setP({ch:this.value,cutoff:''})">${info.channels.map(c => `<option ${c === ch ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>` : `<span class="tag purple">${esc(ch)}</span>`}
-      <div class="pills"><button class="pill ${measure === "mean" ? "active" : ""}" onclick="setP({measure:'mean',cutoff:''})">mean</button><button class="pill ${measure === "p90" ? "active" : ""}" onclick="setP({measure:'p90',cutoff:''})">90th percentile</button></div>
-      <label class="small">Lock for <select onchange="setP({scope:this.value,field:''})"><option value="">every n</option>${info.scopes.map(n => `<option value="${esc(n)}" ${n === scope ? "selected" : ""}>${esc(n)} only</option>`).join("")}</select></label>
+      ${info.channels.length > 1 ? `<label>Channel <select ${on("change", function (event) { setP({ch:this.value,cutoff:''}) })}>${info.channels.map(c => `<option ${c === ch ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>` : `<span class="tag purple">${esc(ch)}</span>`}
+      <div class="pills"><button class="pill ${measure === "mean" ? "active" : ""}" ${on("click", function (event) { setP({measure:'mean',cutoff:''}) })}>mean</button><button class="pill ${measure === "p90" ? "active" : ""}" ${on("click", function (event) { setP({measure:'p90',cutoff:''}) })}>90th percentile</button></div>
+      <label class="small">Lock for <select ${on("change", function (event) { setP({scope:this.value,field:''}) })}><option value="">every n</option>${info.scopes.map(n => `<option value="${esc(n)}" ${n === scope ? "selected" : ""}>${esc(n)} only</option>`).join("")}</select></label>
       <span class="spacer"></span>
-      <label class="small">fields <input size="3" value="${k}" onchange="setP({k:this.value,field:''})"></label>
-      <button onclick="setP({seed:String(Math.floor(Math.random()*1e9)),field:''})">New random sample</button>
+      <label class="small">fields <input size="3" value="${k}" ${on("change", function (event) { setP({k:this.value,field:''}) })}></label>
+      <button ${on("click", function (event) { setP({seed:String(Math.floor(Math.random()*1e9)),field:''}) })}>New random sample</button>
     </div>
     <div class="tune">
       <div class="stage ${T.zoom ? "zoom" : ""}">
-        <div class="imgwrap"><img id="tuneImg" alt="marker image with nucleus outlines" ondblclick="openTuneFull()"></div>
+        <div class="imgwrap"><img id="tuneImg" alt="marker image with nucleus outlines" ${on("dblclick", function (event) { openTuneFull() })}></div>
         <span class="busy" id="tuneBusy"></span>
-        <div class="fieldbar"><button class="small" onclick="tuneStep(-1)" ${T.idx ? "" : "disabled"}>‹ Prev</button>
+        <div class="fieldbar"><button class="small" ${on("click", function (event) { tuneStep(-1) })} ${T.idx ? "" : "disabled"}>‹ Prev</button>
           <span>Field <b>${T.idx + 1}</b> of ${fields.length} · id <code>${esc(fields[T.idx].field_id)}</code></span>
-          <button class="small" onclick="tuneStep(1)" ${T.idx < fields.length - 1 ? "" : "disabled"}>Next ›</button>
-          <button class="small" onclick="S.tune.zoom=!S.tune.zoom;document.querySelector('.tune .stage').classList.toggle('zoom')">zoom 1:1</button><span class="spacer"></span>
+          <button class="small" ${on("click", function (event) { tuneStep(1) })} ${T.idx < fields.length - 1 ? "" : "disabled"}>Next ›</button>
+          <button class="small" ${on("click", function (event) { S.tune.zoom=!S.tune.zoom;document.querySelector('.tune .stage').classList.toggle('zoom') })}>zoom 1:1</button><span class="spacer"></span>
           <span class="legend"><span><i style="border-color:#28dc3c"></i>positive</span><span><i style="border-color:#969696"></i>negative</span><span><i style="border-color:#ff9600"></i>saturated</span></span></div>
       </div>
       <div>
@@ -151,7 +151,7 @@ async function renderTune(body, tok) {
           <input type="range" class="slider" id="cutSlider" min="0" max="1000" value="${cutToSlider(T.cut, R)}">
           <div class="row" style="justify-content:space-between"><span class="small muted">${R.min.toFixed(0)}</span>
             <span><input id="cutIn" size="8" value="${T.cut.toFixed(1)}"> <span class="small muted">corrected units</span></span><span class="small muted">${R.max.toFixed(0)}</span></div>
-          <div class="small muted" style="margin-top:4px">Automatic rule (median): ${R.lod_median.toFixed(1)} <button class="small" onclick="setTuneCut(${R.lod_median})">use</button></div>
+          <div class="small muted" style="margin-top:4px">Automatic rule (median): ${R.lod_median.toFixed(1)} <button class="small" ${on("click", function (event) { setTuneCut((R.lod_median)) })}>use</button></div>
           <div class="kv" style="margin-top:12px">
             <div><div class="k">% positive, these ${fields.length} fields</div><div class="big" id="pvSample">…</div></div>
             <div><div class="k">% positive, ${scope ? "this n" : "all fields"}</div><div class="big" id="pvAll">…</div></div>
@@ -160,8 +160,8 @@ async function renderTune(body, tok) {
         <div class="lockbox"><b>Lock this cut-off</b>
           <p class="small" style="margin:4px 0 8px">Fixes ${esc(ch)} ${measure === "p90" ? "(90th percentile)" : "(mean signal)"} for ${scope ? esc(scope) : "every n"}.
             ${measure === "p90" ? "" : `<b>Only the mean-based % positive:</b> the 90th-percentile readout keeps the automatic rule unless you lock it too (switch to “90th percentile”).`} ${lockNow ? `Currently locked: <b>${(+lockNow.cutoff).toFixed(1)}</b> (${esc((lockNow.locked_at || "").replace("T", " "))}).` : "Nothing is locked yet."}</p>
-          <div class="row"><button class="primary" onclick="tuneLock()" ${S.running ? "disabled" : ""}>Lock ${esc(T.cut.toFixed(1))}…</button>
-            ${lockNow ? `<button class="small" onclick="tuneUnlock()" ${S.running ? "disabled" : ""}>Unlock</button>` : ""}</div></div>
+          <div class="row"><button class="primary" ${on("click", function (event) { tuneLock() })} ${S.running ? "disabled" : ""}>Lock ${esc(T.cut.toFixed(1))}…</button>
+            ${lockNow ? `<button class="small" ${on("click", function (event) { tuneUnlock() })} ${S.running ? "disabled" : ""}>Unlock</button>` : ""}</div></div>
         <div class="card" style="margin-top:12px">${lockHistory({ ...info, manual_cutoff: "" })}</div>
       </div>
     </div>`;
@@ -203,7 +203,7 @@ async function tuneDraw() {
 }
 function tuneStep(d) { const T = S.tune; T.idx = Math.max(0, Math.min(T.sample.fields.length - 1, T.idx + d)); setP({ field: T.idx, cutoff: T.cut.toFixed(2) }); }
 function openTuneFull() {
-  openModal(`<div class="modal-head"><span class="title">Field ${S.tune.idx + 1} · cut-off ${S.tune.cut.toFixed(1)}</span><span class="spacer"></span><button onclick="closeModal()">Close</button></div>
+  openModal(`<div class="modal-head"><span class="title">Field ${S.tune.idx + 1} · cut-off ${S.tune.cut.toFixed(1)}</span><span class="spacer"></span><button ${on("click", function (event) { closeModal() })}>Close</button></div>
     <img class="full" src="${tuneImgUrl()}" style="max-height:84vh">`);
 }
 function tuneLock() {

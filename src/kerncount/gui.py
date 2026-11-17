@@ -118,28 +118,34 @@ class Job:
 
 
 def build_args(action: str, exp: str, o: dict) -> list[str]:
+    """Command line for a job: options first, then "--" and the experiment, so a name starting with "-" can never
+    be read as an option (option values that are free text use the --opt=value form)."""
+    return _options(action, o) + ["--", exp]
+
+
+def _options(action: str, o: dict) -> list[str]:
     gens = [g for g in re.split(r"[\s,;]+", str(o.get("rebuild", ""))) if _GEN.match(g) or g == "all"]
     if action == "init":
-        return ["init", exp] + (["--force"] if o.get("force") else []) + (["--force-layout"] if o.get("force_layout") else [])
+        return ["init"] + (["--force"] if o.get("force") else []) + (["--force-layout"] if o.get("force_layout") else [])
     if action == "run":
-        args = ["run", exp]
+        args = ["run"]
         if o.get("no_review"):
             args.append("--no-review")
         if o.get("resegment"):
             args.append("--resegment")
         return args + (["--rebuild", *gens] if gens else [])
     if action == "regen":
-        return ["regen", exp] + (["--rebuild", *gens] if gens else [])
+        return ["regen"] + (["--rebuild", *gens] if gens else [])
     if action == "sampling":
         gen = str(o.get("generation", "")).strip()
-        args = ["sampling", exp] + (["--generation", gen] if _GEN.match(gen) else [])
+        args = ["sampling"] + (["--generation", gen] if _GEN.match(gen) else [])
         it = str(o.get("iterations", "")).strip()
         return args + (["--iterations", it] if it.isdigit() and int(it) > 0 else [])
     if action == "wells-template":
-        return ["wells-template", exp] + (["--force"] if o.get("force") else [])
+        return ["wells-template"] + (["--force"] if o.get("force") else [])
     if action == "platemap":
         p = platemap_options(o)
-        args = ["platemap", exp, "--plates", str(p["plates"]), "--wells", str(p["wells"])]
+        args = ["platemap", "--plates", str(p["plates"]), "--wells", str(p["wells"])]
         if p["plate_format"]:
             args += ["--format", str(p["plate_format"])]
         if p["reference_wells"] is not None:
@@ -151,7 +157,7 @@ def build_args(action: str, exp: str, o: dict) -> list[str]:
         if not p["balance"]:
             args.append("--no-balance")
         if p["negative_control"] is not None:
-            args += ["--negative-control", p["negative_control"], "--control-wells", str(p["negative_control_wells"])]
+            args += [f"--negative-control={p['negative_control']}", "--control-wells", str(p["negative_control_wells"])]
         return args
     raise ValueError(f"unknown action {action}")
 
@@ -176,8 +182,8 @@ def platemap_options(o: dict) -> dict:
     nc = o.get("negative_control")
     if nc is not None:
         nc = str(nc).strip()
-        if len(nc) > 80 or re.search(r"[\x00-\x1f]", nc):
-            raise ValueError("negative control: give a short condition name")
+        if len(nc) > 80 or re.search(r"[\x00-\x1f]", nc) or nc.startswith("-"):
+            raise ValueError("negative control: give a short condition name (not starting with -)")
     return dict(plates=_int(o.get("plates", 3), 1, 24, "plates"), plate_format=int(fmt) if fmt else None,
                 wells=_int(o.get("wells", 2), 1, 24, "wells per condition"),
                 reference_wells=None if rw in ("", "default") else "auto" if rw == "auto" else _int(rw, 1, 48, "reference wells"),
@@ -881,20 +887,40 @@ def field_overlay(prj: Path, arg) -> bytes:
 
 # ---------------------------------------------------------------- planner
 
-def _plan(prj: Path, gen: str):
+def _plan_file(prj: Path, gen: str, line: str | None = None) -> Path:
     from . import planner
-    p = prj / "sampling" / str(gen) / "planner.json"
-    if not _GEN.match(str(gen)) or not p.exists():
+    if not _GEN.match(str(gen)):
         raise ValueError(f"no planner results for {gen}: run the sampling analysis first")
-    return cached(("plan", str(p)), [p], lambda: planner.load(prj, gen))
+    try:
+        p = planner.plan_path(prj / "sampling" / str(gen), line or None)
+    except (FileNotFoundError, ValueError, KeyError):
+        p = None
+    if p is None or not p.exists():
+        raise ValueError(f"no planner results for {gen}" + (f" / {line}" if line else "") +
+                         ": run the sampling analysis first")
+    return p
+
+
+def _plan(prj: Path, gen: str, line: str | None = None):
+    from . import planner
+    p = _plan_file(prj, gen, line)
+    return cached(("plan", str(p)), [p], lambda: planner.load(prj, gen, line or None))
+
+
+def plan_lines(prj: Path, gen: str) -> list[dict]:
+    """Cell lines planned separately in sampling/<gen>/ (cell_lines.json); [] = one plan for the generation."""
+    data = read_json(prj / "sampling" / gen / "cell_lines.json", {}) or {}
+    return [dict(cell_line=x.get("cell_line"), path=x.get("path"), n_count=x.get("n_count"))
+            for x in data.get("cell_lines", []) if isinstance(x, dict)]
 
 
 def planner_gens(prj: Path) -> list[str]:
-    return [g for g in gen_dirs(prj / "sampling") if (prj / "sampling" / g / "planner.json").exists()]
+    return [g for g in gen_dirs(prj / "sampling") if (prj / "sampling" / g / "planner.json").exists()
+            or (prj / "sampling" / g / "cell_lines.json").exists()]
 
 
-def recommendations_text(prj: Path, gen: str) -> str:
-    p = prj / "sampling" / gen / "REPORT.txt"
+def recommendations_text(prj: Path, gen: str, sub: str = "") -> str:
+    p = prj / "sampling" / gen / sub / "REPORT.txt"
     if not p.exists():
         return ""
     t = p.read_text(encoding="utf-8", errors="replace")
@@ -904,20 +930,26 @@ def recommendations_text(prj: Path, gen: str) -> str:
     return ""
 
 
-def planner_info(prj: Path, gen: str | None) -> dict:
+def planner_info(prj: Path, gen: str | None, line: str | None = None) -> dict:
     gens = planner_gens(prj)
     if not gens:
         return dict(generations=[], gen=None)
     gen = gen if gen in gens else gens[-1]
-    plan = _plan(prj, gen)
-    man = read_json(prj / "sampling" / gen / "manifest.json", {}) or {}
-    out = dict(generations=gens, gen=gen, design=plan["design"], options=plan["options"], costs=plan.get("costs"),
+    lines = plan_lines(prj, gen)
+    cur = next((x for x in lines if line in (x["cell_line"], x["path"])), lines[0] if lines else None)
+    sub = cur["path"] if cur else ""
+    plan = _plan(prj, gen, cur["cell_line"] if cur else None)
+    man = read_json(prj / "sampling" / gen / sub / "manifest.json", {}) or {}
+    out = dict(generations=gens, gen=gen, cell_lines=lines, cell_line=cur["cell_line"] if cur else plan.get("cell_line"),
+               base=f"sampling/{gen}/" + (f"{sub}/" if sub else ""), excluded_ns=plan.get("excluded_ns", []),
+               design=plan["design"], options=plan["options"], costs=plan.get("costs"),
                components=plan["components"], classes=plan.get("classes"), default_class=plan.get("default_class"),
                notes=plan.get("notes", []), effects=[dict(reference=e["reference"], treatment=e["treatment"],
                                                           ratio=e.get("ratio"), n_pairs=e.get("n_pairs"), cls=e.get("cls"))
                                                      for e in plan.get("effects", [])],
                bio=sorted(plan.get("bio", {})), metric=plan.get("metric"),
-               recommendations=recommendations_text(prj, gen), files=man.get("files", []))
+               recommendations=recommendations_text(prj, gen, sub), files=man.get("files", []),
+               family_size=max(int(plan["design"]["conditions"]) - 1, 1))
     try:  # can it plan at all? (needs >= 2 n's with the reference)
         from . import planner
         planner.evaluate(plan, max(plan["design"]["n_count"], 2), plan["design"]["wells"], plan["design"]["fields_per_well"], 0.7)
@@ -927,9 +959,17 @@ def planner_info(prj: Path, gen: str | None) -> dict:
     return out
 
 
+def _flag(v, default: bool) -> bool:
+    if v in (None, ""):
+        return default
+    if isinstance(v, str):
+        return v.strip().lower() not in ("0", "false", "no", "off")
+    return bool(v)
+
+
 def planner_evaluate(prj: Path, body: dict) -> dict:
     from . import planner
-    plan = _plan(prj, str(body.get("gen", "")))
+    plan = _plan(prj, str(body.get("gen", "")), body.get("cell_line") or None)
     d = plan["design"]
     n = _int(body.get("n", max(d["n_count"], 2)), 2, 200, "n")
     wells = _int(body.get("wells", d["wells"]), 1, 48, "wells")
@@ -943,7 +983,8 @@ def planner_evaluate(prj: Path, body: dict) -> dict:
     rw = None if rw in (None, "", "same") else "auto" if rw == "auto" else _int(rw, 1, 48, "reference wells")
     kw = dict(alpha=float(body.get("alpha", plan["options"]["alpha"])),
               target_power=float(body.get("target_power", plan["options"]["target_power"])),
-              reference=body.get("reference") or None, positions=body.get("positions") or None)
+              reference=body.get("reference") or None, positions=body.get("positions") or None,
+              adjust_for_family=_flag(body.get("adjust_for_family"), plan["options"].get("adjust_for_family", True)))
     if not 0 < kw["alpha"] < 0.5 or not 0.05 < kw["target_power"] < 1:
         raise ValueError("alpha must be between 0 and 0.5, target power between 0.05 and 1")
     res = planner.evaluate(plan, n, wells, fields, eff, reference_wells=rw, **kw)
@@ -1211,7 +1252,7 @@ def make_handler(state: State):
             if path == "/api/tuning/preview":
                 return tuning_preview(prj, arg)
             if path == "/api/planner":
-                return planner_info(prj, arg("gen") or None)
+                return planner_info(prj, arg("gen") or None, arg("cl") or None)
             if path == "/api/plans":
                 return plans_info(prj)
             raise ValueError(f"unknown request {path}")
@@ -1248,8 +1289,9 @@ def make_handler(state: State):
                 return dict(path=pick_folder(str(state.workspace or "")))
             if path == "/api/new_experiment":
                 name = str(body.get("name", "")).strip()
-                if not state.workspace or not name or name in (".", "..") or re.search(r'[\\/:*?"<>|]', name):
-                    raise ValueError("give a simple folder name (no / \\ : * ? \" < > |)")
+                if (not state.workspace or not name or name in (".", "..") or re.search(r'[\\/:*?"<>|]', name)
+                        or name.startswith("-")):
+                    raise ValueError("give a simple folder name (not starting with -; no / \\ : * ? \" < > |)")
                 d = state.workspace / DATA / name
                 d.mkdir(parents=True, exist_ok=True)
                 open_path(d)

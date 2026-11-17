@@ -78,9 +78,32 @@ def test_paths_cannot_leave_project(tmp_path):
 
 
 def test_build_args():
-    assert gui.build_args("regen", "e", {"rebuild": "g2, g3; rm"}) == ["regen", "e", "--rebuild", "g2", "g3"]
+    assert gui.build_args("regen", "e", {"rebuild": "g2, g3; rm"}) == ["regen", "--rebuild", "g2", "g3", "--", "e"]
     assert gui.build_args("sampling", "e", {"generation": "g2", "iterations": "200"}) == \
-        ["sampling", "e", "--generation", "g2", "--iterations", "200"]
+        ["sampling", "--generation", "g2", "--iterations", "200", "--", "e"]
+
+
+def test_names_starting_with_a_dash_are_never_options(monkeypatch):
+    """An experiment called "--all" (or "-x") is passed after "--": argparse reads it as the experiment."""
+    from kerncount import cli
+
+    got = {}
+    for name in ("cmd_run", "cmd_regen", "cmd_sampling", "cmd_init", "cmd_wells_template", "cmd_platemap"):
+        monkeypatch.setattr(cli, name, lambda a, name=name: got.__setitem__(name, a))
+    for action, opts, attr in (("run", {"no_review": True, "rebuild": "g2"}, "project"), ("regen", {}, "project"),
+                               ("sampling", {"generation": "g1"}, "project"), ("init", {"force": True}, "raw_dir"),
+                               ("wells-template", {"force": True}, "project"),
+                               ("platemap", {"negative_control": "secondary only"}, "project")):
+        args = gui.build_args(action, "--all", opts)
+        assert args[-2:] == ["--", "--all"]
+        cli.main(args)
+        a = got["cmd_" + action.replace("-", "_")]
+        assert getattr(a, attr) == "--all" and not a.all, action
+    assert got["cmd_platemap"].negative_control == "secondary only" and got["cmd_run"].rebuild == ["g2"]
+    with pytest.raises(ValueError):
+        gui.platemap_options({"negative_control": "--force"})
+    with pytest.raises(ValueError, match="may not start with -"):
+        settings_form.coerce({"experiment": {"negative_control": "-x"}})
 
 
 # ================================================================ HTTP server: endpoints, security, blinding
