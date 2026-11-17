@@ -228,6 +228,62 @@ def test_page_token_host_and_origin_checks(srv):
         assert srv.call(path, body={"experiment": "E"}, token=False)[0] == 403, path
 
 
+def _raw(srv, endpoint, **params):
+    """(status, headers, body bytes) of a GET with the token."""
+    params.setdefault("t", gui.TOKEN)
+    url = f"http://127.0.0.1:{srv.port}{endpoint}?" + urlencode(params)
+    try:
+        r = urllib.request.urlopen(url, timeout=30)
+        return r.status, r.headers, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers, e.read()
+
+
+def test_csp_frame_and_no_inline_script(srv):
+    import re
+
+    code, h, page = _raw(srv, "/")
+    csp = h["Content-Security-Policy"]
+    for part in ("default-src 'self'", "img-src 'self' data: blob:", "style-src 'self' 'unsafe-inline'",
+                 "script-src 'self'", "frame-ancestors 'none'"):
+        assert part in csp, part
+    assert "unsafe-eval" not in csp and "'unsafe-inline'" not in csp.split("script-src")[1].split(";")[0]
+    assert h["X-Frame-Options"] == "DENY" and h["X-Content-Type-Options"] == "nosniff"
+    assert _raw(srv, "/api/state")[1]["X-Frame-Options"] == "DENY"
+    html = page.decode()
+    assert not re.search(r"<script(?![^>]*\bsrc=)[^>]*>", html)  # every script is a file from /static
+    assert 'name="kerncount-token"' in html
+    for f in list(WEB.glob("*.js")) + [WEB / "index.html"]:  # no inline event handlers left anywhere
+        text = f.read_text()
+        hits = re.findall(r'(?<![\w-])on(?:click|change|input|dblclick|error|load|submit|key\w+|mouse\w+)=["\']', text)
+        assert not hits, (f.name, hits[:3])
+        assert "javascript:" not in text, f.name
+
+
+def test_project_files_are_never_active_content(srv):
+    prj = srv.state.workspace / "analysis" / "E"
+    for name, body in (("evil.html", "<script>alert(1)</script>"), ("evil.svg", "<svg onload='x()'/>"),
+                       ("evil.xml", "<x/>"), ("evil.js", "x()"), ("evil.htm", "<b>"), ("dose≥5.csv", "a,b\n1,2\n"),
+                       ('say "hi".csv', "a\n1\n"), ("plain.csv", "a\n1\n"), ("pic.png", "png")):
+        _write(prj / "files" / name, body)
+    for name in ("evil.html", "evil.svg", "evil.xml", "evil.js", "evil.htm"):
+        code, h, body = _raw(srv, "/file", exp="E", path=f"files/{name}")
+        assert code == 200 and h["Content-Disposition"].startswith("attachment"), name
+        assert h["Content-Type"].split(";")[0] in ("application/octet-stream", "text/plain"), name
+        assert "sandbox" in h["Content-Security-Policy"] and "default-src 'none'" in h["Content-Security-Policy"]
+    code, h, _ = _raw(srv, "/file", exp="E", path="files/plain.csv")
+    assert code == 200 and h["Content-Type"].startswith("text/plain") and "Content-Disposition" not in h
+    # RFC 5987 names: an ASCII fallback plus the exact UTF-8 name; built before the status line is sent
+    for name, quoted in (("dose≥5.csv", "dose%E2%89%A55.csv"), ('say "hi".csv', "say%20%22hi%22.csv")):
+        code, h, body = _raw(srv, "/file", exp="E", path=f"files/{name}", dl="1")
+        cd = h["Content-Disposition"]
+        assert code == 200 and body and cd.startswith('attachment; filename="'), cd
+        assert f"filename*=UTF-8''{quoted}" in cd, cd
+        fallback = cd.split('filename="', 1)[1].split('"', 1)[0]
+        assert fallback.isascii() and '"' not in fallback and "\\" not in fallback
+    assert gui.content_disposition('a"b\\c;d.csv').startswith('attachment; filename="a_b_c_d.csv"')
+
+
 def test_paths_are_confined_to_the_project(srv):
     assert srv.call("/static/../gui.py", token=False)[0] == 404
     for p in ("../../x", "/etc/passwd", "../E/settings.toml/../../../.."):
@@ -486,3 +542,29 @@ def test_review_overlay_and_intensity_page(ki_srv):
     assert code == 200 and it["manifest"]["channels"] == ["Ki67"] and "locks" in it
     code, ov = srv.call("/api/overview", exp="Ki")
     assert ov["intensity"] and "mispaired" in {a["key"] for a in ov["attention"]}
+
+
+def test_reset_and_replace_from_the_page_keep_backups(tmp_path):
+    ws = tmp_path / "ws"
+    prj = _results_project(ws, exp="B")
+    st = prj / "settings.toml"
+    st.write_text(st.read_text() + "\n# hand edit\n")
+    _write(prj / "layout.csv", "n,treatment,images\nn1,Control,12\n")
+    _write(prj / "layout.new.csv", "n,treatment,images\nn1,Control,12\nn1,LyoVec,12\n")
+    s = Server(ws)
+    try:
+        code, r = s.call("/api/settings_reset", body={"experiment": "B"})
+        assert code == 200 and "_work/backups/settings_" in r["message"], r
+        kept = list((prj / "_work" / "backups").glob("settings_*.toml"))
+        assert len(kept) == 1 and "# hand edit" in kept[0].read_text() and "# hand edit" not in st.read_text()
+        code, r = s.call("/api/layout_use_new", body={"experiment": "B"})
+        assert code == 200 and "_work/backups/layout_" in r["message"], r
+        assert "LyoVec" in (prj / "layout.csv").read_text()
+        assert "LyoVec" not in next((prj / "_work" / "backups").glob("layout_*.csv")).read_text()
+        # the backups are internal: not served to the page
+        assert s.call("/file", exp="B", path="_work/backups/" + kept[0].name)[0] == 403
+        # settings saves are atomic and locked (no temp files left)
+        code, _ = s.call("/api/settings", body={"experiment": "B", "values": {"review": {"jpeg_quality": "70"}}})
+        assert code == 200 and not [p for p in prj.iterdir() if p.name.endswith(".tmp")]
+    finally:
+        s.close()

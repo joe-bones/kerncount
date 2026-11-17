@@ -19,6 +19,7 @@ dependencies = [
     "statsmodels>=0.14",
     "pillow",
     "stardist>=0.9",
+    "csbdeep>=0.7",  # imported directly (csbdeep.utils.normalize); also a dependency of stardist
     "tensorflow>=2.13",
 ]
 

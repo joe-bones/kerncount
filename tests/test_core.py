@@ -323,3 +323,88 @@ def test_atomic_write_keeps_permissions(tmp_path):
     fileio.atomic_write(p, "a = 2\n")
     assert p.read_text() == "a = 2\n" and (p.stat().st_mode & 0o777) == 0o640
     assert [x.name for x in tmp_path.iterdir()] == ["settings.toml"]  # no temp file left
+
+
+# ---------------------------------------------------------------- workspace paths, backups, model cache
+
+def test_resolve_raw_prefers_data_and_keeps_symlinks(tmp_path, monkeypatch):
+    from kerncount import cli, settings
+
+    ws = tmp_path / "ws"
+    real = tmp_path / "elsewhere" / "exp"
+    real.mkdir(parents=True)
+    (ws / "data").mkdir(parents=True)
+    (ws / "data" / "exp").symlink_to(real)
+    (ws / "exp").mkdir()  # a same-named folder in the working directory must not win over data/exp
+    monkeypatch.chdir(ws)
+    monkeypatch.delenv("KERNCOUNT_WORKSPACE", raising=False)
+    raw = cli.resolve_raw("exp")
+    assert raw == ws.resolve() / "data" / "exp" and raw.is_symlink()  # the link, not its target
+    assert cli.resolve_raw("./exp") == ws.resolve() / "exp"  # a path is used as given
+    prj = ws / "analysis" / "exp"
+    prj.mkdir(parents=True)
+    settings.write_template(prj, raw)
+    assert settings.load(prj)["project"]["raw_dir"] == "../../data/exp"
+
+
+def test_overwrites_keep_timestamped_backups(tmp_path):
+    from kerncount import design, settings
+
+    prj = tmp_path / "prj"
+    prj.mkdir()
+    assert settings.write_template(prj, tmp_path / "raw") is None  # nothing to back up yet
+    (prj / "settings.toml").write_text((prj / "settings.toml").read_text() + "\n# my edit\n")
+    bk = settings.write_template(prj, tmp_path / "raw")
+    assert bk.parent == prj / "_work" / "backups" and "# my edit" in bk.read_text()
+    assert "# my edit" not in (prj / "settings.toml").read_text()
+    bk2 = settings.backup(prj, "settings.toml")
+    assert bk2 != bk and bk2.exists()  # same second: a second copy, never overwritten
+    table = pd.DataFrame(dict(n="n1", treatment="A", image=range(1, 13)))
+    s = settings.load(prj)
+    design.write_wells_template(prj, table, s)
+    (prj / "wells.csv").write_text((prj / "wells.csv").read_text() + "# hand edit\n")
+    assert design.write_wells_template(prj, table, s).name == "wells.new.csv"  # default: never overwrite
+    design.write_wells_template(prj, table, s, overwrite=True)
+    kept = list((prj / "_work" / "backups").glob("wells_*.csv"))
+    assert len(kept) == 1 and "# hand edit" in kept[0].read_text()
+
+
+def test_stardist_weights_fall_back_to_a_user_cache(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    from kerncount import segment
+
+    pkg, user = tmp_path / "pkg_models", tmp_path / "home_models"
+    pkg.mkdir()
+    pkg.chmod(0o500)  # installed read-only
+    monkeypatch.setattr(segment, "MODEL_DIR", pkg)
+    monkeypatch.setattr(segment, "USER_MODEL_DIR", user)
+    try:
+        assert segment.model_cache_dir() == user
+        dl = tmp_path / "keras_cache" / "2D_versatile_fluo"
+        dl.mkdir(parents=True)
+        (dl / "config.json").write_text("{}")
+        loaded = []
+
+        class Fake:
+            def __init__(self, config=None, name=None, basedir=None):
+                self.logdir, self.basedir = dl, basedir
+                loaded.append(basedir)
+
+            @classmethod
+            def from_pretrained(cls, name):
+                return cls()
+
+        mod = types.ModuleType("stardist.models")
+        mod.StarDist2D = Fake
+        monkeypatch.setitem(sys.modules, "stardist", types.ModuleType("stardist"))
+        monkeypatch.setitem(sys.modules, "stardist.models", mod)
+        monkeypatch.setattr(segment, "_MODEL", None)
+        segment._stardist_model()  # downloads (fake) and saves a copy in the user cache
+        assert (user / "2D_versatile_fluo" / "config.json").exists() and loaded == [None]
+        monkeypatch.setattr(segment, "_MODEL", None)
+        segment._stardist_model()  # next time: loaded from the user cache, no download
+        assert loaded[-1] == str(user)
+    finally:
+        pkg.chmod(0o700)
