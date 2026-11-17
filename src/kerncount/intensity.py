@@ -591,7 +591,9 @@ def process(prj, fields: list, log=print) -> dict | None:
         for measure, pcol in (("mean", "positive"), ("p90", "positive_p90")):
             d = dec[measure]
             cut_rows.append(dict(n=n, channel=ch, measure=measure, rule=d["rule"],
-                                 rule_label=positivity.RULE_LABELS[d["rule"]], value=round(d["value"], 3),
+                                 rule_label=positivity.RULE_LABELS[d["rule"]] + (
+                                     " (NOT the manual cut-off: that applies to the mean only)" if d.get("note") else ""),
+                                 value=round(d["value"], 3),
                                  nuclei=len(g), frac_positive=round(float(nuc.loc[g.index, pcol].astype(float).mean()), 4),
                                  frac_positive_without_flatfield=round(before[measure], 4),
                                  flatfield=ffs[(n, ch)].source, detail=d["detail"]))

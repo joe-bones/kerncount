@@ -30,9 +30,10 @@ likelihood maximised over variances >= 0 by reml.py):
         + n x treatment                        random, a separate variance per treatment class
         + (field unit) well within n x treatment, field position within n (random n:position)
         + residual                             well-to-well (well unit) or field (field unit)
-    Classes ([analysis] classes): "auto" (default) = one class per non-control treatment, the control groups pooled.
+    Classes ([analysis] classes): "auto" (default) = one class per treatment, each control included.
     Pooling n x treatment variance across treatments gave a type I error of 0.16 for a treatment that varies more
-    than the rest of its class; one class per treatment is the conservative default (docs/statistics.md).
+    than the rest of its class, and pooling the controls gave 0.13 for "vs LyoVec" when the vehicle varies between
+    n's but Control does not; one class per treatment is the conservative default (docs/statistics.md).
     A treatment present in only one n has no n x treatment term (its single cell is absorbed by its fixed effect).
     With one well per condition (well unit) the residual is not identifiable next to n x treatment; it is held at ~0.
 
@@ -70,6 +71,27 @@ NEEDS_2N = "needs ≥ 2 n"
 NEEDS_2N_PAIR = "needs ≥ 2 n containing both groups: not estimable (estimate shown, no test)"
 OVERLAP_MIN = 0.5  # density overlap: each condition needs >= half of its wells inside the other's density range
 DENSITY_FLAG = "conditions do not overlap in density; adjusted estimate not trustworthy"
+RAW_SCALE_NOTE = ("RAW SCALE (difference): some well means are <= 0 (background-subtracted intensity), so the log is "
+                  "impossible; analysed as a DIFFERENCE in intensity units (identity link), not a ratio")
+
+
+def needs_raw_scale(df: pd.DataFrame, metric: Metric, unit: str = "well", positions_ok: bool = True) -> int:
+    """Number of analysed values <= 0 of a positive-kind metric (well means at the well unit, field values < 0 at
+    the field unit, where zero fields keep the log(value + shift) rule). > 0 -> the metric is analysed as a
+    difference on the raw scale: dropping those wells (log of a non-positive value) biases the effect toward 0."""
+    if metric.kind != "positive" or df.empty:
+        return 0
+    d = _normalise(df)
+    if unit == "well":
+        w, _ = well_means(d[d["value"].notna()], "value", positions_ok)
+        return int((w["mean"] <= 0).sum())
+    return int((d["value"] < 0).sum())
+
+
+def raw_scale_metric(metric: Metric) -> Metric:
+    from dataclasses import replace
+
+    return replace(metric, kind="difference")
 
 
 def stars(p) -> str:
@@ -121,6 +143,7 @@ class Config:
     unit: str = "well"  # well | field
     density: str = ""  # density covariate column for fraction metrics ("" = off)
     classes_mode: str = "auto"  # auto | two (controls vs the rest) | user
+    margin_pp: float = 5.0  # equivalence margin of fraction metrics, in percentage points
 
     def families(self, present: list[str]) -> list[Family]:
         """Comparison families for the treatments present (in `order`)."""
@@ -185,7 +208,7 @@ def config(settings: dict, treatments) -> Config:
     cls, corder = {}, []
     for t in order:
         if mode == "auto":
-            hit = "controls" if t in controls else t
+            hit = t  # every treatment, each control included, carries its own n x treatment variance
         else:
             hit = next((name for name, pats in user.items() if any(fnmatch.fnmatchcase(t, p) for p in pats)), None)
             if hit is None:
@@ -212,7 +235,8 @@ def config(settings: dict, treatments) -> Config:
                   among_classes=_as_list(a.get("among_classes", [])),
                   margin=float(a.get("equivalence_margin", 0.2) or 0.2), order=order,
                   unit=unit if unit in ("well", "field") else "well",
-                  density=str(a.get("density_covariate", "") or "").strip(), classes_mode=mode)
+                  density=str(a.get("density_covariate", "") or "").strip(), classes_mode=mode,
+                  margin_pp=float(a.get("equivalence_margin_pp", 5.0) or 5.0))
 
 
 # ---------------------------------------------------------------- response scale
@@ -228,11 +252,13 @@ class Scale:
         mu = np.asarray(mu, float)
         if self.kind == "fraction":
             return expit(mu)
+        if self.kind == "difference":
+            return mu
         return np.exp(mu) - self.shift
 
     @property
     def estimate_type(self) -> str:
-        return "odds_ratio" if self.kind == "fraction" else "ratio"
+        return {"fraction": "odds_ratio", "difference": "difference"}.get(self.kind, "ratio")
 
     @property
     def describe(self) -> str:
@@ -241,6 +267,8 @@ class Scale:
             return f"log({what} + {self.shift:g})"
         if self.kind == "fraction":
             return "logit of the pooled well fraction (empirical)" if self.unit == "well" else "logit (empirical)"
+        if self.kind == "difference":
+            return f"{what} on the raw scale (identity link; some {self.unit} means <= 0)"
         return f"log({what})" if not self.shift else f"log({what} + {self.shift:.3g})"
 
 
@@ -248,6 +276,8 @@ def transform(values: pd.Series, kind: str, counts: pd.Series | None = None) -> 
     """Response on the analysis scale; rows that cannot be transformed become NaN. For fractions `counts` is the
     number of nuclei N the fraction is taken of (k = fraction x N positives)."""
     v = pd.to_numeric(values, errors="coerce").astype(float)
+    if kind == "difference":
+        return v, Scale("difference", note=RAW_SCALE_NOTE)
     if kind == "count":
         v = v.where(v >= 0)
         return np.log(v + COUNT_OFFSET), Scale("count", COUNT_OFFSET, f"y = log(count + {COUNT_OFFSET:g})")
@@ -651,14 +681,15 @@ def _fit_spec(p: Prepared, cfg: Config, spec: str, starts: list | None = None,
         eng.fix_residual = 1e-6 * eng.var_y
     extra = list(starts or [])
     method = "REML, bounded L-BFGS-B (multi-start)"
-    if not quick:
+    if not quick:  # quick = leave-one-n-out refits: still multi-start, without the statsmodels start
         s0 = _statsmodels_start(model)
         if s0 is not None:
             extra.append(s0)
             method += " incl. statsmodels MixedLM start"
     try:
-        rf = eng.fit(extra_starts=[s for s in extra if s is not None and len(s) == eng.K + 1],
-                     n_default=1 if quick else None)
+        # quick (leave-one-n-out refits): every default start plus the full fit's variances, only the (slow)
+        # statsmodels start is skipped, so a refit is a multi-start fit like the main one
+        rf = eng.fit(extra_starts=[s for s in extra if s is not None and len(s) == eng.K + 1])
     except Exception as e:  # noqa: BLE001
         return None, f"{type(e).__name__}: {e}", notes
     if not rf.converged:
@@ -746,7 +777,8 @@ def _L(p: Prepared, f, t: str) -> np.ndarray:
 
 
 def _mvt_adjust(tvals: np.ndarray, dfs: np.ndarray, R: np.ndarray, simultaneous: bool = True):
-    """Single-step multivariate-t adjusted p-values and 95% critical values (per comparison, using its own df)."""
+    """Single-step multivariate-t adjusted p-values and 95% critical values (per comparison, using its own df).
+    Adjusted p-values are clamped into [raw p, min(1, k * raw p)] (k = comparisons tested in the family)."""
     m = len(tvals)
     padj = np.full(m, np.nan)
     crit = np.full(m, np.nan)
@@ -769,7 +801,10 @@ def _mvt_adjust(tvals: np.ndarray, dfs: np.ndarray, R: np.ndarray, simultaneous:
     crit_by_df: dict[float, float] = {}
     for j, i in enumerate(idx):
         df = round(float(dfs[i]), 1)
-        padj[i] = min(1.0, max(0.0, 1 - cover(abs(tvals[i]), df)))
+        # numerical integration loses precision in the far tail: keep p_adj within its exact bounds
+        # [raw p, min(1, k * raw p)] (single-step adjustment is never below the raw p nor above Bonferroni)
+        praw = float(2 * stats.t.sf(abs(tvals[i]), df))
+        padj[i] = float(np.clip(1 - cover(abs(tvals[i]), df), praw, min(1.0, k * praw)))
         if simultaneous:
             if df not in crit_by_df:
                 from scipy.optimize import brentq
@@ -797,7 +832,7 @@ CONTRAST_COLUMNS = ["family", "family_kind", "family_id", "comparison", "group",
                     "estimate_type", "estimate", "ci_low", "ci_high", "ci_low_adj", "ci_high_adj", "pct_of_comparator",
                     "pp_difference", "pp_ci_low", "pp_ci_high", "pp_ci_low_adj", "pp_ci_high_adj", "pct_group",
                     "pct_comparator", "log_estimate", "se", "t", "df", "N", "p", "p_adj", "significance",
-                    "conclusion", "test", "note"]
+                    "conclusion", "test", "note", "margin_low", "margin_high"]
 
 
 PP_DRAWS = 4000
@@ -829,6 +864,13 @@ def _effect(p: Prepared, mu_a: float, mu_b: float, est: float, se: float, q: flo
     and qadj (simultaneous); g = (La, Lb, df) for the percentage-point interval of fractions."""
     ok = np.isfinite(q) and np.isfinite(se)
     oka = ok and np.isfinite(qadj)
+    if p.scale.kind == "difference":  # raw scale: est is already the difference in the metric's units
+        return dict(log_estimate=np.nan, se=se, estimate=est,
+                    ci_low=est - q * se if ok else np.nan, ci_high=est + q * se if ok else np.nan,
+                    ci_low_adj=est - qadj * se if oka else np.nan, ci_high_adj=est + qadj * se if oka else np.nan,
+                    pp_difference=np.nan, pp_ci_low=np.nan, pp_ci_high=np.nan, pp_ci_low_adj=np.nan,
+                    pp_ci_high_adj=np.nan, pct_group=np.nan, pct_comparator=np.nan,
+                    pct_of_comparator=100 * mu_a / mu_b if mu_b > 0 else np.nan)
     r = dict(log_estimate=est, se=se, estimate=float(np.exp(est)),
              ci_low=float(np.exp(est - q * se)) if ok else np.nan, ci_high=float(np.exp(est + q * se)) if ok else np.nan,
              ci_low_adj=float(np.exp(est - qadj * se)) if oka else np.nan,
@@ -851,6 +893,93 @@ def _effect(p: Prepared, mu_a: float, mu_b: float, est: float, se: float, q: flo
     return r
 
 
+def _pp_draws(mu: np.ndarray, S: np.ndarray, df: float) -> np.ndarray | None:
+    """Draws of 100 * (expit(mu_a) - expit(mu_b)) (same generator as _pp_interval)."""
+    rng = np.random.default_rng(12345)
+    try:
+        z = rng.multivariate_normal(np.zeros(2), S, size=PP_DRAWS, method="eigh")
+    except (np.linalg.LinAlgError, ValueError):
+        return None
+    w = np.sqrt(df / rng.chisquare(df, PP_DRAWS)) if np.isfinite(df) else np.ones(PP_DRAWS)
+    m = mu[None, :] + z * w[:, None]
+    return 100 * (expit(m[:, 0]) - expit(m[:, 1]))
+
+
+def _equivalence_rows(p: Prepared, f, cfg: Config, info: list, base: dict) -> list[dict]:
+    """TOST rows of the vehicle-check family. Holm across the pairs; the verdict uses the same adjusted level:
+    equivalent = Holm-adjusted TOST p < 0.05; not equivalent = the (1 - 2 * 0.05 / m) CI (m pairs; 90% for one pair)
+    lies wholly outside the margin; else inconclusive. Margins: ratio within [1/(1+m), 1+m] (count / positive;
+    odds ratio is not used for fractions), fractions +- equivalence_margin_pp percentage points, raw-scale
+    differences +- margin x the comparator mean."""
+    m = max(1, sum(1 for x in info if x[5] >= 1))
+    a2 = 2 * ALPHA / m  # two-sided level of the reported CI (0.10 -> 90% CI for one pair)
+    cl = f"{100 * (1 - a2):.0f}% CI" if m == 1 else f"{100 * (1 - a2):.1f}% CI (Bonferroni-consistent with Holm, {m} pairs)"
+    kind = p.scale.kind
+    frows = []
+    for (a, b, est, se, N, df, mu_a, mu_b, g) in info:
+        if kind == "fraction":
+            margin_txt = f"±{cfg.margin_pp:g} percentage points"
+        elif kind == "difference":
+            margin_txt = f"±{cfg.margin:.0%} of the comparator mean (raw-scale difference)"
+        else:
+            margin_txt = f"ratio within [{1 / (1 + cfg.margin):.3g}, {1 + cfg.margin:.3g}]"
+        r = dict(base, comparison=f"{a} vs {b}", group=a, comparator=b, df=df, N=N,
+                 test=f"TOST equivalence (mixed model; margin {margin_txt}; {cl})")
+        if df < 1:
+            r.update(_effect(p, mu_a, mu_b, est, np.nan, np.nan, np.nan), t=np.nan, p=np.nan,
+                     conclusion=NEEDS_2N, note=NEEDS_2N_PAIR, margin_low=np.nan, margin_high=np.nan)
+            frows.append(r)
+            continue
+        q = stats.t.ppf(1 - a2 / 2, df)
+        r.update(_effect(p, mu_a, mu_b, est, se, q, np.nan, g, f.cov), t=np.nan)
+        if kind == "fraction":
+            La, Lb, _ = g
+            Lm = np.vstack([La, Lb])
+            d = _pp_draws(np.array([mu_a, mu_b]), Lm @ f.cov @ Lm.T, df)
+            M = cfg.margin_pp
+            if d is None:
+                pv, lo, hi = np.nan, np.nan, np.nan
+            else:
+                pv = float(max(np.mean(d <= -M), np.mean(d >= M), 1 / PP_DRAWS))
+                lo, hi = float(np.quantile(d, a2 / 2)), float(np.quantile(d, 1 - a2 / 2))
+            r.update(pp_ci_low=lo, pp_ci_high=hi, margin_low=-M, margin_high=M)
+            fmt = lambda v: f"{v:+.2f} pp"  # noqa: E731
+        else:
+            if kind == "difference":
+                M = cfg.margin * mu_b if mu_b > 0 else np.nan
+                lo_m, hi_m = -M, M
+                fmt = lambda v: f"{v:.4g}"  # noqa: E731
+            else:
+                M = np.log(1 + cfg.margin)
+                lo_m, hi_m = np.exp(-M), np.exp(M)
+                fmt = lambda v: f"{np.exp(v):.3g}"  # noqa: E731
+            lo, hi = est - q * se, est + q * se
+            pv = (float(max(stats.t.sf((est + M) / se, df), stats.t.cdf((est - M) / se, df)))
+                  if np.isfinite(M) else np.nan)
+            r.update(margin_low=lo_m, margin_high=hi_m)
+        r.update(p=pv, _lo=lo, _hi=hi, _M=M, _fmt=fmt)
+        frows.append(r)
+    for r, pa_ in zip(frows, holm([r["p"] for r in frows])):
+        r["p_adj"] = pa_
+        if "_M" not in r:
+            continue
+        lo, hi, M, fmt = r.pop("_lo"), r.pop("_hi"), r.pop("_M"), r.pop("_fmt")
+        if not np.isfinite(M) or not np.isfinite(r["p"]):
+            verdict = "not testable (comparator mean <= 0)" if kind == "difference" else "not testable"
+        elif pa_ < ALPHA:
+            verdict = "equivalent"
+        elif lo >= M or hi <= -M:
+            verdict = "not equivalent"
+        else:
+            verdict = "inconclusive"
+        if kind == "fraction":
+            note = f"{cl} {fmt(lo)} to {fmt(hi)} vs margin ±{M:g} pp: {verdict}"
+        else:
+            note = f"{cl} {fmt(lo)}-{fmt(hi)} vs margin {fmt(-M)}-{fmt(M)}: {verdict}"
+        r.update(conclusion=verdict, note=note + (f" (Holm-adjusted TOST p {pa_:.3g})" if np.isfinite(pa_) else ""))
+    return frows
+
+
 def contrasts(p: Prepared, f: Fit, cfg: Config, simultaneous: bool = True, kinds: tuple | None = None) -> pd.DataFrame:
     """One row per comparison in every family (model-based). Fractions also get the difference in percentage points
     at the model means, expit(mu_a) - expit(mu_b), with intervals from draws of (mu_a, mu_b) from the model's
@@ -861,7 +990,6 @@ def contrasts(p: Prepared, f: Fit, cfg: Config, simultaneous: bool = True, kinds
     est_name = estimand(p.metric, p.unit) if p.metric is not None else ""
     if p.scale.kind == "fraction":
         est_name = estimand(p.metric, p.unit) + "; odds ratio and % of comparator as secondary"
-    lm = np.log(1 + cfg.margin)
     for fam in cfg.families(p.treatments):
         if kinds and fam.kind not in kinds:
             continue
@@ -886,29 +1014,7 @@ def contrasts(p: Prepared, f: Fit, cfg: Config, simultaneous: bool = True, kinds
         dfs = np.array([x[5] for x in info], float)
         base = dict(family=fam.name, family_kind=fam.kind, family_id=fam.id, estimate_type=et, estimand=est_name)
         if fam.kind == "vehicle_check":
-            frows = []
-            for (a, b, est, se, N, df, mu_a, mu_b, g) in info:
-                r = dict(base, comparison=f"{a} vs {b}", group=a, comparator=b, df=df, N=N,
-                         test=f"TOST equivalence (mixed model; margin ±{cfg.margin:.0%}: ratio within "
-                              f"[{1 / (1 + cfg.margin):.3g}, {1 + cfg.margin:.3g}]; 90% CI)")
-                if df >= 1:
-                    q = stats.t.ppf(0.95, df)
-                    r.update(_effect(p, mu_a, mu_b, est, se, q, np.nan, g, f.cov))
-                    lo, hi = est - q * se, est + q * se
-                    p1 = stats.t.sf((est + lm) / se, df)
-                    p2 = stats.t.cdf((est - lm) / se, df)
-                    verdict = ("equivalent" if lo > -lm and hi < lm else
-                               "not equivalent" if lo >= lm or hi <= -lm else "inconclusive")
-                    r.update(t=np.nan, p=float(max(p1, p2)), conclusion=verdict,
-                             note=f"90% CI {np.exp(lo):.3g}-{np.exp(hi):.3g} vs margin {1 / (1 + cfg.margin):.3g}-"
-                                  f"{1 + cfg.margin:.3g}: {verdict}")
-                else:
-                    r.update(_effect(p, mu_a, mu_b, est, np.nan, np.nan, np.nan), t=np.nan, p=np.nan,
-                             conclusion=NEEDS_2N, note=NEEDS_2N_PAIR)
-                frows.append(r)
-            for r, pa_ in zip(frows, holm([r["p"] for r in frows])):
-                r["p_adj"] = pa_
-            rows += frows
+            rows += _equivalence_rows(p, f, cfg, info, base)
             continue
         padj, crit = _mvt_adjust(tv, dfs, R, simultaneous)
         for j, (a, b, est, se, N, df, mu_a, mu_b, g) in enumerate(info):
@@ -926,8 +1032,6 @@ def contrasts(p: Prepared, f: Fit, cfg: Config, simultaneous: bool = True, kinds
     if len(out):
         out["significance"] = [(r.conclusion if r.conclusion != NEEDS_2N else "") if r.family_kind == "vehicle_check"
                                else stars(r.p_adj) for r in out.itertuples()]
-        if et == "odds_ratio":
-            out["test"] = out["test"].str.replace("ratio within", "odds ratio within")
     return out
 
 
@@ -1052,7 +1156,7 @@ def variance_components(p: Prepared, f: Fit | None, cfg: Config) -> pd.DataFrame
                     v = float(cell_var.mean())
                     note = "descriptive: technical replicates (pooled within-condition variance of this n)"
             rows.append(dict(component=lab, variance=v, sd=np.sqrt(v) if np.isfinite(v) else np.nan,
-                             cv_pct=100 * np.sqrt(np.expm1(v)) if np.isfinite(v) and p.scale.kind != "fraction" else np.nan,
+                             cv_pct=100 * np.sqrt(np.expm1(v)) if np.isfinite(v) and p.scale.kind not in ("fraction", "difference") else np.nan,
                              pct_of_total=np.nan, ci_low=np.nan, ci_high=np.nan, note=note))
         return pd.DataFrame(rows, columns=cols)
     vals = f.theta
@@ -1100,7 +1204,7 @@ def variance_components(p: Prepared, f: Fit | None, cfg: Config) -> pd.DataFrame
             lo, hi = np.nan, np.nan
             note = "estimate at or near zero: CI not available" if v <= 1e-8 else "CI not available"
         rows.append(dict(component=lab, variance=v, sd=np.sqrt(max(v, 0)),
-                         cv_pct=100 * np.sqrt(np.expm1(max(v, 0))) if p.scale.kind != "fraction" else np.nan,
+                         cv_pct=100 * np.sqrt(np.expm1(max(v, 0))) if p.scale.kind not in ("fraction", "difference") else np.nan,
                          pct_of_total=100 * v / total if total > 0 else np.nan, ci_low=lo, ci_high=hi, note=note))
     return pd.DataFrame(rows, columns=cols)
 
@@ -1108,8 +1212,8 @@ def variance_components(p: Prepared, f: Fit | None, cfg: Config) -> pd.DataFrame
 # ---------------------------------------------------------------- per-n effects and RM ANOVA paths
 
 TECH = "descriptive: technical replicates (fields)"
-PER_N_COLUMNS = ["n", "treatment", "control", "ratio", "ratio_of_means", "pp_difference", "tech_ci_low",
-                 "tech_ci_high", "interval", "fields", "estimate_type"]
+PER_N_COLUMNS = ["n", "treatment", "control", "ratio", "ratio_of_means", "pp_difference", "difference",
+                 "tech_ci_low", "tech_ci_high", "interval", "fields", "estimate_type"]
 
 
 def _field_summary(p: Prepared) -> pd.DataFrame:
@@ -1136,7 +1240,10 @@ def _field_summary(p: Prepared) -> pd.DataFrame:
             rows.append(dict(n=n, treatment=t, value=prop, se=se, fields=k))
         else:
             m = float(g["value"].mean())
-            se = float(g["value"].std(ddof=1) / np.sqrt(k) / m) if (k > 1 and m > 0) else np.nan
+            if p.scale.kind == "difference":  # raw scale: absolute SE of the field mean
+                se = float(g["value"].std(ddof=1) / np.sqrt(k)) if k > 1 else np.nan
+            else:
+                se = float(g["value"].std(ddof=1) / np.sqrt(k) / m) if (k > 1 and m > 0) else np.nan
             rows.append(dict(n=n, treatment=t, value=m, se=se, fields=k))
     return pd.DataFrame(rows, columns=["n", "treatment", "value", "se", "fields"]).set_index(["n", "treatment"])
 
@@ -1148,6 +1255,7 @@ def per_n_ratios(p: Prepared, cfg: Config) -> pd.DataFrame:
     mu = p.d.groupby(["n", "treatment"])["y"].mean()
     fs = _field_summary(p)
     frac = p.scale.kind == "fraction"
+    raw = p.scale.kind == "difference"
     rows = []
     for n in p.ns:
         for c in cfg.controls:
@@ -1158,16 +1266,22 @@ def per_n_ratios(p: Prepared, cfg: Config) -> pd.DataFrame:
                     continue
                 vt, vc = fs.loc[(n, t)], fs.loc[(n, c)]
                 se = float(np.sqrt(vt["se"] ** 2 + vc["se"] ** 2))
-                rom = float(vt["value"] / vc["value"]) if vc["value"] else np.nan
-                if frac:
+                rom = float(vt["value"] / vc["value"]) if vc["value"] > 0 else np.nan
+                diff = np.nan
+                if raw:  # raw-scale metric: the per-n effect is the difference of the means (intensity units)
+                    pp = np.nan
+                    diff = float(vt["value"] - vc["value"])
+                    lo, hi = (diff - 1.96 * se, diff + 1.96 * se) if np.isfinite(se) else (np.nan, np.nan)
+                elif frac:
                     pp = 100 * float(vt["value"] - vc["value"])
                     lo, hi = (pp - 196 * se, pp + 196 * se) if np.isfinite(se) else (np.nan, np.nan)
                 else:
                     pp = np.nan
                     ok = np.isfinite(se) and np.isfinite(rom) and rom > 0
                     lo, hi = (rom * np.exp(-1.96 * se), rom * np.exp(1.96 * se)) if ok else (np.nan, np.nan)
-                rows.append(dict(n=n, treatment=t, control=c, ratio=float(np.exp(mu[(n, t)] - mu[(n, c)])),
-                                 ratio_of_means=rom, pp_difference=pp, tech_ci_low=lo, tech_ci_high=hi,
+                rows.append(dict(n=n, treatment=t, control=c,
+                                 ratio=np.nan if raw else float(np.exp(mu[(n, t)] - mu[(n, c)])),
+                                 ratio_of_means=rom, pp_difference=pp, difference=diff, tech_ci_low=lo, tech_ci_high=hi,
                                  interval=TECH, fields=int(vt["fields"]), estimate_type=p.scale.estimate_type))
     return pd.DataFrame(rows, columns=PER_N_COLUMNS)
 
@@ -1357,7 +1471,11 @@ class ModelResult:
                     notes=list(self.notes), attempts=list(self.attempts),
                     warnings=list(self.fit.warnings) if self.fit else [],
                     optimiser=self.fit.method if self.fit else "",
-                    density_model=self.density.model if self.density else "")
+                    density_model=self.density.model if self.density else "",
+                    effect_type=self.scale.estimate_type if self.scale else "",
+                    raw_scale=bool(self.scale is not None and self.scale.kind == "difference"),
+                    raw_scale_warning=RAW_SCALE_NOTE if (self.scale is not None and self.scale.kind == "difference")
+                    else "")
 
 
 DF_RULE = ("t with Satterthwaite df, capped at the df of the n×treatment variance(s) the comparison relies on "
@@ -1388,8 +1506,13 @@ def _analyse(df, metric, settings, positions_ok, leave_one_out, density=True) ->
         except ValueError:
             positions_ok = False
     cfg = config(settings, df["treatment"].unique())
+    n_bad = needs_raw_scale(df, metric, cfg.unit, positions_ok)
+    if n_bad:  # log impossible for some wells: analyse the whole metric as a raw-scale difference (I3)
+        metric = raw_scale_metric(metric)
     p = prepare(df, metric, cfg, positions_ok)
     notes = list(p.notes)
+    if n_bad:
+        notes.insert(0, f"{RAW_SCALE_NOTE} ({n_bad} {cfg.unit} value(s) <= 0)")
     dens = None
     if density and metric.kind == "fraction" and cfg.density:
         try:
@@ -1481,9 +1604,18 @@ def loo(df: pd.DataFrame, metric: Metric, settings: dict, positions_ok: bool, us
     summ = []
     if full is not None and len(full):
         fl = full[full["family_kind"] != "vehicle_check"] if "family_kind" in full else full
-        null = 0.0 if use_model is False else 1.0
         for r in fl.itertuples():
+            # null value of the estimate: 0 for differences (RM ANOVA, raw-scale difference model), 1 for ratios
+            null = 0.0 if (not use_model or getattr(r, "estimate_type", "") == "difference") else 1.0
             drops = out[(out["family"] == r.family) & (out["comparison"] == r.comparison)]
+            if len(ns) < 3 and np.isfinite(r.p_adj):
+                # dropping one of 2 n's leaves one n: no test is possible, so stability cannot be judged
+                summ.append(dict(family=r.family, comparison=r.comparison, estimate=r.estimate, p_adj=r.p_adj,
+                                 significant=bool(r.p_adj < ALPHA), loo_min=np.nan, loo_max=np.nan,
+                                 loo_p_adj_max=np.nan, drops=len(drops), same_direction=False,
+                                 same_significance=False, stable="not testable",
+                                 note=f"leave-one-n-out needs ≥ 3 n (dropping one of {len(ns)} leaves too few)"))
+                continue
             if not np.isfinite(r.p_adj):
                 summ.append(dict(family=r.family, comparison=r.comparison, estimate=r.estimate, p_adj=r.p_adj,
                                  significant=False, loo_min=np.nan, loo_max=np.nan, loo_p_adj_max=np.nan,

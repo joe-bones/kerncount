@@ -26,6 +26,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .fileio import atomic_write, file_lock  # noqa: F401 (re-exported for tuning / gui)
+
 LOCK_FILE = "cutoffs.json"
 MIN_CONTROL_NUCLEI = 20
 RULE_LABELS = {"negative_control": "negative-control percentile", "manual": "locked manual value",
@@ -53,20 +55,36 @@ def load_locks(project_dir: Path) -> list[dict]:
         return []
 
 
+def read_lock_file(p: Path) -> dict:
+    try:
+        return json.loads(Path(p).read_text(encoding="utf-8")) if Path(p).exists() else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def lock_fields(lk: dict) -> int:
+    """Number of fields a lock was tuned on (stored as a count; older files kept a list of ids)."""
+    f = lk.get("fields", 0)
+    return len(f) if isinstance(f, list) else int(f or 0)
+
+
 def save_lock(project_dir: Path, channel: str, cutoff: float, fields: list[str], measure: str = "mean",
               n: str | None = None, extra: dict | None = None) -> dict:
-    """Add (replace) a locked cut-off for `channel` (and `n`, None = every n) in cutoffs.json; returns the lock."""
+    """Add (replace) a locked cut-off for `channel` (and `n`, None = every n) in cutoffs.json; returns the lock.
+    Only the NUMBER of fields is stored (field ids and their files would unblind; tuning.lock keeps the files in
+    _work/cutoff_fields.json). Locked read-modify-write with an atomic replace."""
     p = Path(project_dir) / LOCK_FILE
-    data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-    locks = [lk for lk in data.get("locks", [])
-             if not (_key(lk.get("channel")) == _key(channel) and lk.get("n") == n and lk.get("measure", "mean") == measure)]
-    lock = dict(channel=channel, n=n, measure=measure, cutoff=float(cutoff),
-                locked_at=time.strftime("%Y-%m-%dT%H:%M:%S"), fields=list(fields), **(extra or {}))
-    locks.append(lock)
-    data.update(schema="kerncount.cutoffs/1", locks=locks,
-                note="Locked positivity cut-offs (corrected intensity units: mean inside the nucleus minus local "
-                     "background, divided by the flat field). Delete an entry to unlock it.")
-    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    with file_lock(p):
+        data = read_lock_file(p)
+        locks = [lk for lk in data.get("locks", [])
+                 if not (_key(lk.get("channel")) == _key(channel) and lk.get("n") == n and lk.get("measure", "mean") == measure)]
+        lock = dict(channel=channel, n=n, measure=measure, cutoff=float(cutoff),
+                    locked_at=time.strftime("%Y-%m-%dT%H:%M:%S"), fields=len(fields), **(extra or {}))
+        locks.append(lock)
+        data.update(schema="kerncount.cutoffs/1", locks=locks,
+                    note="Locked positivity cut-offs (corrected intensity units: mean inside the nucleus minus local "
+                         "background, divided by the flat field). Delete an entry to unlock it.")
+        atomic_write(p, json.dumps(data, indent=2))
     return lock
 
 
@@ -126,14 +144,23 @@ def decide(nuc: pd.DataFrame, settings: dict, channel: str, n: str, locks: list[
             out[measure] = dict(rule="manual", value=v, thr=np.full(len(x), v),
                                 detail=f"locked {lk.get('locked_at', '?')} in {LOCK_FILE} "
                                        f"({'n ' + lk['n'] if lk.get('n') else 'all n'}; tuned on "
-                                       f"{len(lk.get('fields', []))} fields)")
+                                       f"{lock_fields(lk)} fields)")
             continue
         thr = nuc[lcol].to_numpy(float)
         k = float(p.get("lod_k", 3.0))
         out[measure] = dict(rule="lod", value=float(np.nanmedian(thr)) if len(thr) else float("nan"), thr=thr,
                             detail=f"k = {k:g} x background noise SD for each nucleus' area (median shown; "
                                    f"range {np.nanmin(thr):.1f} to {np.nanmax(thr):.1f})" if len(thr) else "no nuclei")
+    if out["mean"]["rule"] == "manual" and out["p90"]["rule"] == "lod":
+        # a manual value (settings.toml or a tuning lock) is in the units of the MEAN signal and fixes only the
+        # mean-based % positive; the p90 readout keeps the automatic rule unless a p90 value is locked separately
+        out["p90"]["note"] = P90_NOT_LOCKED
+        out["p90"]["detail"] = P90_NOT_LOCKED + "; " + out["p90"]["detail"]
     return out
+
+
+P90_NOT_LOCKED = ("AUTOMATIC RULE, NOT the manual cut-off: the manual value applies only to the mean signal; lock a "
+                  "90th-percentile value in the tuning view (measure p90) to fix this readout too")
 
 
 def lod_thresholds(nuc: pd.DataFrame, k: float, ff: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:

@@ -95,27 +95,44 @@ def test_position_adjusted_well_mean_with_missing_fields():
 
 # ---------------------------------------------------------------- 2. conservative classes + type I error
 
-def test_auto_classes_one_per_treatment_controls_pooled():
+def test_auto_classes_one_per_treatment_each_control_included():
     cfg = models.config(_settings(), TR)
     assert cfg.classes_mode == "auto"
-    assert cfg.classes["Control"] == cfg.classes["LyoVec"] == "controls"
+    assert cfg.classes["Control"] == "Control" and cfg.classes["LyoVec"] == "LyoVec"
     assert {cfg.classes[t] for t in ("CL075", "miR-1", "miR-2")} == {"CL075", "miR-1", "miR-2"}
     assert models.config(_settings(classes={}), TR).classes["miR-1"] == "treatments"
     assert models.config(_settings(classes='{ mirna = ["miR-*"] }'), TR).classes["miR-2"] == "mirna"
 
 
-@pytest.mark.parametrize("scenario", ["misspecified", "uneven_fields"])
+def test_vehicle_comparisons_rest_on_the_vehicles_own_variance():
+    """C1: the vehicle (LyoVec) varies between n's, Control does not. With the controls pooled in one class the
+    vehicle's n-to-n variance was diluted by Control's zero and "vs LyoVec" got too many df / too small SEs."""
+    rng = np.random.default_rng(31)
+    d = sim_counts(rng, n_n=4, var_nt={"LyoVec": 0.3})
+    res = models.analyse(d, COUNT, _settings(), positions_ok=True, leave_one_out=False, density=False)
+    assert res.ok and "class-specific" in res.model
+    vc = res.varcomp.set_index("component")["variance"]
+    assert "n × treatment [LyoVec]" in vc.index and "n × treatment [Control]" in vc.index
+    assert "n × treatment [controls]" not in vc.index
+    r = _row(res.contrasts, "vs LyoVec", "miR-1 vs LyoVec")
+    assert r.df <= 6  # (4 - 1) for miR-1 + (4 - 1) for LyoVec
+
+
+@pytest.mark.parametrize("scenario", ["misspecified", "uneven_fields", "vehicle_varies"])
 @pytest.mark.slow
 def test_type_one_error_default_including_misspecification(scenario):
     """Quick null simulation under the default (well unit, classes = auto). misspecified: one miRNA varies much
     more between n's than the others (pooled classes gave 0.16 for it). uneven_fields: miRNA fields are far more
-    dispersed, equal arithmetic means (the field-level model would see a 'difference'). Full tables:
+    dispersed, equal arithmetic means (the field-level model would see a 'difference'). vehicle_varies: LyoVec varies
+    between n's, Control does not (pooled controls gave 0.13 for "vs LyoVec"). Full tables:
     docs/statistics.md."""
-    rng = np.random.default_rng(21 if scenario == "misspecified" else 22)
+    rng = np.random.default_rng({"misspecified": 21, "uneven_fields": 22, "vehicle_varies": 23}[scenario])
     ps, p1 = [], []
     for _ in range(30):
         if scenario == "misspecified":
             d = sim_counts(rng, n_n=4, var_nt={"miR-1": 0.3, "miR-2": 0.02, "miR-3": 0.02, "CL075": 0.02})
+        elif scenario == "vehicle_varies":  # LyoVec varies between n's, Control and the treatments do not (C1)
+            d = sim_counts(rng, n_n=4, var_nt={"LyoVec": 0.3})
         else:
             d = sim_counts(rng, n_n=4, var_nt={t: 0.1 for t in TR if t not in CTRL},
                            field_sd={t: (1.0 if t.startswith("miR") else 0.4) for t in TR})

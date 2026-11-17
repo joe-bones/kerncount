@@ -97,8 +97,8 @@ DEFAULTS: dict = {
         "equivalence_margin": 0.2,  # vehicle check: ratio must lie within [1/1.2, 1.2] to call it equivalent
         "positive_control": "",  # e.g. "CL075": every non-control treatment is also compared with it
         "model_unit": "well",  # all-n model unit: "well" (mean per field of each well; ratios of means) or "field"
-        "classes": "auto",  # own n x treatment variance per class: "auto" = one per non-control treatment, controls
-                            # pooled; {} = controls vs everything else; or e.g. { mirna = ["miR-*"] }
+        "classes": "auto",  # own n x treatment variance per class: "auto" = one per treatment, each control
+                            # included; {} = controls vs everything else; or e.g. { mirna = ["miR-*"] }
         "density_covariate": "readout_coverage",  # fraction metrics: also a density-adjusted model; "" = off
         "among_classes": [],  # classes whose members are compared with each other (all pairs), e.g. ["mirna"]
     },
@@ -134,6 +134,9 @@ DEFAULTS: dict = {
         "plate_format": 24,  # 6, 12, 24, 48 or 96 wells
         "avoid_edge": True,  # plate maps: inner wells first, edge wells only when needed
         "reference_wells": "auto",  # wells per reference condition; "auto" = Dunnett's sqrt(k) rule
+        # power / MDE for a star on the headline plot: the family's multivariate-t adjusted critical value
+        # (false = unadjusted paired t-test of one comparison, as the ratio t-test)
+        "adjust_for_family": True,
     },
 }
 
@@ -226,8 +229,8 @@ vehicle_check = "auto"               # equivalence test, e.g. "LyoVec vs Control
 equivalence_margin = 0.2             # equivalent = ratio (90% CI) within [1/1.2, 1.2]
 positive_control = ""                # e.g. "CL075": every non-control treatment is also compared with it
 model_unit = "well"                  # model unit: "well" (well mean per field; ratios of mean nuclei per field) or "field"
-classes = "auto"                     # own n-to-n variance per class: "auto" = one per non-control treatment (controls
-                                     # pooled; conservative); {{}} = controls vs the rest; or e.g. {{ mirna = ["miR-*"] }}
+classes = "auto"                     # own n-to-n variance per class: "auto" = one per treatment, each control
+                                     # included (conservative); {{}} = controls vs the rest; or e.g. {{ mirna = ["miR-*"] }}
 density_covariate = "readout_coverage"   # fraction metrics: extra density-adjusted estimate; "" = off
 among_classes = []                   # compare members of these classes with each other, e.g. ["mirna"]
 
@@ -262,6 +265,7 @@ max_n = 12                # largest number of n's in the design tables
 plate_format = 24         # 6, 12, 24, 48 or 96 wells
 avoid_edge = true         # plate maps: inner wells first, edge wells only when needed
 reference_wells = "auto"  # wells per reference condition; "auto" = Dunnett's rule (wells x sqrt(comparisons))
+adjust_for_family = true  # power = chance of a star on the headline plot (family-adjusted); false = one unadjusted test
 '''
 
 
@@ -281,16 +285,43 @@ def load(project_dir: Path) -> dict:
     return _merge(DEFAULTS, user)
 
 
+BACKUPS = "_work/backups"
+
+
+def backup(project_dir: Path, name: str) -> Path | None:
+    """Copy <project>/<name> (settings.toml, layout.csv, wells.csv, ...) to _work/backups/<stem>_<timestamp><suffix>
+    before it is overwritten. Returns the copy (None when there was nothing to back up)."""
+    import shutil
+    import time
+
+    src = Path(project_dir) / name
+    if not src.is_file():
+        return None
+    d = Path(project_dir) / BACKUPS
+    d.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dst = d / f"{src.stem}_{stamp}{src.suffix}"
+    k = 1
+    while dst.exists():
+        k += 1
+        dst = d / f"{src.stem}_{stamp}_{k}{src.suffix}"
+    shutil.copy2(src, dst)
+    return dst
+
+
 def write_template(project_dir: Path, raw_dir: Path) -> None:
-    """raw_dir is stored relative to the project folder when possible, so a workspace can be moved."""
+    """raw_dir is stored relative to the project folder when possible, so a workspace can be moved. Symlinks are
+    NOT resolved: a data/<experiment> link to a folder elsewhere is stored as ../../data/<experiment>, so the link
+    (not its current target) stays the source of truth. An existing settings.toml is backed up first."""
     import os
 
-    raw_abs, prj_abs = Path(raw_dir).resolve(), Path(project_dir).resolve()
+    raw_abs, prj_abs = os.path.abspath(raw_dir), os.path.abspath(project_dir)
     try:
         raw = os.path.relpath(raw_abs, prj_abs)
     except ValueError:  # different drives on Windows
         raw = str(raw_abs)
     raw = raw.replace("\\", "/")
+    backup(project_dir, "settings.toml")
     (Path(project_dir) / "settings.toml").write_text(TEMPLATE.format(raw_dir=raw), encoding="utf-8")
 
 

@@ -84,12 +84,14 @@ def layer_list(ch: str, metric_ids) -> list[dict]:
 
 # ---------------------------------------------------------------- effects and values from the model results
 
-def _call(est: float, lo: float, hi: float, frac: bool, sig: bool | None) -> tuple[str, str]:
-    """(direction, call). direction: higher | lower | no change; sig None = significance not available."""
+def _call(est: float, lo: float, hi: float, frac: bool, sig: bool | None, tol: float | None = None
+          ) -> tuple[str, str]:
+    """(direction, call). direction: higher | lower | no change; sig None = significance not available.
+    tol: 'no change' tolerance around 0 for raw-scale differences (frac must be True then: null = 0)."""
     if not np.isfinite(est):
         return "", "n/a"
     null = 0.0 if frac else 100.0
-    small = abs(est - null) < (SAME_PP if frac else SAME_PCT)
+    small = abs(est - null) < (tol if tol is not None else SAME_PP if frac else SAME_PCT)
     d = "higher" if est > null else "lower"
     if small and not sig:
         d = "no change"
@@ -102,9 +104,12 @@ def effects(res, layer: dict, ref: str, level: str, cell_line=None) -> pd.DataFr
     """Effect rows of one layer vs `ref` from a ModelResult: all n (contrasts) or every n (per_n, technical)."""
     rows = []
     frac = layer["frac"]
+    raw = res.scale is not None and res.scale.kind == "difference"  # models.needs_raw_scale: well means <= 0
     base = dict(layer=layer["label"], layer_key=layer["key"], layer_index=layer["index"], extra=layer["extra"],
                 metric=layer["metric"], reference=ref, cell_line=cell_line,
-                effect_type="pp_difference" if frac else "pct_of_reference")
+                effect_type="pp_difference" if frac else ("difference" if raw else "pct_of_reference"))
+    if raw:
+        return _raw_effects(res, ref, level, base)
     if level == "all_n":
         c = res.contrasts
         if c is None or not len(c):
@@ -143,6 +148,47 @@ def effects(res, layer: dict, ref: str, level: str, cell_line=None) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
+RAW_LABEL = "DIFFERENCE (raw units; well means <= 0, no ratio)"
+
+
+def _raw_effects(res, ref: str, level: str, base: dict) -> pd.DataFrame:
+    """Effect rows of a layer analysed on the raw scale (difference in the metric's units, null 0). 'No change'
+    tolerance = SAME_PCT % of the reference mean, so the call is comparable with the % layers."""
+    rows = []
+    em = res.emm.set_index("treatment")["estimate"] if len(res.emm) else pd.Series(dtype=float)
+    refm = float(em.get(ref, np.nan))
+    tol = abs(refm) * SAME_PCT / 100 if np.isfinite(refm) and refm != 0 else 0.0
+    if level == "all_n":
+        c = res.contrasts
+        if c is None or not len(c):
+            return pd.DataFrame()
+        for r in c[(c["family_kind"] == "vs_control") & (c["comparator"] == ref)].itertuples():
+            est, lo, hi = r.estimate, r.ci_low, r.ci_high
+            has_ci = bool(np.isfinite(lo) and np.isfinite(hi))
+            sig = (bool(np.isfinite(r.p_adj) and r.p_adj < SIG)) if has_ci else None
+            d, call = _call(est, lo, hi, True, sig, tol)
+            rows.append(dict(base, level="all_n", n=None, treatment=r.group, estimate=est, ci_low=lo, ci_high=hi,
+                             interval=("95% CI (mixed model across n; " if has_ci else models.NEEDS_2N + " (")
+                             + RAW_LABEL + ")", p_adj=r.p_adj,
+                             significance=r.significance if isinstance(r.significance, str) else "",
+                             N=r.N, direction=d, call=call))
+    else:
+        pn = res.per_n
+        if pn is None or not len(pn):
+            return pd.DataFrame()
+        for r in pn[pn["control"] == ref].itertuples():
+            est, lo, hi = r.difference, r.tech_ci_low, r.tech_ci_high
+            has = bool(np.isfinite(lo) and np.isfinite(hi))
+            sig = (lo > 0 or hi < 0) if has else None
+            d, call = _call(est, lo, hi, True, sig, tol)
+            if sig is not None:
+                call = call.replace(" *", " (tech.)")
+            rows.append(dict(base, level="n", n=r.n, treatment=r.treatment, estimate=est, ci_low=lo, ci_high=hi,
+                             interval=(TECH if has else "no interval (too few fields)") + "; " + RAW_LABEL,
+                             p_adj=np.nan, significance="", N=r.fields, direction=d, call=call))
+    return pd.DataFrame(rows)
+
+
 def absolute(res, layer: dict, level: str, cell_line=None) -> pd.DataFrame:
     """Value of every treatment at one layer: all n = model means with 95% CI (one n: estimate only); per n = mean of
     the fields (pooled % for fractions) with the technical 95% interval."""
@@ -162,6 +208,8 @@ def absolute(res, layer: dict, level: str, cell_line=None) -> pd.DataFrame:
             v, se = float(r["value"]), float(r["se"])
             if layer["frac"]:
                 lo, hi = max(v - 1.96 * se, 0.0), min(v + 1.96 * se, 1.0)
+            elif res.scale is not None and res.scale.kind == "difference":  # se is absolute on the raw scale
+                lo, hi = v - 1.96 * se, v + 1.96 * se
             else:  # se is relative (SE / mean) for intensities
                 lo, hi = v * np.exp(-1.96 * se), v * np.exp(1.96 * se)
             rows.append(dict(base, level="n", n=n, treatment=t, value=k * v, ci_low=k * lo, ci_high=k * hi,
@@ -236,9 +284,11 @@ def concordance(eff: pd.DataFrame, level_note: str = "") -> pd.DataFrame:
 
 # ---------------------------------------------------------------- plots
 
-def _fmt(v: float, frac: bool) -> str:
+def _fmt(v: float, frac: bool, diff: bool = False) -> str:
     if not np.isfinite(v):
         return ""
+    if diff:
+        return f"{v:+.3g} (diff.)"
     return f"{v:+.1f} pp" if frac else f"{v:.0f}%"
 
 
@@ -263,7 +313,7 @@ def ladder_plot(eff: pd.DataFrame, layers: list[dict], order: list[str], out: Pa
     h = 1.25 + 0.42 * len(trs) + 0.95
     fig, axes = plt.subplots(1, ncols, figsize=(1.0 + 2.05 * ncols, h), sharey=True, squeeze=False)
     axes = axes[0]
-    ints = eff[~eff["layer_key"].eq("frac_positive")]
+    ints = eff[~eff["layer_key"].eq("frac_positive") & ~eff["effect_type"].eq("difference")]
     vals = pd.concat([ints["estimate"], ints["ci_low"], ints["ci_high"]]).dropna()
     lo_i = min(float(vals.min()) if len(vals) else 90, 95)
     hi_i = max(float(vals.max()) if len(vals) else 110, 105)
@@ -273,12 +323,20 @@ def ladder_plot(eff: pd.DataFrame, layers: list[dict], order: list[str], out: Pa
     for ax, L in zip(axes, layers):
         g = eff[eff["layer_key"] == L["key"]]
         frac = L["frac"]
+        diff = bool(g["effect_type"].eq("difference").any())  # raw-scale layer: difference, own axis, null 0
         colour = FRAC_COLOUR if frac else (EXTRA_COLOUR if L["extra"] else REF_COLOUR)
         if L["extra"]:
             ax.set_facecolor("#f6f6f6")
-        null = 0.0 if frac else 100.0
+        if diff:
+            ax.set_facecolor("#fff1e0")
+        null = 0.0 if (frac or diff) else 100.0
         ax.axvline(null, color="#999999", lw=0.8, zorder=0)
-        if frac:
+        if diff:
+            fv = pd.concat([g["estimate"], g["ci_low"], g["ci_high"]]).dropna()
+            a_, b_ = (min(float(fv.min()), 0), max(float(fv.max()), 0)) if len(fv) else (-1, 1)
+            p_ = 0.12 * ((b_ - a_) or 1)
+            ax.set_xlim(a_ - p_, b_ + p_)
+        elif frac:
             fv = pd.concat([g["estimate"], g["ci_low"], g["ci_high"]]).dropna()
             a_, b_ = (min(float(fv.min()), -2), max(float(fv.max()), 2)) if len(fv) else (-5, 5)
             p_ = 0.12 * (b_ - a_)
@@ -302,12 +360,12 @@ def ladder_plot(eff: pd.DataFrame, layers: list[dict], order: list[str], out: Pa
                     mfc=c if (r.call.endswith("*") or "(tech.)" in r.call) else "white", mew=1.3, zorder=3)
             if not per_n:
                 star = r.significance if isinstance(r.significance, str) and r.significance not in ("", "ns") else ""
-                txt = _fmt(r.estimate, frac) + (f" {star}" if star else "")
+                txt = _fmt(r.estimate, frac, diff) + (f" {star}" if star else "")
                 ax.annotate(txt, (1.0, yy), xycoords=("axes fraction", "data"), xytext=(-2, 5),
                             textcoords="offset points", ha="right", va="bottom", fontsize=6.5, color="#333333")
-        unit = "% points" if frac else "% of ref."
+        unit = "% points" if frac else ("DIFFERENCE, raw units" if diff else "% of ref.")
         ax.set_title(("Extra: " if L["extra"] else "") + L["label"] + f"\n({unit})", fontsize=8,
-                     color=colour if not L["extra"] else "#444444")
+                     color="#b35806" if diff else (colour if not L["extra"] else "#444444"))
         ax.tick_params(labelsize=7)
         ax.spines[["top", "right"]].set_visible(False)
         ax.grid(axis="x", color="#eeeeee", lw=0.6)
@@ -454,7 +512,10 @@ def write_level(where: Path, ch: str, layers: list[dict], results: dict, refs: l
         verdict = ("Layers agree for every treatment." if changed.empty else
                    "Conclusion changes between layers for: " + ", ".join(
                        f"{r.treatment} (step {r.changes_at})" for r in changed.itertuples()) + ".")
-        foot = (f"Effect of each treatment vs {ref} at every layer of the {ch} analysis. {how} "
+        rawl = sorted(set(e.loc[e["effect_type"].eq("difference"), "layer"]))
+        raw_txt = (f"RAW SCALE: {', '.join(rawl)} had well means <= 0, so it is analysed as a DIFFERENCE in "
+                   "intensity units (orange panel, 0 = no effect), not as % of the reference. " if rawl else "")
+        foot = (raw_txt + f"Effect of each treatment vs {ref} at every layer of the {ch} analysis. {how} "
                 + FOOT_COMMON.format(density=dens, sigdef=sigdef) + f" {verdict} Details: layers_{ch}_concordance.csv.")
         tr_order = [t for t in order if t != ref]
         p = where / f"layers_{ch}_vs_{re.sub(r'[^\w.\-]+', '_', ref).strip('_')}"

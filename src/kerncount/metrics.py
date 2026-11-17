@@ -5,6 +5,8 @@ Every analysed column becomes a `Metric` with a `kind` that decides the statisti
     count      nuclei per field                      -> log(value + COUNT_OFFSET)
     positive   intensities, densities, areas, ...    -> log(value)       (results are ratios)
     fraction   a proportion 0..1 per field           -> logit            (results are odds ratios)
+    difference set by the model (never by the registry) for a positive metric with well means <= 0 (e.g.
+               background-subtracted intensities): raw scale, identity link, results are differences
 
 Recognised columns:
     count                 nuclei per field (always first)
@@ -124,6 +126,10 @@ def estimand(metric: Metric, unit: str = "well", what: str = "effect") -> str:
         if what == "mean":
             return "% of nuclei (pooled per well; typical well, logit model)"
         return "difference in percentage points (pooled per well; logit model)"
+    if metric.kind == "difference":  # positive metric with well means <= 0 (models.needs_raw_scale): raw scale
+        if what == "mean":
+            return f"mean {u} (raw scale)"
+        return f"DIFFERENCE in mean {u} (raw scale: some well means <= 0, no ratio)"
     if unit == "field":
         return f"geometric mean {u}" if what == "mean" else f"ratio of geometric means of fields ({u})"
     return f"mean {u}" if what == "mean" else f"ratio of mean {u}"

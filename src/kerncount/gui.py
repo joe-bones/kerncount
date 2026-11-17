@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlparse
 from . import settings as settings_mod
 from . import settings_form
 from .cli import ANALYSIS, DATA, workspace_root
+from .fileio import atomic_write, file_lock
 
 CONFIG = Path.home() / ".kerncount_gui.json"
 TOKEN = secrets.token_urlsafe(16)
@@ -68,9 +69,13 @@ def write_csv(path: Path, columns: list[str], rows: list[list[str]], delim: str)
     w.writerow(columns)
     w.writerows(rows)
     try:
-        path.write_text(buf.getvalue(), encoding="utf-8", newline="")
+        _atomic(path, buf.getvalue(), newline="")
     except PermissionError:
         raise ValueError(f"cannot write {path.name}: is it open in Excel? Close it and try again.") from None
+
+
+def _atomic(path: Path, text: str, newline: str | None = None):
+    atomic_write(path, text, newline=newline)  # temp file + os.replace
 
 
 def parse_manual(v: str, where: str):
@@ -324,6 +329,11 @@ def review_index(prj: Path) -> list[dict]:
 
 
 def save_layout(prj: Path, rows: list[dict]):
+    with file_lock(prj / "layout.csv"):
+        _save_layout(prj, rows)
+
+
+def _save_layout(prj: Path, rows: list[dict]):
     path = prj / "layout.csv"
     cols, old, delim = read_csv(path)
     ix = {c: i for i, c in enumerate(cols)}
@@ -343,7 +353,13 @@ def save_layout(prj: Path, rows: list[dict]):
 
 def save_counts(prj: Path, changes: list[dict], mtime: float | None) -> dict:
     """Apply in-browser corrections to counts.csv. A completely new manual_k column (next round) is added if needed,
-    and one empty manual column is always kept at the end (as `kerncount run` does)."""
+    and one empty manual column is always kept at the end (as `kerncount run` does). Locked read-modify-write with
+    an atomic replace (two tabs saving at once cannot interleave)."""
+    with file_lock(prj / "counts.csv"):
+        return _save_counts(prj, changes, mtime)
+
+
+def _save_counts(prj: Path, changes: list[dict], mtime: float | None) -> dict:
     path = prj / "counts.csv"
     if mtime is not None and abs(path.stat().st_mtime - mtime) > 1e-3:
         raise ValueError("counts.csv was changed by another program since this page loaded it "
@@ -397,10 +413,14 @@ def list_files(root: Path, rel: str, recursive: bool) -> list[dict]:
     d = inside(root, rel)
     if not d.is_dir():
         raise ValueError(f"not a folder: {rel}")
+    if d != root.resolve() and private(root, d):
+        raise ValueError("this folder holds internal files and is not shown")
     it = d.rglob("*") if recursive else d.iterdir()
     out = []
     for p in it:
         if p.name.startswith(".") or p.suffix in (".sig",):
+            continue
+        if private(root, p) and p.name != "cutoffs.json":  # cutoffs.json is listed; opening it shows the summary
             continue
         out.append(dict(path=p.relative_to(root).as_posix(), name=p.name, dir=p.is_dir(),
                         size=p.stat().st_size if p.is_file() else None))
@@ -707,15 +727,47 @@ def overview(prj: Path) -> dict:
 
 # ---------------------------------------------------------------- intensity page and blinded tuning
 
+LOCK_KEYS = ("channel", "n", "measure", "cutoff", "locked_at", "units")
+HISTORY_KEYS = ("action", "channel", "n", "measure", "cutoff", "at", "fields", "previous")
+
+
+def _nfields(lk: dict) -> int:
+    f = lk.get("fields", 0)
+    return len(f) if isinstance(f, list) else int(fnum(f) or 0)
+
+
 def cutoff_locks(prj: Path) -> dict:
-    """Locks (without the file names they were tuned on: those would unblind) and their history."""
+    """Sanitized locks and history: only whitelisted keys, `fields` as a count. Field ids or the files a lock was
+    tuned on (kept by older versions in cutoffs.json) would unblind, so they never leave the server."""
     data = read_json(prj / "cutoffs.json", {}) or {}
-    strip = lambda lk: {k: v for k, v in lk.items() if k not in ("field_files", "fields")} | {"fields": len(lk.get("fields", []))}  # noqa: E731
-    return dict(locks=[strip(lk) for lk in data.get("locks", [])], history=list(data.get("history", [])))
+    locks = [{k: lk.get(k) for k in LOCK_KEYS if k in lk} | {"fields": _nfields(lk)} for lk in data.get("locks", [])
+             if isinstance(lk, dict)]
+    hist = [{k: h.get(k) for k in HISTORY_KEYS if k in h} | ({"fields": _nfields(h)} if "fields" in h else {})
+            for h in data.get("history", []) if isinstance(h, dict)]
+    return dict(locks=locks, history=hist)
+
+
+def cutoffs_summary(prj: Path) -> str:
+    """What /file and /api/text show for cutoffs.json: the sanitized locks, never the raw file."""
+    return json.dumps(dict(schema="kerncount.cutoffs/1 (sanitized view: the files and field ids a lock was tuned "
+                                  "on are not shown, to keep tuning blinded)", **cutoff_locks(prj)), indent=1)
 
 
 def _write_cutoffs(prj: Path, data: dict):
-    (prj / "cutoffs.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
+    atomic_write(prj / "cutoffs.json", json.dumps(data, indent=1))
+
+
+PRIVATE_DIRS = ("_work",)  # detection caches, salts / audit trails, backups: never served to the page
+
+
+def private(prj: Path, p: Path) -> bool:
+    """True for paths the page must not read raw: anything in _work/ (audit trail of the files a cut-off was
+    tuned on, caches) and cutoffs.json (served only as a sanitized summary)."""
+    try:
+        rel = p.resolve().relative_to(prj.resolve())
+    except ValueError:
+        return True
+    return bool(rel.parts) and (rel.parts[0] in PRIVATE_DIRS or rel.as_posix() == "cutoffs.json")
 
 
 def intensity_info(prj: Path) -> dict:
@@ -733,6 +785,7 @@ def _tuning():
 def tuning_info(prj: Path) -> dict:
     t = _tuning()
     chans = t.channels(prj)
+    t.audit(prj)  # moves file names an older version left in cutoffs.json to _work/cutoff_fields.json
     ns = sorted({r.get("n", "") for r in read_dicts(prj / "layout.csv") if r.get("n")})
     return dict(channels=chans, scopes=ns, **cutoff_locks(prj))
 
@@ -748,7 +801,8 @@ def tuning_sample(prj: Path, body: dict) -> dict:
     seed = None if seed in (None, "") else _int(seed, 0, 2 ** 31 - 1, "seed")
     r = t.sample(prj, k=_int(body.get("k", 12), 1, 60, "fields"), seed=seed, channel=body.get("channel") or None,
                  n=body.get("n") or None)
-    return dict(seed=r["seed"], channel=r["channel"], fields=[dict(field_id=f["field_id"], nuclei=f["nuclei"]) for f in r["fields"]])
+    # only the opaque ids: no nucleus count (it tracks the treatment), no n, no condition
+    return dict(seed=r["seed"], channel=r["channel"], fields=[dict(field_id=f["field_id"]) for f in r["fields"]])
 
 
 def tuning_preview(prj: Path, arg) -> dict:
@@ -773,30 +827,32 @@ def tuning_lock(prj: Path, body: dict) -> dict:
     cut = float(body.get("cutoff"))
     measure = body.get("measure", "mean")
     n = body.get("n") or None
-    before = {(lk["channel"], lk.get("n"), lk.get("measure")): lk["cutoff"] for lk in cutoff_locks(prj)["locks"]}
-    lk = t.lock(prj, body.get("channel"), cut, ids, measure=measure, n=n)
-    data = read_json(prj / "cutoffs.json", {}) or {}
-    data.setdefault("history", []).append(dict(action="lock", channel=lk["channel"], n=n, measure=measure, cutoff=cut,
-                                               at=lk["locked_at"], fields=len(ids),
-                                               previous=before.get((lk["channel"], n, measure))))
-    _write_cutoffs(prj, data)
-    shown = {k: v for k, v in lk.items() if k not in ("field_files", "fields")} | {"fields": len(ids)}
+    with file_lock(prj / "cutoffs.json"):
+        before = {(lk["channel"], lk.get("n"), lk.get("measure")): lk["cutoff"] for lk in cutoff_locks(prj)["locks"]}
+        lk = t.lock(prj, body.get("channel"), cut, ids, measure=measure, n=n)
+        data = read_json(prj / "cutoffs.json", {}) or {}
+        data.setdefault("history", []).append(dict(action="lock", channel=lk["channel"], n=n, measure=measure,
+                                                   cutoff=cut, at=lk["locked_at"], fields=len(ids),
+                                                   previous=before.get((lk["channel"], n, measure))))
+        _write_cutoffs(prj, data)
+    shown = {k: lk.get(k) for k in LOCK_KEYS if k in lk} | {"fields": len(ids)}
     return dict(ok=True, message=f"cut-off {cut:g} locked", lock=shown)
 
 
 def tuning_unlock(prj: Path, body: dict) -> dict:
-    data = read_json(prj / "cutoffs.json", {}) or {}
-    ch, n, measure = str(body.get("channel", "")), body.get("n") or None, body.get("measure", "mean")
-    keep, gone = [], []
-    for lk in data.get("locks", []):
-        hit = str(lk.get("channel")).lower() == ch.lower() and lk.get("n") == n and lk.get("measure", "mean") == measure
-        (gone if hit else keep).append(lk)
-    if not gone:
-        raise ValueError("no such lock")
-    data["locks"] = keep
-    data.setdefault("history", []).append(dict(action="unlock", channel=ch, n=n, measure=measure,
-                                               cutoff=gone[0].get("cutoff"), at=time.strftime("%Y-%m-%dT%H:%M:%S")))
-    _write_cutoffs(prj, data)
+    with file_lock(prj / "cutoffs.json"):
+        data = read_json(prj / "cutoffs.json", {}) or {}
+        ch, n, measure = str(body.get("channel", "")), body.get("n") or None, body.get("measure", "mean")
+        keep, gone = [], []
+        for lk in data.get("locks", []):
+            hit = str(lk.get("channel")).lower() == ch.lower() and lk.get("n") == n and lk.get("measure", "mean") == measure
+            (gone if hit else keep).append(lk)
+        if not gone:
+            raise ValueError("no such lock")
+        data["locks"] = keep
+        data.setdefault("history", []).append(dict(action="unlock", channel=ch, n=n, measure=measure,
+                                                   cutoff=gone[0].get("cutoff"), at=time.strftime("%Y-%m-%dT%H:%M:%S")))
+        _write_cutoffs(prj, data)
     return dict(ok=True, message="lock removed: the next run uses the automatic rule again")
 
 
@@ -972,6 +1028,48 @@ def rerun_advice(before: dict, after: dict) -> dict:
 
 # ---------------------------------------------------------------- HTTP
 
+# The page: scripts only from /static (no inline script, no inline event handlers: app.js dispatches data-on*
+# attributes), styles may be inline, images also from data:/blob:. Never framed (clickjacking).
+CSP_APP = ("default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; "
+           "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+# Project files (/file): whatever a file contains, it can never run script in this origin.
+CSP_FILE = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'"
+# project files that browsers would treat as active content: always downloaded, never rendered
+ACTIVE_SUFFIXES = {".html", ".htm", ".xhtml", ".svg", ".svgz", ".xml", ".xsl", ".xslt", ".js", ".mjs", ".pdf"}
+SAFE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+              ".webp": "image/webp", ".tif": "image/tiff", ".tiff": "image/tiff", ".csv": "text/plain",
+              ".txt": "text/plain", ".toml": "text/plain", ".md": "text/plain", ".log": "text/plain",
+              ".json": "application/json",
+              ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+
+
+def file_type(name: str) -> tuple[str, bool]:
+    """(Content-Type, force download) for a project file. Only a whitelist of passive types is shown inline;
+    HTML, SVG, XML, scripts (and anything unknown) are sent as a download (application/octet-stream)."""
+    suf = Path(name).suffix.lower()
+    if suf in ACTIVE_SUFFIXES:
+        return ("application/pdf" if suf == ".pdf" else "application/octet-stream"), True
+    t = SAFE_TYPES.get(suf)
+    return (t, False) if t else ("application/octet-stream", True)
+
+
+def content_disposition(name: str) -> str:
+    """attachment with an ASCII fallback name (quotes, backslashes, control and non-ASCII characters replaced) and
+    the exact name as RFC 5987 filename*=UTF-8''..., so any file name gives a valid latin-1 header."""
+    from urllib.parse import quote
+
+    fallback = "".join(c if 32 <= ord(c) < 127 and c not in '"\\;' else "_" for c in name) or "download"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
+def response_headers(ctype: str, length: int, extra: dict | None) -> dict:
+    h = {"Content-Type": ctype + ("; charset=utf-8" if ctype.startswith(("text/", "application/json")) else ""),
+         "Content-Length": str(length), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+         "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer", "Content-Security-Policy": CSP_APP}
+    h.update(extra or {})
+    return h
+
+
 def make_handler(state: State):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # keep the console quiet
@@ -979,12 +1077,17 @@ def make_handler(state: State):
 
         def _send(self, code: int, body, ctype="application/json", extra: dict | None = None):
             data = body if isinstance(body, bytes) else body.encode() if isinstance(body, str) else json.dumps(body, default=str).encode()
+            # every header is built (and checked to be encodable) BEFORE the status line goes out, so a bad header
+            # becomes a clean error response instead of a half-written one
+            headers = response_headers(ctype, len(data), extra)
+            try:
+                for v in headers.values():
+                    v.encode("latin-1")
+            except UnicodeEncodeError:
+                data = json.dumps({"error": "cannot send this file name"}).encode()
+                code, headers = 500, response_headers("application/json", len(data), None)
             self.send_response(code)
-            self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith(("text/", "application/json")) else ""))
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            for k, v in (extra or {}).items():
+            for k, v in headers.items():
                 self.send_header(k, v)
             self.end_headers()
             self.wfile.write(data)
@@ -1008,6 +1111,8 @@ def make_handler(state: State):
             u = urlparse(self.path)
             q = parse_qs(u.query)
             if u.path == "/":
+                # the token goes into a <meta> tag (read by app.js): no inline script, and a cross-origin page can
+                # neither read this HTML nor include it as a script
                 html = (WEB / "index.html").read_text(encoding="utf-8").replace("__TOKEN__", TOKEN)
                 return self._send(200, html, "text/html")
             if u.path.startswith("/static/"):
@@ -1020,11 +1125,19 @@ def make_handler(state: State):
             arg = lambda k, d="": q.get(k, [d])[0]  # noqa: E731
             try:
                 if u.path == "/file":
-                    p = inside(state.project(arg("exp")), arg("path"))
+                    prj = state.project(arg("exp"))
+                    p = inside(prj, arg("path"))
+                    if p == (prj / "cutoffs.json").resolve():
+                        return self._send(200, cutoffs_summary(prj), "application/json")
+                    if private(prj, p):
+                        return self._send(403, {"error": "internal file: not shown"})
                     if not p.is_file():
                         return self._send(404, {"error": "not found"})
-                    extra = {"Content-Disposition": f'attachment; filename="{p.name}"'} if arg("dl") else {}
-                    return self._send(200, p.read_bytes(), mimetypes.guess_type(p.name)[0] or "application/octet-stream", extra)
+                    ctype, attach = file_type(p.name)
+                    extra = {"Content-Security-Policy": CSP_FILE}
+                    if arg("dl") or attach:
+                        extra["Content-Disposition"] = content_disposition(p.name)
+                    return self._send(200, p.read_bytes(), ctype, extra)
                 if u.path == "/api/tuning/render":  # blinded: the field is known only by its opaque id
                     cut = arg("cutoff")
                     png = _tuning().render(state.project(arg("exp")), arg("field"), arg("channel") or None,
@@ -1055,9 +1168,15 @@ def make_handler(state: State):
                 return counts_data(prj)
             if path == "/api/table":
                 p = inside(prj, arg("path"))
+                if private(prj, p):
+                    raise ValueError("internal file: not shown")
                 return table_data(p) if p.exists() else dict(columns=[], rows=[], total=0)
             if path == "/api/text":
                 p = inside(prj, arg("path"))
+                if p == (prj / "cutoffs.json").resolve():
+                    return dict(text=cutoffs_summary(prj))
+                if private(prj, p):
+                    raise ValueError("internal file: not shown")
                 return dict(text=p.read_text(encoding="utf-8-sig", errors="replace")[:500_000] if p.is_file() else "")
             if path == "/api/files":
                 return list_files(prj, arg("dir"), arg("recursive") == "1")

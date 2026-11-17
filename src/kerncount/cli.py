@@ -33,13 +33,21 @@ def _experiments(ws: Path) -> list[str]:
     return sorted(d.name for d in (ws / DATA).iterdir() if d.is_dir() and not d.name.startswith("."))
 
 
+def _bare(arg: str) -> bool:
+    """An experiment name (no folder separators, not absolute) rather than a path."""
+    return not Path(arg).is_absolute() and "/" not in arg and "\\" not in arg and arg not in (".", "..")
+
+
 def resolve_raw(arg: str) -> Path:
+    """A bare name is looked up in <workspace>/data/ FIRST, then as a folder in the working directory; a path is
+    used as given. Symlinks are kept (absolute path, not resolved): data/<exp> may link to a folder elsewhere and
+    the project should keep pointing at the link."""
+    ws = workspace_root()
+    if _bare(arg) and ws and (ws / DATA / arg).is_dir():
+        return Path(os.path.abspath(ws / DATA / arg))
     p = Path(arg)
     if p.is_dir():
-        return p.resolve()
-    ws = workspace_root()
-    if ws and (ws / DATA / arg).is_dir():
-        return (ws / DATA / arg).resolve()
+        return Path(os.path.abspath(p))
     sys.exit(f"raw folder not found: {arg}" + (f" (also looked in {ws / DATA})" if ws else ""))
 
 
@@ -63,7 +71,10 @@ def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False):
     if (prj / "settings.toml").exists() and not force:
         print(f"settings.toml already exists in {prj} (kept). Use --force to reset it.")
     else:
-        settings.write_template(prj, raw)
+        had = (prj / "settings.toml").exists()
+        settings.write_template(prj, raw)  # backs up an existing settings.toml to _work/backups/ first
+        if had:
+            print(f"settings.toml reset to the defaults; the previous version is kept in {settings.BACKUPS}/")
     s = settings.load(prj)
     inter = settings.interleaved(s)
     layout = discover.scan(raw, s["project"]["date_order"], files=s["channels"]["files"],
@@ -72,6 +83,9 @@ def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False):
     if lp.exists() and not (force or force_layout):
         lp = prj / "layout.new.csv"
         print(f"layout.csv already exists (kept); fresh scan written to {lp.name} for comparison.")
+    elif lp.exists():
+        bk = settings.backup(prj, "layout.csv")
+        print(f"layout.csv overwritten; the previous version is kept in {bk.relative_to(prj).as_posix()}")
     discover.write_layout(layout, lp, s["project"]["csv_delimiter"])
     with __import__("pandas").option_context("display.width", 200, "display.max_colwidth", 60, "display.max_rows", 500):
         print(layout[["n", "treatment", "treatment_folder", "images", "note"]].to_string(index=False))

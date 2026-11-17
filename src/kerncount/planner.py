@@ -92,10 +92,13 @@ def options(settings: dict) -> dict:
     fmt = int(num("plate_format", cast=int))
     if fmt not in PLATE_FORMATS:
         raise ValueError(f"settings.toml [planner] plate_format = {fmt}: expected one of {PLATE_FORMATS}")
+    adj = p.get("adjust_for_family", True)
+    if isinstance(adj, str):
+        adj = adj.strip().lower() not in ("false", "0", "no", "off", "")
     return dict(effects=effects or list(PLANNER_DEFAULTS["effects"]), target_power=num("target_power", 0.05, 0.999),
                 alpha=num("alpha", 1e-4, 0.5), cost_per_n=num("cost_per_n", 0), cost_per_well=num("cost_per_well", 0),
                 cost_per_field=num("cost_per_field", 0), max_n=int(num("max_n", 3, 100)), plate_format=fmt,
-                avoid_edge=bool(p["avoid_edge"]), reference_wells=rw)
+                avoid_edge=bool(p["avoid_edge"]), reference_wells=rw, adjust_for_family=bool(adj))
 
 
 def references(settings: dict, present) -> list[str]:
@@ -106,8 +109,8 @@ def references(settings: dict, present) -> list[str]:
 
 def treatment_classes(settings: dict, treatments, refs) -> tuple[dict[str, str], str, list[str]]:
     """{treatment: class}, source, notes; the same rule as the statistics (models.config):
-    "auto" (default) = one class per non-control treatment, references (reference + normalise_to) pooled as
-    "controls"; a table (class -> names or glob patterns such as "miR-*") = those classes; anything else (e.g.
+    "auto" (default) = one class per treatment, each reference (reference + normalise_to) included, so a vehicle
+    that varies between n's never borrows the stability of another control; a table (class -> names or glob patterns such as "miR-*") = those classes; anything else (e.g.
     "two") = references vs everything else ("treatments")."""
     from . import models
 
@@ -116,8 +119,7 @@ def treatment_classes(settings: dict, treatments, refs) -> tuple[dict[str, str],
     spec = models.parse_classes(raw) if mode == "user" else {}
     notes = []
     if mode == "auto":
-        return ({t: CONTROLS if t in refs else str(t) for t in treatments},
-                "auto (one class per non-control treatment; controls pooled)", notes)
+        return ({t: str(t) for t in treatments}, "auto (one class per treatment, each control its own)", notes)
     if spec:
         out = {}
         for t in treatments:
@@ -310,13 +312,39 @@ def bio_fit(lr: pd.DataFrame, coef: pd.DataFrame, ref: str) -> dict | None:
         beta, *_ = np.linalg.lstsq(X.to_numpy(), cells.to_numpy(), rcond=None)
         ms_e = float(((cells.to_numpy() - X.to_numpy() @ beta) ** 2).sum() / df_e)
         tbar = len(cells) / N
-        ms_n = max(tbar * (V - (1 - 1 / tbar) * ms_e), 1e-12)
-        a, b = ms_n / tbar, (1 - 1 / tbar) * ms_e
-        out.update(kind="two-way", ms_n=ms_n, df_n=N - 1, ms_e=ms_e, df_e=df_e, tbar=tbar, V=a + b,
-                   df=(a + b) ** 2 / (a ** 2 / (N - 1) + b ** 2 / df_e))
+        # V stays the pooled within-treatment variance. Its split into the n part (MS_n / t_bar) and the interaction
+        # part ((1 - 1/t_bar) MS_e) only feeds the uncertainty (pivots, df). When the interaction mean square alone
+        # exceeds V (the n part would be negative), the interaction part is scaled down to V, so the pivots stay
+        # centred on the pooled V instead of inflating it.
+        b = (1 - 1 / tbar) * ms_e
+        clipped = b > V
+        if clipped:
+            b = V
+            ms_e_used = V / (1 - 1 / tbar)
+        else:
+            ms_e_used = ms_e
+        a = max(V - b, 1e-12 * max(V, 1e-12))
+        ms_n = a * tbar
+        out.update(kind="two-way", ms_n=ms_n, df_n=N - 1, ms_e=ms_e_used, ms_e_raw=ms_e, df_e=df_e, tbar=tbar, V=V,
+                   split_clipped=bool(clipped), df=(a + b) ** 2 / (a ** 2 / (N - 1) + b ** 2 / df_e))
     else:
         out.update(df=float(df_pooled))
     return out
+
+
+def shared_variance(lr: pd.DataFrame) -> float:
+    """Var(u_n): the part of the per-n log ratio shared by every treatment vs one reference (the reference's own
+    n-to-n noise and measurement), estimated as the mean pairwise covariance across n's of the treatments' log
+    ratios (pairs with >= 3 common n's), clipped at 0. It sets the correlation of the comparisons in a family."""
+    cols = [c for c in lr if lr[c].notna().sum() >= 3]
+    num = den = 0.0
+    for i in range(len(cols)):
+        for j in range(i + 1, len(cols)):
+            x = lr[[cols[i], cols[j]]].dropna()
+            if len(x) >= 3:
+                num += float(np.cov(x.iloc[:, 0], x.iloc[:, 1], ddof=1)[0, 1]) * (len(x) - 1)
+                den += len(x) - 1
+    return max(num / den, 0.0) if den else 0.0
 
 
 def bio_draws(b: dict, wd: dict, rng: np.random.Generator, n: int = N_DRAWS) -> tuple[np.ndarray, np.ndarray]:
@@ -359,17 +387,134 @@ def _two_sided(tc, dfree, nc):
 _NC_CACHE: dict = {}
 
 
-def nc_for_power(dfree: int, target: float = 0.8, alpha: float = 0.05) -> float:
-    """Noncentrality giving `target` power for a two-sided t-test with dfree df (cached)."""
-    key = (int(dfree), round(target, 6), round(alpha, 6))
+def nc_for_power(dfree: float, target: float = 0.8, alpha: float = 0.05, tc: float | None = None) -> float:
+    """Noncentrality giving `target` power for a two-sided t-test with dfree df (cached); `tc` = critical value
+    (default: the unadjusted t_{1 - alpha/2, dfree}; pass the family-adjusted one for a star on the headline plot)."""
+    tc = float(stats.t.ppf(1 - alpha / 2, dfree)) if tc is None else float(tc)
+    key = (round(float(dfree), 3), round(target, 6), round(tc, 6))
     if key not in _NC_CACHE:
-        tc = stats.t.ppf(1 - alpha / 2, dfree)
         f = lambda nc: float(_two_sided(tc, dfree, nc)) - target
         hi = 4.0
         while f(hi) < 0:
             hi *= 1.5
         _NC_CACHE[key] = float(optimize.brentq(f, 0.0, hi, xtol=1e-6))
     return _NC_CACHE[key]
+
+
+def power_t(log_effect, sd, n, tc, dfree):
+    """Power of a two-sided t test with critical value tc and dfree df: P(|T| > tc), T ~ noncentral t(dfree,
+    |log_effect| / (sd / sqrt(n))). Vectorised (tc, dfree broadcast with n)."""
+    log_effect, sd, n, tc, dfree = np.broadcast_arrays(np.abs(np.asarray(log_effect, float)), np.asarray(sd, float),
+                                                       np.asarray(n, float), np.asarray(tc, float),
+                                                       np.asarray(dfree, float))
+    out = np.full(log_effect.shape, np.nan)
+    ok = (n >= 2) & (sd > 0) & np.isfinite(sd) & np.isfinite(log_effect) & np.isfinite(tc) & (dfree > 0)
+    if ok.any():
+        nc = log_effect[ok] / (sd[ok] / np.sqrt(n[ok]))
+        out[ok] = _two_sided(tc[ok], dfree[ok], nc)
+    out[(n >= 2) & (sd == 0) & (log_effect > 0)] = 1.0
+    return out if out.ndim else float(out)
+
+
+# ---------------------------------------------------------------- family adjustment (single-step multivariate t)
+
+_GH = np.polynomial.hermite_e.hermegauss(48)  # nodes / weights for the shared normal factor
+_U = (np.arange(400) + 0.5) / 400  # quantile grid for the chi-square scale of the multivariate t
+_S_CACHE: dict = {}
+_CRIT_CACHE: dict = {}
+
+
+def _mvt_cover(c: float, k: int, rho: float, dfree: float) -> float:
+    """P(max_i |T_i| < c) for k equicorrelated (rho >= 0) t variables with dfree df: T_i = Z_i / S,
+    Z_i = sqrt(rho) Z_0 + sqrt(1 - rho) E_i, S = sqrt(chi2_df / df). Two-dimensional quadrature."""
+    s = _S_CACHE.get(dfree)
+    if s is None:
+        s = _S_CACHE[dfree] = np.sqrt(stats.chi2.ppf(_U, dfree) / dfree)
+    z, wz = _GH
+    wz = wz / wz.sum()
+    a, b = math.sqrt(rho), math.sqrt(1 - rho)
+    cs = c * s[:, None]
+    pr = stats.norm.cdf((cs - a * z[None, :]) / b) - stats.norm.cdf((-cs - a * z[None, :]) / b)
+    return float((wz[None, :] * pr ** k).sum() / len(s))
+
+
+def family_critical(k: int, rho: float, dfree: float, alpha: float = 0.05) -> float:
+    """Critical value of the single-step multivariate-t adjustment (Dunnett-type, as models._mvt_adjust) for a
+    family of k comparisons with common correlation rho and dfree df: P(max |T_i| < c) = 1 - alpha. k = 1 gives the
+    ordinary t critical value. Cached; rho rounded to 0.01, df to 0.1."""
+    k = max(int(k), 1)
+    dfree = max(round(float(dfree), 1), 1.0)
+    rho = min(max(round(float(rho), 2), 0.0), 0.95)
+    key = (k, rho, dfree, round(alpha, 6))
+    if key not in _CRIT_CACHE:
+        lo = float(stats.t.ppf(1 - alpha / 2, dfree))
+        if k == 1:
+            _CRIT_CACHE[key] = lo
+        else:
+            hi = float(stats.t.ppf(1 - alpha / (2 * k), dfree)) + 1e-6  # Bonferroni bound
+            try:
+                _CRIT_CACHE[key] = float(optimize.brentq(lambda c: _mvt_cover(c, k, rho, dfree) - (1 - alpha),
+                                                         lo, hi, xtol=1e-5))
+            except ValueError:
+                _CRIT_CACHE[key] = hi
+    return _CRIT_CACHE[key]
+
+
+def family_size(plan: dict) -> int:
+    """Comparisons in the headline family "vs <reference>": every other condition (as models.Config.families)."""
+    return max(int(plan["design"]["conditions"]) - 1, 1)
+
+
+def _shared_var(plan: dict, ref: str, fields, reference_wells, standardised: bool):
+    """Variance part shared by every comparison vs `ref` (per n, log scale): the reference's own n x treatment
+    variance (plan["ref_bio"]) plus its measurement part at the design. Broadcasts."""
+    pt = plan["components_point"]
+    f = pt["field"] + (0 if standardised else pt["position"])
+    k, wr = np.asarray(fields, float), np.asarray(reference_wells, float)
+    return float((plan.get("ref_bio") or {}).get(ref, 0.0) or 0.0) + pt["well"] / wr + f / (wr * k)
+
+
+def family_test(plan: dict, ref: str, n, V_mid, shared, alpha: float = 0.05, adjust: bool = True) -> dict:
+    """Critical value and df of the test behind a star (vectorised over n / V_mid / shared).
+
+    adjust = True (the headline plot): mixed-model contrast at the family's single-step multivariate-t level.
+      k    = comparisons in the family (conditions - 1);
+      rho  = shared / V: the comparisons share the reference, so corr(t_i - r, t_j - r) = Var(reference part) /
+             Var(contrast) (equicorrelated at the planned class's V; point estimates);
+      df   = Satterthwaite of the two variance parts, each with n - 1 df (one class per treatment, "auto"):
+             (A + B)^2 / ((A^2 + B^2) / (n - 1)), A = V - shared (treatment), B = shared (reference); between
+             n - 1 and 2 (n - 1), the models' containment cap with one class per treatment.
+    adjust = False: one unadjusted paired t test of the per-n log ratios (df = n - 1, t_{1 - alpha/2}).
+    Returns {tc, df, k, rho} (arrays or floats)."""
+    n = np.asarray(n, float)
+    if not adjust:
+        dfree = n - 1
+        tc = stats.t.ppf(1 - alpha / 2, np.maximum(dfree, 1))
+        if np.ndim(tc) == 0:
+            return dict(tc=float(tc), df=float(dfree), k=1, rho=0.0)
+        return dict(tc=tc, df=dfree, k=1, rho=np.zeros_like(n))
+    k = family_size(plan)
+    n, V_mid, shared = np.broadcast_arrays(n, np.asarray(V_mid, float), np.asarray(shared, float))
+    B = np.minimum(shared, V_mid)
+    A = np.maximum(V_mid - B, 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rho = np.where(V_mid > 0, B / np.where(V_mid > 0, V_mid, 1), 0.0)
+        dfree = np.where(A ** 2 + B ** 2 > 0, (A + B) ** 2 / ((A ** 2 + B ** 2) / np.maximum(n - 1, 1)), n - 1)
+    dfree = np.clip(dfree, np.maximum(n - 1, 1), np.maximum(2 * (n - 1), 1))
+    tc = np.vectorize(lambda r, d: family_critical(k, r, d, alpha), otypes=[float])(rho, dfree)
+    if np.ndim(tc) == 0:
+        return dict(tc=float(tc), df=float(dfree), k=k, rho=float(rho))
+    return dict(tc=tc, df=dfree, k=k, rho=rho)
+
+
+def test_label(r: dict) -> str:
+    """Plain description of the test the power refers to (evaluate() result)."""
+    if r.get("adjust_for_family"):
+        return (f"chance of a star on the headline plot: mixed-model contrast vs {r['reference']} at the "
+                f"family-adjusted level (single-step multivariate t over {r['family_size']} comparisons, correlation "
+                f"{r['family_correlation']:.2f}, df {r['df']:.1f}; critical value {r['t_critical']:.2f})")
+    return (f"one unadjusted paired t test of the per-n ratios vs {r['reference']} (df {r['df']:.0f}, critical value "
+            f"{r['t_critical']:.2f}); no multiple-comparison adjustment, so not the chance of a star")
 
 
 def design_variance(comp: dict, bio, wells, fields, reference_wells, standardised: bool):
@@ -440,8 +585,8 @@ def _auto_ref_wells(plan, wells):
 
 def evaluate(plan: dict, n: int, wells: int, fields: int, effect, reference_wells=None, alpha: float = 0.05,
              target_power: float = 0.8, reference: str | None = None, cls: str | None = None,
-             positions: str | None = None) -> dict:
-    """Predict one design. Pure and fast (< 5 ms); safe to call on every slider move.
+             positions: str | None = None, adjust_for_family: bool | None = None) -> dict:
+    """Predict one design. Pure and fast (< 5 ms once the critical values are cached); safe on every slider move.
 
     plan            the dict from load() (or from run())
     n               number of independent experiments (n's, one plate each), >= 2
@@ -453,6 +598,9 @@ def evaluate(plan: dict, n: int, wells: int, fields: int, effect, reference_well
     reference, cls  which reference (default: main) and treatment class (default: the largest non-control class)
     positions       "standardised" (same field spots in every well; default when positions are meaningful) or
                     "random"
+    adjust_for_family  None = [planner] adjust_for_family (default true): power / MDE of a STAR on the headline
+                    plot, i.e. at the family's single-step multivariate-t critical value (family_test); False = one
+                    unadjusted paired t test (df n - 1)
 
     Returns {power, ci_halfwidth_pct, mde_ratio, sd_log_ratio}: each {low, mid, high} in numeric order
     (mid = point estimate; low/high = the 10th/90th percentile of the component uncertainty: power low and
@@ -479,10 +627,12 @@ def evaluate(plan: dict, n: int, wells: int, fields: int, effect, reference_well
     V = np.array([min(q[0], V_mid), V_mid, max(q[1], V_mid)])  # optimistic, expected, pessimistic
     sd = np.sqrt(V)
     le = abs(math.log(ratio))
-    pw = power(le, sd, n, alpha)
-    tc = stats.t.ppf(1 - alpha / 2, n - 1)
-    hw = _pct(tc * sd / math.sqrt(n))
-    nc = nc_for_power(n - 1, target_power, alpha)
+    adjust = plan["options"].get("adjust_for_family", True) if adjust_for_family is None else bool(adjust_for_family)
+    fam = family_test(plan, ref, n, V_mid, _shared_var(plan, ref, fields, reference_wells, std), alpha, adjust)
+    tc, dfree = float(fam["tc"]), float(fam["df"])
+    pw = power_t(le, sd, n, tc, dfree)
+    hw = _pct(stats.t.ppf(0.975, dfree) * sd / math.sqrt(n))  # 95% CI of one comparison (the solid CI)
+    nc = nc_for_power(dfree, target_power, alpha, tc)
     mde = np.exp(-nc * sd / math.sqrt(n))  # decrease detectable with target power
     meas = V_mid - bio_pt
     wells_per_n = (plan["design"]["conditions"] - len(plan["design"]["references"])) * wells + \
@@ -496,7 +646,10 @@ def evaluate(plan: dict, n: int, wells: int, fields: int, effect, reference_well
                sd_log_ratio=dict(low=float(sd[0]), mid=float(sd[1]), high=float(sd[2])),
                measurement_share=float(meas / V_mid) if V_mid > 0 else float("nan"),
                cost=float(_cost(plan, n, wells, fields, reference_wells)), images=int(wells * fields),
-               wells_per_n=int(wells_per_n), t_critical=float(tc))
+               wells_per_n=int(wells_per_n), t_critical=tc, df=dfree, adjust_for_family=bool(adjust),
+               family_size=int(fam["k"]), family_correlation=float(fam["rho"]),
+               t_critical_unadjusted=float(stats.t.ppf(1 - alpha / 2, n - 1)))
+    res["test"] = test_label(res)
     res["notes"] = _notes(plan, res, target_power)
     return res
 
@@ -511,8 +664,12 @@ def _notes(plan, r, target):
                      f"({p['low']:.0%}).")
     else:
         notes.append(f"Below {target:.0%} power ({p['mid']:.0%} expected).")
+    if r.get("adjust_for_family") and r.get("family_size", 1) > 1:
+        notes.append(f"Power for a star on the headline plot: {r['family_size']} comparisons vs {r['reference']} share "
+                     f"one adjustment, so the critical value is {r['t_critical']:.2f} instead of "
+                     f"{r['t_critical_unadjusted']:.2f} for one unadjusted test.")
     if r["n"] <= 3:
-        notes.append(f"With {r['n']} n's the t critical value is {r['t_critical']:.2f}: very few n's make any test weak.")
+        notes.append(f"With {r['n']} n's the critical value is {r['t_critical']:.2f}: very few n's make any test weak.")
     ms = r["measurement_share"]
     if np.isfinite(ms):
         if ms < 0.25:
@@ -537,7 +694,7 @@ def curve(plan: dict, vary: str = "n", fixed: dict | None = None, effect=0.7, va
             design (n defaults to the current number of n's, at least 2)
     effect  ratio or treatment name (as evaluate)
     values  the x values (default: n 2..max_n, wells 1..6, fields 1..max(3 x current, 12), reference_wells 1..12)
-    kw      passed to evaluate (alpha, target_power, reference, cls, positions)
+    kw      passed to evaluate (alpha, target_power, reference, cls, positions, adjust_for_family)
     Returns [{"x": value, **evaluate(...)}, ...]."""
     d = plan["design"]
     base = dict(n=max(d["n_count"], 2), wells=d["wells"], fields=d["fields_per_well"], reference_wells=None)
@@ -609,9 +766,16 @@ def build(df: pd.DataFrame, settings: dict, project_dir=None, seed: int = 0, n_d
     coef = _meas_coef(d)
     ns = sorted(d["n"].unique())
 
-    bio, bio_draws_out, effects = {}, {}, []
+    bio, bio_draws_out, effects, ref_bio, ref_shared = {}, {}, [], {}, {}
     for ref in refs:
         lr = log_ratios(d, ref)
+        # shared part of the comparisons vs ref (sets the family correlation): Var(u) minus the reference's
+        # measurement part at the actual design = the reference's own n-to-n variance
+        su = shared_variance(lr.drop(columns=[c for c in lr if c in refs], errors="ignore"))
+        rc = coef.xs(ref, level=1) if ref in coef.index.get_level_values(1) else None
+        rmeas = float((rc["a_well"] * pt["well"] + rc["a_field"] * pt["field"]).mean()) if rc is not None and len(rc) else 0.0
+        ref_shared[ref] = dict(shared=su, measurement=rmeas)
+        ref_bio[ref] = max(su - rmeas, 0.0)
         for cls, ts in _class_of_ref_comparisons(classes, list(lr.columns)).items():
             b = bio_fit(lr[ts], coef, ref)
             if b is None:
@@ -646,7 +810,7 @@ def build(df: pd.DataFrame, settings: dict, project_dir=None, seed: int = 0, n_d
     default_class = str(counts.index[0]) if len(counts) else CONTROLS
     if class_source.startswith("auto") and refs:
         cand = sorted((v["var"], k.split("|", 1)[1]) for k, v in bio.items()
-                      if k.startswith(refs[0] + "|") and k.split("|", 1)[1] != CONTROLS)
+                      if k.startswith(refs[0] + "|") and k.split("|", 1)[1] not in set(refs) | {CONTROLS})
         if cand:
             default_class = cand[len(cand) // 2][1]
             notes.append(f"classes auto: one class per treatment; generic planning effects use '{default_class}' "
@@ -690,6 +854,8 @@ def build(df: pd.DataFrame, settings: dict, project_dir=None, seed: int = 0, n_d
                 position_share_of_field_variance=float(pos_share), overdispersion=wc["overdispersion"],
                 classes=classes, class_source=class_source, default_class=default_class,
                 bio={k: {kk: vv for kk, vv in v.items()} for k, v in bio.items()},
+                ref_bio=ref_bio, ref_shared=ref_shared, family=dict(size=max(len(treatments) - 1, 1)),
+                cell_line=None, excluded_ns=[],
                 effects=effects, notes=notes,
                 draws=dict(field=wd["field"], position=wd["position"], well=wd["well"], bio=bio_draws_out))
     return _jsonable(plan)

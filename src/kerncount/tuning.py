@@ -5,9 +5,12 @@ detection labels and the flat fields from `_work/flatfield/`. Nothing here re-de
 `lock` writes (cutoffs.json). Results are cached in memory per project (invalidated when the run's output files
 change), so after the first call per field everything is fast enough for a live slider.
 
-Blinding: fields are identified by opaque ids (a salted hash, salt in _work/tuning_salt). No function returns a
-condition (treatment) name, an n-specific breakdown by condition, or a file path. `preview` gives one overall %
-positive. Lock the cut-off before looking at any statistics.
+Blinding: fields are identified by opaque ids, a salted hash whose salt lives only in this process's memory
+(`_SESSION_SALT`, new for every server start), so an id seen in one session cannot be matched to a field in another
+and nothing on disk maps ids to fields. No function returns a condition (treatment) name, an n-specific breakdown
+by condition, a file path or a per-field nucleus count. `preview` gives one overall % positive. The files a lock was
+tuned on are kept for the audit trail in `_work/cutoff_fields.json` (never served by the browser app), not in
+cutoffs.json. Lock the cut-off before looking at any statistics.
 
 Units: the cut-off is in corrected intensity units = mean inside the (shrunk) nucleus minus the local background,
 divided by the flat field (`mean_bgsub_ff` in the per-nucleus table); `measure="p90"` uses the 90th percentile.
@@ -25,6 +28,8 @@ import numpy as np
 import pandas as pd
 
 _LOCK = threading.Lock()
+_SESSION_SALT = secrets.token_hex(16)  # in memory only: field ids change with every session
+AUDIT_FILE = "cutoff_fields.json"  # in _work/: the files each lock was tuned on (audit trail, never served)
 _PROJECTS: dict[str, "_Project"] = {}
 _FIELD_CACHE_MAX = 64
 
@@ -61,10 +66,13 @@ class _Project:
             nuc[c] = nuc[c].astype(str).str.lower().isin(["true", "1"])
         self.nuc = nuc
         self.channels = list(pd.unique(nuc["channel"].astype(str)))
-        salt_p = path / "_work" / "tuning_salt"
-        if not salt_p.exists():
-            salt_p.write_text(secrets.token_hex(16))
-        salt = salt_p.read_text().strip()
+        legacy = path / "_work" / "tuning_salt"  # older versions kept the salt on disk: ids were stable
+        if legacy.exists():
+            try:
+                legacy.unlink()
+            except OSError:
+                pass
+        salt = _SESSION_SALT
         layout = discover.read_table(path / "layout.csv")
         recs, _ = self.prj.records(layout)
         self.fields: dict[str, dict] = {}
@@ -137,8 +145,8 @@ def channels(project_dir) -> list[str]:
 def sample(project_dir, k: int = 12, seed: int | None = None, channel: str | None = None, n: str | None = None) -> dict:
     """k random fields spread over all conditions (round robin over conditions, random within each), in random
     order, identified only by opaque ids. `n` restricts to one n (cut-offs are usually tuned per n: staining varies
-    between plates). Returns {"seed", "channel", "n", "fields": [{"field_id", "nuclei"}]}; `nuclei` = measurable
-    nuclei in the field."""
+    between plates). Returns {"seed", "channel", "n", "fields": [{"field_id"}]}. The number of nuclei per field is
+    deliberately not returned: it tracks the treatment (treatments that kill cells leave sparse fields)."""
     p = _project(project_dir)
     ch = p.channel(channel)
     if seed is None:
@@ -159,8 +167,7 @@ def sample(project_dir, k: int = 12, seed: int | None = None, channel: str | Non
             if queues[i] and len(picked) < k:
                 picked.append(str(queues[i].pop()))
     picked = [picked[i] for i in rng.permutation(len(picked))]
-    counts = p.nuc[p.nuc["measurable"] & (p.nuc["channel"] == ch)].groupby("field_id").size()
-    return dict(seed=int(seed), channel=ch, n=n, fields=[dict(field_id=f, nuclei=int(counts.get(f, 0))) for f in picked])
+    return dict(seed=int(seed), channel=ch, n=n, fields=[dict(field_id=f) for f in picked])
 
 
 def _field_geometry(p: _Project, field_id: str) -> dict:
@@ -316,21 +323,58 @@ def suggest_range(project_dir, channel: str | None = None, measure: str = "mean"
 
 def lock(project_dir, channel: str, cutoff: float, field_ids: list[str], measure: str = "mean",
          n: str | None = None) -> dict:
-    """Lock a manual cut-off for `channel` (and `n`; None = every n) in cutoffs.json with the time and the fields
-    (opaque ids + their image files, for the record) it was tuned on. It takes effect at the next `kerncount run`
-    (detections and measurements are reused from the cache, so this is quick). Precedence: negative-control wells
-    > a settings.toml manual_cutoff > this lock > automatic rule. Returns the stored lock."""
+    """Lock a manual cut-off for `channel` (and `n`; None = every n) in cutoffs.json with the time and the number of
+    fields it was tuned on. The fields' image files (which reveal the condition) go to the audit trail
+    `_work/cutoff_fields.json`, never to cutoffs.json. It takes effect at the next `kerncount run` (detections and
+    measurements are reused from the cache, so this is quick). Precedence: negative-control wells > a settings.toml
+    manual_cutoff > this lock > automatic rule. Returns the stored lock."""
     from . import positivity
 
     p = _project(project_dir)
     ch = p.channel(channel)
     _col(measure)
-    files = []
-    for fid in field_ids:
-        f = p.field(fid)
-        files.append(dict(field_id=fid, files=[str(x) for x in f["rec"].sources]))
-    return positivity.save_lock(p.path, ch, float(cutoff), list(field_ids), measure=measure, n=n,
-                                extra=dict(field_files=files, units="mean - local background, / flat field"))
+    files = [[str(x) for x in p.field(fid)["rec"].sources] for fid in field_ids]
+    lk = positivity.save_lock(p.path, ch, float(cutoff), list(field_ids), measure=measure, n=n,
+                              extra=dict(units="mean - local background, / flat field"))
+    audit(p.path, dict(channel=ch, n=n, measure=measure, cutoff=float(cutoff), locked_at=lk["locked_at"],
+                       field_files=files))
+    return lk
+
+
+def audit(project_dir, entry: dict | None = None) -> list[dict]:
+    """Append `entry` to the audit trail `_work/cutoff_fields.json` (the files each lock was tuned on) and move any
+    `field_files` an older version left in cutoffs.json there. Returns the trail."""
+    from . import positivity
+
+    path = Path(project_dir)
+    ap = path / "_work" / AUDIT_FILE
+    cp = path / positivity.LOCK_FILE
+    with positivity.file_lock(cp):
+        trail = []
+        if ap.exists():
+            try:
+                trail = list(json.loads(ap.read_text(encoding="utf-8")).get("locks", []))
+            except (ValueError, OSError):
+                trail = []
+        data = positivity.read_lock_file(cp)
+        moved = False
+        for lk in data.get("locks", []):
+            if "field_files" in lk:
+                trail.append(dict(channel=lk.get("channel"), n=lk.get("n"), measure=lk.get("measure", "mean"),
+                                  cutoff=lk.get("cutoff"), locked_at=lk.get("locked_at"),
+                                  field_files=lk.pop("field_files")))
+                moved = True
+            if isinstance(lk.get("fields"), list):
+                lk["fields"] = len(lk["fields"])
+                moved = True
+        if moved:
+            positivity.atomic_write(cp, json.dumps(data, indent=2))
+        if entry is not None:
+            trail.append(entry)
+        if entry is not None or moved:
+            ap.parent.mkdir(parents=True, exist_ok=True)
+            positivity.atomic_write(ap, json.dumps(dict(schema="kerncount.cutoff_fields/1", locks=trail), indent=1))
+    return trail
 
 
 def field_id(project_dir, n: str, treatment: str, image: int) -> str:

@@ -197,9 +197,9 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
                                 "means of fields, which uneven, sparse fields pull down)."),
         "classes": dict(kind="table", special=["auto"], label="Treatment classes",
                         help="Groups of treatments whose effects may vary differently between n's, each with its own "
-                             "n-to-n variance in the model. auto (recommended) = every treatment that is not a control "
-                             "gets its own class, the controls share one (conservative: each comparison rests on its "
-                             "own n-to-n variability). Or a TOML inline table of name = [patterns], * = wildcard, e.g. "
+                             "n-to-n variance in the model. auto (recommended) = every treatment, each control included, "
+                             "gets its own class (conservative: each comparison rests on the n-to-n variability of "
+                             "its own two groups). Or a TOML inline table of name = [patterns], * = wildcard, e.g. "
                              '{ mirna = ["miR-*"] }. Empty {} = controls form one class, everything else another.'),
         "density_covariate": dict(kind="text", label="Density covariate (fractions)",
                                   help="For every fraction metric (% out of focus, % Ki-67-positive) a second model "
@@ -262,6 +262,9 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
                            help="Use inner wells first; edge wells (evaporation) only when the inner ones are not enough."),
         "reference_wells": dict(kind="num_or", special=["auto"], label="Wells per reference condition",
                                 help="auto = Dunnett's rule: wells × √(number of comparisons), as far as the plate allows."),
+        "adjust_for_family": dict(kind="bool", label="Power for a star on the headline plot (family-adjusted)",
+                                  help="On: power and smallest detectable effect use the multiple-comparison adjustment "
+                                       "of the statistics (all comparisons vs the reference). Off: one unadjusted test."),
     },
 }
 

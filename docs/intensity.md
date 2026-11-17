@@ -120,15 +120,20 @@ Per marker channel (`[positivity] channels = "auto"`), per n. **Cut-off preceden
    cut-off = `control_percentile` (99) of their signal. The condition is measured but excluded from the
    statistics (the statistics exclude `experiment.negative_control`).
 2. **manual** - `[positivity] manual_cutoff` (a number, or `{ Ki67 = 1200 }`), else a lock in `cutoffs.json`
-   written by the tuning view (`tuning.lock`; value, time, fields tuned on; an n-specific lock beats an all-n
-   lock). Lock it before looking at the statistics.
+   written by the tuning view (`tuning.lock`; value, time, number of fields tuned on; an n-specific lock beats an
+   all-n lock). Lock it before looking at the statistics. The files of the fields a lock was tuned on are kept
+   only in `_work/cutoff_fields.json` (audit trail; the browser app never serves `_work/`).
 3. **limit of detection** (automatic) - positive when signal > `lod_k` (3) x SD(mean - bg) of that nucleus,
    i.e. the noise SD scaled to the nucleus area. On pure background this calls about 0.1-1% positive (tested).
    The cut-off differs per nucleus; its median is reported.
 
 The 90th-percentile variant (dotted early-G1 pattern) uses the same rule on `p90_bgsub_ff`; under the automatic
-rule its null level is 1.28 sigma + k x SD(p90 - bg). A manual lock is per measure (`measure="p90"`); without one
-the p90 variant falls back to the automatic rule (stated in `cutoffs.csv`).
+rule its null level is 1.28 sigma + k x SD(p90 - bg). A manual value is in the units of the **mean** signal, so
+`manual_cutoff` and a mean lock fix only the mean-based % positive. The p90 variant needs its own lock
+(`measure="p90"` in the tuning view); without one it keeps the automatic rule. When the mean is manual and p90 is
+automatic, this is stated prominently: `cutoffs.csv` / the intensity page label the p90 rule "limit of detection
+(NOT the manual cut-off: that applies to the mean only)" and its detail starts with "AUTOMATIC RULE, NOT the
+manual cut-off" (`positivity.P90_NOT_LOCKED`).
 
 **Without negative-control wells, "positive" means "detectably stained above background", not "above
 non-specific staining"**: secondary-antibody background or autofluorescence that is brighter in nuclei counts as
@@ -225,8 +230,10 @@ number of cells in the field (see the density scatter).
 
 ## 7. Tuning API (for the browser)
 
-`kerncount.tuning`, pure functions on a project that has been run. Blinded: fields have opaque ids (salted hash,
-salt in `_work/tuning_salt`); no function returns a condition name, a file path or a per-condition result.
+`kerncount.tuning`, pure functions on a project that has been run. Blinded: fields have opaque ids (salted hash;
+the salt is held only in memory and changes with every session, so ids cannot be matched across sessions; an older
+`_work/tuning_salt` file is deleted); no function returns a condition name, a file path, a per-field nucleus count
+(it tracks the treatment) or a per-condition result.
 Cached in memory per project (rebuilt when `nuclei_intensity.csv`, `layout.csv` or `settings.toml` change).
 Measured on the 1024 x 1280 Ki-67 fields: `render` about 30-60 ms per call after the first one per field,
 `preview` a few ms.
@@ -234,7 +241,7 @@ Measured on the 1024 x 1280 Ki-67 fields: `render` about 30-60 ms per call after
 ```python
 tuning.channels(project_dir) -> ["Ki67"]
 tuning.sample(project_dir, k=12, seed=None, channel=None, n=None)
-    -> {"seed", "channel", "n", "fields": [{"field_id", "nuclei"}]}    # round robin over conditions, shuffled
+    -> {"seed", "channel", "n", "fields": [{"field_id"}]}    # round robin over conditions, shuffled
 tuning.nuclei(project_dir, field_id, channel=None, contours=True)
     -> {"field_id", "channel", "shape": [H, W], "nuclei": [{"label", "x", "y", "area", "signal", "signal_p90",
         "lod_cutoff", "measurable", "saturated", "contour": [[x, y], ...]}]}
@@ -245,6 +252,8 @@ tuning.preview(project_dir, cutoff, channel=None, n=None, measure="mean", field_
     -> {"cutoff", "channel", "measure", "nuclei", "positive", "frac_positive", "lod_frac_positive"}
 tuning.suggest_range(project_dir, channel=None, measure="mean") -> {"min", "max", "lod_median", ...}
 tuning.lock(project_dir, channel, cutoff, field_ids, measure="mean", n=None) -> the stored lock
+    # cutoffs.json gets value, time, scope and the NUMBER of fields; the fields' files go to the audit trail
+    # _work/cutoff_fields.json (tuning.audit; also moves field_files left in cutoffs.json by older versions)
 tuning.field_id(project_dir, n, treatment, image) -> opaque id of a known field
     # NOT blinded: only for views that already show the condition (the browser's review page uses it to call
     # render(cutoff=None) for a per-field marker overlay); the tuning view never calls it

@@ -419,6 +419,9 @@ def write_wells_template(project_dir: Path, table: pd.DataFrame, settings: dict,
     path = project_dir / WELLS_FILE
     if path.exists() and not overwrite:
         path = project_dir / "wells.new.csv"
+    elif path.exists():
+        from .settings import backup
+        backup(project_dir, WELLS_FILE)  # overwrite: keep the hand-edited version in _work/backups/
     delim = settings.get("project", {}).get("csv_delimiter", ",")
     tmpl.to_csv(path, index=False, sep=delim)
     return path

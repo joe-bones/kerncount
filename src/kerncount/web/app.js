@@ -824,11 +824,10 @@ async function viewText(path) {
 }
 function previewFile(path) {
   const ext = path.split(".").pop().toLowerCase();
-  if (["png", "jpg", "jpeg", "gif", "svg"].includes(ext)) return openImage(path, path);
+  // only passive formats are shown in the page; PDF, SVG, HTML, ... are downloaded (the server never renders them)
+  if (["png", "jpg", "jpeg", "gif", "webp"].includes(ext)) return openImage(path, path);
   if (["csv", "tsv"].includes(ext)) return viewTable(path);
   if (["txt", "toml", "json", "md", "log", "ijm"].includes(ext)) return viewText(path);
-  if (ext === "pdf") return openModal(`<div class="modal-head"><span class="title">${esc(path)}</span><span class="spacer"></span>
-      <a class="btn" href="${fileUrl(path, 1)}">Download</a><button onclick="closeModal()">Close</button></div><iframe src="${fileUrl(path)}" style="width:100%;height:78vh;border:0"></iframe>`);
   location.href = fileUrl(path, 1);
 }
 

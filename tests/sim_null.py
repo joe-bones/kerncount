@@ -1,6 +1,6 @@
 """Null simulation behind the table in docs/statistics.md (not collected by pytest).
 
-Usage: python tests/sim_null.py <repo root> <data sets per row> [unit:classes,...] [scenario filter] [n list]
+Usage: python tests/sim_null.py <repo root> <data sets per row> [unit:classes,...] [scenario filter] [n list] [out.csv]
 e.g.   python tests/sim_null.py . 400 well:auto,field:two "misspecified,uneven" 3,4,6
 """
 import sys, time
@@ -51,6 +51,7 @@ SCEN = {
     "misspecified: miR-1 0.3, other miRs 0.02": lambda: {**{t: 0.02 for t in MIR}, "miR-1": 0.3, "CL075": 0.02},
     "controls unequal: LyoVec 0.1, Control 0": lambda: {"LyoVec": 0.1, **{t: 0.1 for t in TR if t not in CTRL}},
     "uneven fields: miR field SD 1.0 vs 0.4": lambda: {t: 0.1 for t in TR if t not in CTRL},
+    "vehicle varies: LyoVec 0.3, Control 0, treatments 0": lambda: {"LyoVec": 0.3},
 }
 
 
@@ -91,4 +92,4 @@ if __name__ == "__main__":
                                miR1=float(np.nanmean([r[2] < 0.05 for r in res])), secs=round(time.time() - t0, 1))
                     print(row, flush=True)
                     out.append(row)
-    pd.DataFrame(out).to_csv("sim_null_results.csv", index=False)
+    pd.DataFrame(out).to_csv(sys.argv[6] if len(sys.argv) > 6 else "sim_null_results.csv", index=False)
