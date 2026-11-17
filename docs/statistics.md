@@ -198,34 +198,39 @@ rate. kerncount uses a t distribution with:
 **Null simulation of the default** (`model_unit = "well"`, `classes = "auto"`): 8 treatments (Control, LyoVec,
 CL075, 5 miRNAs), 2 wells × 6 fixed positions, Poisson-lognormal field counts (~70 per field; n variance 0.05,
 well 0.03, position 0.1, field log-SD 0.45), no true effect on the mean nuclei per field; with 4 n's LyoVec is
-missing in one n (as in the real data). `vs LyoVec` family, 7 comparisons per data set; 400 data sets per row
-(300 for the last three scenarios). Script: `tests/sim_null.py` (quick versions in
+missing in one n (as in the real data). `vs LyoVec` family, 7 comparisons per data set; 400 data sets per row,
+re-run for the current default (every control its own class; 2026-11-17). Script: `tests/sim_null.py`
+(`python tests/sim_null.py . 400 well:auto "" 3,4,6`; quick versions in
 `tests/test_estimands.py::test_type_one_error_default_including_misspecification` and
 `tests/test_models.py::test_null_type_one_error_is_roughly_nominal_at_four_n`).
 
 | scenario (n × treatment variances) | n's | per-comparison (p < 0.05) | family-wise (adj. p < 0.05) | the odd treatment (miR-1) |
 |---|---|---|---|---|
-| treatments 0.1, controls 0 | 3 / 4 / 6 | 0.025 / 0.027 / 0.032 | 0.018 / 0.013 / 0.040 | 0.023 / 0.040 / 0.035 |
-| none anywhere | 3 / 4 / 6 | 0.003 / 0.009 / 0.023 | 0.000 / 0.003 / 0.008 | 0.005 / 0.018 / 0.018 |
-| treatments 0.3, controls 0 | 3 / 4 / 6 | 0.041 / 0.047 / 0.040 | 0.048 / 0.058 / 0.073 | 0.033 / 0.050 / 0.050 |
-| **misspecified for pooled classes**: miR-1 0.3, other treatments 0.02 | 3 / 4 / 6 | 0.015 / 0.014 / 0.028 | 0.017 / 0.010 / 0.017 | **0.067 / 0.050 / 0.047** |
-| controls unequal: LyoVec 0.1, Control 0, treatments 0.1 | 3 / 4 / 6 | 0.037 / 0.050 / 0.057 | 0.027 / 0.040 / 0.067 | 0.040 / 0.033 / 0.043 |
-| uneven fields: miRNA field log-SD 1.0 vs 0.4, equal means | 3 / 4 / 6 | 0.016 / 0.014 / 0.037 | 0.020 / 0.013 / 0.030 | 0.027 / 0.020 / 0.040 |
+| treatments 0.1, controls 0 | 3 / 4 / 6 | 0.024 / 0.026 / 0.034 | 0.020 / 0.018 / 0.043 | 0.020 / 0.038 / 0.033 |
+| none anywhere | 3 / 4 / 6 | 0.005 / 0.009 / 0.022 | 0.000 / 0.003 / 0.010 | 0.003 / 0.020 / 0.015 |
+| treatments 0.3, controls 0 | 3 / 4 / 6 | 0.043 / 0.043 / 0.041 | 0.053 / 0.060 / 0.070 | 0.033 / 0.043 / 0.048 |
+| **misspecified for pooled classes**: miR-1 0.3, other treatments 0.02 | 3 / 4 / 6 | 0.016 / 0.016 / 0.026 | 0.013 / 0.008 / 0.010 | **0.063 / 0.045 / 0.038** |
+| controls unequal: LyoVec 0.1, Control 0, treatments 0.1 | 3 / 4 / 6 | 0.035 / 0.038 / 0.041 | 0.028 / 0.033 / 0.043 | 0.023 / 0.008 / 0.038 |
+| uneven fields: miRNA field log-SD 1.0 vs 0.4, equal means | 3 / 4 / 6 | 0.014 / 0.014 / 0.040 | 0.015 / 0.015 / 0.035 | 0.025 / 0.018 / 0.048 |
+| **vehicle varies for pooled controls**: LyoVec 0.3, Control 0, treatments 0 | 3 / 4 / 6 | **0.048 / 0.048 / 0.040** | 0.030 / 0.033 / 0.030 | 0.053 / 0.050 / 0.038 |
 
 Comparison at 4 n's, 200 data sets (earlier settings):
 
-| settings | misspecified: per-comparison / family-wise / miR-1 | uneven fields: per-comparison / family-wise |
-|---|---|---|
-| well unit, `classes = {}` (controls vs the rest) | 0.046 / 0.090 / **0.225** | 0.021 / 0.010 |
-| field unit, `classes = {}` (the previous default) | 0.043 / 0.105 / **0.230** | **0.172 / 0.240** |
+| settings | misspecified: per-comparison / family-wise / miR-1 | uneven fields: per-comparison / family-wise | vehicle varies: per-comparison (4 n) |
+|---|---|---|---|
+| well unit, `classes = {}` (controls vs the rest) | 0.046 / 0.090 / **0.225** | 0.021 / 0.010 | |
+| field unit, `classes = {}` (the previous default) | 0.043 / 0.105 / **0.230** | **0.172 / 0.240** | |
+| well unit, `"auto"` with the controls pooled (the previous "auto"; independent review) | | | **0.133** |
 
 So: (1) pooling the n × treatment variance of several treatments lets the most variable one through about one
 time in four-five; one class per treatment ("auto") keeps it at nominal. (2) The field-level model tests geometric
 means of fields: when treated fields are much more uneven, it reports "effects" on the mean nuclei per field that
 do not exist (17% false positives); the well unit does not. (3) The default is somewhat conservative when there is
 little n-to-n variation (rates 0.003–0.03), the price of letting every treatment carry its own n-to-n variance with
-3–6 n's. The per-comparison rate stays at or below ~0.06 in every scenario. With unequal controls (LyoVec varies,
-Control does not, both in the pooled `controls` class) the rate reaches 0.057 at 6 n's.
+3–6 n's. The per-comparison rate stays at or below ~0.05 in every scenario. (4) When the vehicle varies between
+n's and Control does not, pooling the two controls in one class gave "vs LyoVec" a type I error of 0.13 at 4 n's;
+with every control in its own class it is 0.048 (and 0.038–0.041 instead of 0.050–0.057 in the milder "controls
+unequal" scenario).
 
 ### Multiplicity: comparison families
 Within each family the p-values are adjusted by the **single-step multivariate t** method (Dunnett-type; the
