@@ -398,7 +398,7 @@ function runPanel(e) {
            subsamples <input id="o_sit" value="1000" size="5"></label>
          <button ${last ? "" : "disabled"} ${d} ${on("click", function (event) { startJob('sampling',{generation:$('o_sgen').value,iterations:$('o_sit').value}) })}>Run sampling</button>
          <button class="small" ${e.sampling.length ? "" : "disabled"} ${on("click", function (event) { nav('planner') })}>Planner</button>`)}
-      ${step(5, false, "Well template", "Write wells.csv (which well and position each image is) to edit by hand for unusual plate designs.",
+      ${step(5, false, "Wells template", "Write wells.csv (which well and position each image is) to edit by hand for unusual plate designs.",
         `<label class="small"><input type="checkbox" id="o_wforce"> overwrite an existing wells.csv</label>
          <button ${e.initialised ? "" : "disabled"} ${d} ${on("click", function (event) { wellsTemplate($('o_wforce').checked); })}>Write wells template</button>`)}
       ${step(6, false, "Plate maps", "Randomised, balanced plate maps for the next experiment (one plate per n).",
