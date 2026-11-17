@@ -250,6 +250,7 @@ tuning.render(project_dir, field_id, channel=None, cutoff=None, measure="mean", 
     # grey = negative, orange = saturated (excluded); cutoff=None = the cut-off now in force
 tuning.preview(project_dir, cutoff, channel=None, n=None, measure="mean", field_ids=None)
     -> {"cutoff", "channel", "measure", "nuclei", "positive", "frac_positive", "lod_frac_positive"}
+    # the browser asks for the sampled fields together only when there are >= 3 (no per-field nucleus count)
 tuning.suggest_range(project_dir, channel=None, measure="mean") -> {"min", "max", "lod_median", ...}
 tuning.lock(project_dir, channel, cutoff, field_ids, measure="mean", n=None) -> the stored lock
     # cutoffs.json gets value, time, scope and the NUMBER of fields; the fields' files go to the audit trail

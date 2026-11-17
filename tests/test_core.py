@@ -408,3 +408,23 @@ def test_stardist_weights_fall_back_to_a_user_cache(tmp_path, monkeypatch):
         assert loaded[-1] == str(user)
     finally:
         pkg.chmod(0o700)
+
+
+def test_concurrent_lock_writes_do_not_lose_updates(tmp_path):
+    """cutoffs.json is read-modify-written under a per-file lock with an atomic replace: 16 threads locking
+    different channels at once keep all 16 locks, and no temporary file is left behind."""
+    import json
+    import threading
+
+    from kerncount import positivity
+
+    ts = [threading.Thread(target=positivity.save_lock, args=(tmp_path, f"C{i}", float(i), ["a", "b"]))
+          for i in range(16)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    data = json.loads((tmp_path / "cutoffs.json").read_text())
+    assert sorted(lk["channel"] for lk in data["locks"]) == sorted(f"C{i}" for i in range(16))
+    assert all(lk["fields"] == 2 for lk in data["locks"])
+    assert [p.name for p in tmp_path.iterdir()] == ["cutoffs.json"]
