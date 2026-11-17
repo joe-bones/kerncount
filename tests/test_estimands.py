@@ -194,6 +194,71 @@ def test_fraction_effect_is_percentage_points_with_ci():
     assert r.pp_ci_high - r.pp_difference > r.pp_difference - r.pp_ci_low  # skewed away from 0 %
 
 
+# ---------------------------------------------------------------- 3b. background-subtracted intensities (I3)
+
+INT = metrics.Metric("intensity_C1_nucleus", "intensity_C1_nucleus", "C1 nucleus", "intensity (a.u.)", "positive")
+
+
+def sim_bgsub(rng, n_n=4, mean=1.0, sd=3.0, diff=None):
+    """Background-subtracted intensity per field: true mean `mean` (+ diff[t]), field SD `sd`, so many fields and
+    some well means are <= 0 (log impossible)."""
+    diff = diff or {}
+    rows = []
+    for i in range(n_n):
+        bn = rng.normal(0, 0.3)
+        for t in TR:
+            for w in (1, 2):
+                for k in range(6):
+                    rows.append(dict(n=f"n{i + 1}", treatment=t, well=w, position=k + 1, image=(w - 1) * 6 + k + 1,
+                                     timepoint="", value=mean + diff.get(t, 0.0) + bn + rng.normal(0, sd)))
+    return pd.DataFrame(rows)
+
+
+def test_positive_metric_with_well_means_at_or_below_zero_is_a_raw_difference():
+    """I3: true mean 1, SD 3, 4 n. Dropping wells with mean <= 0 (log impossible) biased the ratio; the metric is
+    analysed on the raw scale as a difference (identity link), flagged everywhere."""
+    rng = np.random.default_rng(8)
+    d = sim_bgsub(rng, diff={"miR-1": 2.0})
+    assert models.needs_raw_scale(d, INT) > 0
+    res = models.analyse(d, INT, _settings(), positions_ok=True, leave_one_out=False, density=False)
+    assert res.ok and res.scale.kind == "difference" and res.scale.estimate_type == "difference"
+    st = res.status_dict()
+    assert st["raw_scale"] and st["effect_type"] == "difference" and "RAW SCALE" in st["raw_scale_warning"]
+    assert any("RAW SCALE" in x for x in res.notes)
+    r = _row(res.contrasts, "vs LyoVec", "miR-1 vs LyoVec")
+    assert r.estimate_type == "difference" and r.estimand.startswith("DIFFERENCE")
+    assert r.ci_low < 2.0 < r.ci_high and 0.5 < r.estimate < 3.5  # true difference +2 intensity units
+    n0 = _row(res.contrasts, "vs LyoVec", "miR-2 vs LyoVec")
+    assert n0.ci_low < 0 < n0.ci_high
+    assert res.emm["estimate"].between(-3, 6).all()  # means on the raw scale, not exp() of them
+    vc = res.varcomp
+    assert vc["cv_pct"].isna().all()  # no CV on the raw scale
+    pn = res.per_n
+    assert pn["difference"].notna().all() and pn["ratio"].isna().all()
+    # all positive: the usual log scale and ratio
+    pos = models.analyse(d.assign(value=d["value"] + 30), INT, _settings(), positions_ok=True, leave_one_out=False,
+                         density=False)
+    assert pos.scale.kind == "positive" and not pos.status_dict()["raw_scale"]
+
+
+@pytest.mark.slow
+def test_raw_scale_metric_flagged_in_generation_outputs(tmp_path):
+    rng = np.random.default_rng(9)
+    tab = _gen_table(rng, ns=("n1", "n2", "n3", "n4"))
+    out, _ = _build(tmp_path, tab, img_extra={"intensity_C1_nucleus": rng.normal(1.0, 3.0, len(tab))})
+    man = json.loads((out / "manifest.json").read_text())
+    ms = man["model_status"]["intensity_C1_nucleus"]
+    assert ms["raw_scale"] and ms["effect_type"] == "difference"
+    assert man["estimands"]["intensity_C1_nucleus"]["headline"] == "difference"
+    assert man["model_status"]["count"]["raw_scale"] is False
+    sl = pd.read_csv(out / "stats_long.csv")
+    m = sl[(sl["level"] == "all_n") & (sl["metric"] == "intensity_C1_nucleus") & sl["family"].eq("vs LyoVec")
+           & sl["model"].str.contains("n×treatment", regex=False, na=False)]
+    assert len(m) and (m["estimate_type"] == "difference").all() and m["note"].str.contains("RAW SCALE").all()
+    info = pd.read_csv(out / "all_n" / "intensity_C1_nucleus_model_info.csv")
+    assert info.astype(str).apply(lambda c: c.str.contains("RAW SCALE")).any().any()
+
+
 # ---------------------------------------------------------------- 4. one n
 
 def _gen_table(rng, ns=("n1", "n2", "n3"), extra=()):

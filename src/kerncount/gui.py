@@ -763,11 +763,23 @@ PRIVATE_DIRS = ("_work",)  # detection caches, salts / audit trails, backups: ne
 def private(prj: Path, p: Path) -> bool:
     """True for paths the page must not read raw: anything in _work/ (audit trail of the files a cut-off was
     tuned on, caches) and cutoffs.json (served only as a sanitized summary)."""
-    try:
-        rel = p.resolve().relative_to(prj.resolve())
-    except ValueError:
+    rel = _rel(prj, p)
+    if rel is None:
         return True
-    return bool(rel.parts) and (rel.parts[0] in PRIVATE_DIRS or rel.as_posix() == "cutoffs.json")
+    # case-insensitive: on macOS / Windows "_WORK/x" and "CUTOFFS.JSON" open the same files
+    return bool(rel) and (rel.split("/")[0] in PRIVATE_DIRS or rel == "cutoffs.json")
+
+
+def _rel(prj: Path, p: Path) -> str | None:
+    try:
+        return p.resolve().relative_to(prj.resolve()).as_posix().casefold()
+    except ValueError:
+        return None
+
+
+def is_cutoffs(prj: Path, p: Path) -> bool:
+    """The lock file itself (any spelling): served only as the sanitized summary."""
+    return _rel(prj, p) == "cutoffs.json"
 
 
 def intensity_info(prj: Path) -> dict:
@@ -805,6 +817,9 @@ def tuning_sample(prj: Path, body: dict) -> dict:
     return dict(seed=r["seed"], channel=r["channel"], fields=[dict(field_id=f["field_id"]) for f in r["fields"]])
 
 
+MIN_SAMPLE_PREVIEW = 3
+
+
 def tuning_preview(prj: Path, arg) -> dict:
     t = _tuning()
     cut = float(arg("cutoff"))
@@ -813,7 +828,7 @@ def tuning_preview(prj: Path, arg) -> dict:
     keep = ("cutoff", "channel", "measure", "nuclei", "positive", "frac_positive", "lod_frac_positive")
     scope = t.preview(prj, cut, ch, n=n, measure=measure)
     out = {k: scope[k] for k in keep}
-    if ids:
+    if len(ids) >= MIN_SAMPLE_PREVIEW:  # never for one or two fields: their nucleus count tracks the treatment
         smp = t.preview(prj, cut, ch, measure=measure, field_ids=ids)
         out["sample"] = {k: smp[k] for k in keep}
     return out
@@ -1127,7 +1142,7 @@ def make_handler(state: State):
                 if u.path == "/file":
                     prj = state.project(arg("exp"))
                     p = inside(prj, arg("path"))
-                    if p == (prj / "cutoffs.json").resolve():
+                    if is_cutoffs(prj, p):
                         return self._send(200, cutoffs_summary(prj), "application/json")
                     if private(prj, p):
                         return self._send(403, {"error": "internal file: not shown"})
@@ -1173,7 +1188,7 @@ def make_handler(state: State):
                 return table_data(p) if p.exists() else dict(columns=[], rows=[], total=0)
             if path == "/api/text":
                 p = inside(prj, arg("path"))
-                if p == (prj / "cutoffs.json").resolve():
+                if is_cutoffs(prj, p):
                     return dict(text=cutoffs_summary(prj))
                 if private(prj, p):
                     raise ValueError("internal file: not shown")
@@ -1266,6 +1281,8 @@ def make_handler(state: State):
                     target = prj / "generations" / gens[-1] / "results.xlsx"
                 if target is None and body.get("path"):
                     target = inside(prj, body["path"])
+                    if private(prj, target) and not is_cutoffs(prj, target):
+                        raise ValueError("internal file: not shown")
                 if target is None or not target.exists():
                     raise ValueError("not there yet (run the earlier steps first)")
                 open_path(target)
@@ -1282,14 +1299,17 @@ def make_handler(state: State):
                         raise ValueError(f"settings.toml is not valid: {e}") from None
                 else:
                     text = settings_form.update_text(st.read_text(encoding="utf-8"), settings_form.coerce(body.get("values", {})))
-                st.write_text(text, encoding="utf-8")
+                with file_lock(st):
+                    atomic_write(st, text)
                 return dict(ok=True, message="settings saved", **rerun_advice(before, settings_mod.load(prj)))
             if path == "/api/settings_reset":
                 self._idle()
                 raw = settings_mod.load(prj)["project"]["raw_dir"]
                 raw_abs = Path(raw) if Path(raw).is_absolute() else (prj / raw)
-                settings_mod.write_template(prj, raw_abs)
-                return "settings reset to defaults"
+                with file_lock(prj / "settings.toml"):
+                    bk = settings_mod.write_template(prj, raw_abs)  # backs the old file up first
+                return ("settings reset to defaults" +
+                        (f"; the previous settings.toml is kept in {bk.relative_to(prj).as_posix()}" if bk else ""))
             if path == "/api/layout":
                 self._idle()
                 save_layout(prj, body.get("rows", []))
@@ -1299,8 +1319,11 @@ def make_handler(state: State):
                 new = prj / "layout.new.csv"
                 if not new.exists():
                     raise ValueError("there is no fresh scan (layout.new.csv)")
-                new.replace(prj / "layout.csv")
-                return "layout.csv replaced by the fresh scan"
+                with file_lock(prj / "layout.csv"):
+                    bk = settings_mod.backup(prj, "layout.csv")
+                    new.replace(prj / "layout.csv")
+                return ("layout.csv replaced by the fresh scan" +
+                        (f"; the previous layout.csv is kept in {bk.relative_to(prj).as_posix()}" if bk else ""))
             if path == "/api/counts":
                 self._idle()
                 return dict(ok=True, message="corrections saved", **save_counts(prj, body.get("changes", []), body.get("mtime")))

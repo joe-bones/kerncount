@@ -388,12 +388,66 @@ def test_tuning_endpoints_are_blinded(ki_srv):
     for secret in ("Control", "LyoVec", "cntrl", "lyovec", ".tif", *ns):
         assert secret not in blob, secret
     stored = json.loads((prj / "cutoffs.json").read_text())
-    assert stored["locks"][0]["field_files"]  # the record keeps the files; the page never sees them
+    assert "field_files" not in stored["locks"][0] and stored["locks"][0]["fields"] == 4  # a count, no ids
+    trail = json.loads((prj / "_work" / "cutoff_fields.json").read_text())
+    assert trail["locks"][-1]["field_files"]  # the audit trail keeps the files; the page never sees them
     assert srv.call("/api/tuning/render", exp="Ki", field="f_nope", channel="Ki67", cutoff="1")[0] == 400
     assert srv.call("/api/tuning/lock", body={"experiment": "Ki", "channel": "Ki67", "cutoff": 1, "field_ids": []})[0] == 400
     code, un = srv.call("/api/tuning/unlock", body={"experiment": "Ki", "channel": "Ki67", "measure": "mean"})
     assert code == 200 and srv.call("/api/tuning/info", exp="Ki")[1]["locks"] == []
     assert srv.call("/api/tuning/unlock", body={"experiment": "Ki", "channel": "Ki67", "measure": "mean"})[0] == 400
+
+
+def test_sample_lock_read_files_never_leaks_conditions(ki_srv):
+    """I4: the whole path a curious user could take after tuning: sample -> lock -> read every file the page can
+    reach. No response may name a condition, an n, a source file or a field id of the sample."""
+    from kerncount import tuning
+
+    srv, prj = ki_srv
+    code, info = srv.call("/api/tuning/info", exp="Ki")
+    ns = info["scopes"]
+    code, smp = srv.call("/api/tuning/sample", body={"experiment": "Ki", "channel": "Ki67", "k": 5, "seed": 11})
+    ids = [f["field_id"] for f in smp["fields"]]
+    assert all(set(f) == {"field_id"} for f in smp["fields"])  # no nucleus count (it tracks the treatment)
+    code, pv1 = srv.call("/api/tuning/preview", exp="Ki", cutoff="100", channel="Ki67", fields=ids[0])
+    assert code == 200 and "sample" not in pv1  # no per-field nucleus count through the preview either
+    code, lk = srv.call("/api/tuning/lock", body={"experiment": "Ki", "channel": "Ki67", "cutoff": 120.0,
+                                                  "measure": "mean", "field_ids": ids})
+    assert code == 200
+    # legacy cutoffs.json written by an older version: field ids and files inside the lock
+    raw = json.loads((prj / "cutoffs.json").read_text())
+    raw["locks"][0]["fields"] = list(ids)
+    raw["locks"][0]["field_files"] = [{"field_id": ids[0], "files": ["/x/cntrl/1.tif"]}]
+    (prj / "cutoffs.json").write_text(json.dumps(raw))
+    secrets_ = ("Control", "LyoVec", "cntrl", "lyovec", ".tif", *ns, *ids)
+    seen = []
+    for path in ("cutoffs.json", "_work/cutoff_fields.json", "_work/tuning_salt", "_work"):
+        for ep in ("/file", "/api/text", "/api/table"):
+            code, body = srv.call(ep, exp="Ki", path=path)
+            seen.append(body if isinstance(body, (dict, list)) else body.decode("utf-8", "replace"))
+            if path.startswith("_work"):
+                assert code in (400, 403, 404), (ep, path, code)
+    code, listing = srv.call("/api/files", exp="Ki", dir="", recursive="1")
+    assert code == 200 and not any(f["path"].startswith("_work") for f in listing)
+    assert srv.call("/api/files", exp="Ki", dir="_work")[0] == 400
+    code, info2 = srv.call("/api/tuning/info", exp="Ki")  # also moves the legacy entries to the audit trail
+    seen.append({k: v for k, v in info2.items() if k != "scopes"})  # the n's to lock for are not secret
+    blob = json.dumps(seen, default=str)
+    for s in secrets_:
+        assert s not in blob, s
+    assert "field_files" not in json.loads((prj / "cutoffs.json").read_text())["locks"][0]
+    assert not (prj / "_work" / "tuning_salt").exists()
+    # per-session ids: a new session (new salt) gives other ids for the same fields
+    old = tuning._SESSION_SALT
+    try:
+        tuning._SESSION_SALT = "another-session"
+        tuning._PROJECTS.clear()
+        code, smp2 = srv.call("/api/tuning/sample", body={"experiment": "Ki", "channel": "Ki67", "k": 5, "seed": 11})
+        assert not set(ids) & {f["field_id"] for f in smp2["fields"]}
+    finally:
+        tuning._SESSION_SALT = old
+        tuning._PROJECTS.clear()
+    srv.call("/api/tuning/unlock", body={"experiment": "Ki", "channel": "Ki67", "measure": "mean"})
 
 
 def test_review_overlay_and_intensity_page(ki_srv):

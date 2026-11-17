@@ -336,8 +336,13 @@ def rows_model(res, metric: str, cell_line=None, line_of_n: dict | None = None) 
     est_mean = estimand(res.metric, unit, "mean")
     est_eff = estimand(res.metric, unit)
 
+    raw = res.scale is not None and res.scale.kind == "difference"  # models.needs_raw_scale: well means <= 0
+
     def base(**k):
-        return dict(level="all_n", n=None, metric=metric, model=model, cell_line=cell_line) | k
+        r = dict(level="all_n", n=None, metric=metric, model=model, cell_line=cell_line) | k
+        if raw:  # every model row of a raw-scale metric says so (difference in intensity units, not a ratio)
+            r["note"] = "; ".join(x for x in ("RAW SCALE: difference, some well means <= 0", r.get("note")) if x)
+        return r
 
     for r in res.emm.itertuples():
         note = f"{r.mean_type}; df {r.df:.1f}" + (f"; {r.note}" if isinstance(r.note, str) and r.note else "")
@@ -389,7 +394,16 @@ def rows_model(res, metric: str, cell_line=None, line_of_n: dict | None = None) 
                         estimand=est_eff if r.estimate_type != "difference" else "difference in mean (raw scale)"))
     for r in res.per_n.itertuples():
         line = (line_of_n or {}).get(r.n, cell_line)
-        if frac:
+        if raw:
+            out.append(dict(level="n", n=r.n, metric=metric, family=f"vs {r.control} (per-n difference)",
+                            test="difference of mean values within this n (descriptive: technical replicates)",
+                            comparison=f"{r.treatment} vs {r.control}", estimate=r.difference,
+                            estimate_type="difference", ci_low=r.tech_ci_low, ci_high=r.tech_ci_high, p=np.nan,
+                            p_adj=np.nan, significance="", N=r.fields, model="descriptive",
+                            note=f"{r.interval}; RAW SCALE: difference, some well means <= 0",
+                            estimand=f"difference in mean {res.metric.unit or res.metric.label} (fields of this n)",
+                            cell_line=line))
+        elif frac:
             out.append(dict(level="n", n=r.n, metric=metric, family=f"vs {r.control} (per-n difference)",
                             test="difference of pooled fractions within this n (descriptive: technical replicates)",
                             comparison=f"{r.treatment} vs {r.control}", estimate=r.pp_difference,

@@ -508,10 +508,13 @@ def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: di
         for t in order:
             if t == ref:
                 continue
-            pair = means[[t, ref]].dropna()
-            pair = pair[(pair > 0).all(axis=1)]
+            full = means[[t, ref]].dropna()
+            pair = full[(full > 0).all(axis=1)]
             r = dict(test=f"ratio paired t-test vs {ref} (Holm within this family; check)", comparison=f"{t} vs {ref}",
                      N=len(pair), effect=np.nan, ci_low=np.nan, ci_high=np.nan, statistic=np.nan, p=np.nan)
+            if len(pair) < len(full):  # e.g. background-subtracted intensities: a ratio of a mean <= 0 is impossible
+                r["note"] = (f"{len(full) - len(pair)} n('s) with a mean <= 0 left out (no ratio possible); the mixed "
+                             "model analyses this metric as a raw-scale difference")
             if len(pair) >= 2:
                 lr = np.log(pair[t] / pair[ref])
                 tt = stats.ttest_1samp(lr, 0)
@@ -519,7 +522,8 @@ def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: di
                 r.update(effect=float(np.exp(lr.mean())), ci_low=float(np.exp(ci.low)), ci_high=float(np.exp(ci.high)),
                          statistic=tt.statistic, p=tt.pvalue)
             else:
-                r["note"] = NEEDS_2N + (" containing both groups" if not one_n else "")
+                r["note"] = "; ".join(x for x in (r.get("note"), NEEDS_2N + (" containing both groups" if not one_n
+                                                                               else "")) if x)
                 if len(pair) == 1:
                     r["effect"] = float(pair[t].iloc[0] / pair[ref].iloc[0])
             fam.append(r)

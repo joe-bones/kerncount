@@ -114,8 +114,8 @@ def test_component_intervals_cover_truth():
 def test_classes_from_settings_and_default():
     s = _settings()
     cls, src, notes = planner.treatment_classes(s, ["Control", "LyoVec", "miR-1", "CL075"], ["Control", "LyoVec"])
-    # default "auto" = the statistics' rule: one class per non-control treatment, controls pooled
-    assert cls == {"Control": "controls", "LyoVec": "controls", "miR-1": "miR-1", "CL075": "CL075"}
+    # default "auto" = the statistics' rule: one class per treatment, each control its own
+    assert cls == {"Control": "Control", "LyoVec": "LyoVec", "miR-1": "miR-1", "CL075": "CL075"}
     assert src.startswith("auto")
     s["analysis"]["classes"] = {}  # "two": controls vs the rest
     cls, src, notes = planner.treatment_classes(s, ["Control", "LyoVec", "miR-1", "CL075"], ["Control", "LyoVec"])

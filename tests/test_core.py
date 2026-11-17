@@ -250,3 +250,76 @@ def test_all_n_prism_standard_drives_stars(tmp_path):
     assert st["test"].str.startswith("Dunnett vs LyoVec").any()
     assert st["test"].str.contains("ratio paired t-test", regex=False).any()
     assert "Drop" in analysis.significance_marks(st, "Control", "Dunnett vs Control (")
+
+
+# ---------------------------------------------------------------- I5: generations swapped in by rename
+
+def test_swap_in_keeps_user_files_and_drops_known_outputs(tmp_path):
+    from kerncount import fileio
+
+    final, tmp = tmp_path / "g1", tmp_path / "g1.tmp"
+    for rel, txt in (("stats_long.csv", "old"), ("all_n/old_plot.png", "x"), ("my_notes.txt", "mine"),
+                     ("_kept/earlier.txt", "kept before")):
+        (final / rel).parent.mkdir(parents=True, exist_ok=True)
+        (final / rel).write_text(txt)
+    tmp.mkdir()
+    (tmp / "stats_long.csv").write_text("new")
+    kept = fileio.swap_in(tmp, final, known={"stats_long.csv", "all_n/old_plot.png"})
+    assert kept == ["my_notes.txt"] and not tmp.exists()
+    assert (final / "stats_long.csv").read_text() == "new"
+    assert not (final / "all_n" / "old_plot.png").exists()  # a known output that is no longer written
+    assert (final / "_kept" / "my_notes.txt").read_text() == "mine"
+    assert (final / "_kept" / "earlier.txt").read_text() == "kept before"
+    assert not any(p.name.startswith(".g1") for p in tmp_path.iterdir())
+
+
+def test_swap_in_reports_a_file_open_in_excel(tmp_path, monkeypatch):
+    import os
+
+    from kerncount import fileio
+
+    final, tmp = tmp_path / "g2", tmp_path / "g2.tmp"
+    final.mkdir()
+    (final / "results.xlsx").write_text("old")
+    tmp.mkdir()
+    (tmp / "results.xlsx").write_text("new")
+    real = os.replace
+
+    def locked(src, dst):  # Windows: renaming a folder with an open file fails
+        if Path(src) == final:
+            raise PermissionError(13, "in use")
+        return real(src, dst)
+
+    monkeypatch.setattr(fileio.os, "replace", locked)
+    with pytest.raises(fileio.FolderInUse, match="open in Excel"):
+        fileio.swap_in(tmp, final, known={"results.xlsx"})
+    assert (final / "results.xlsx").read_text() == "old" and (tmp / "results.xlsx").read_text() == "new"
+
+
+def test_failed_generation_build_leaves_the_old_one(tmp_path, monkeypatch):
+    from kerncount import generations
+
+    final = tmp_path / "generations" / "g1"
+    final.mkdir(parents=True)
+    (final / "stats_long.csv").write_text("old")
+
+    def boom(out, *a, **k):
+        (out / "half.csv").write_text("half")
+        raise RuntimeError("model crashed")
+
+    monkeypatch.setattr(generations, "_build_into", boom)
+    with pytest.raises(RuntimeError):
+        generations.build(tmp_path, dict(name="g1"), None, None, {})
+    assert (final / "stats_long.csv").read_text() == "old"
+    assert not (tmp_path / "generations" / "g1.tmp").exists()
+
+
+def test_atomic_write_keeps_permissions(tmp_path):
+    from kerncount import fileio
+
+    p = tmp_path / "settings.toml"
+    p.write_text("a = 1\n")
+    p.chmod(0o640)
+    fileio.atomic_write(p, "a = 2\n")
+    assert p.read_text() == "a = 2\n" and (p.stat().st_mode & 0o777) == 0o640
+    assert [x.name for x in tmp_path.iterdir()] == ["settings.toml"]  # no temp file left

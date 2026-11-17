@@ -309,7 +309,7 @@ def backup(project_dir: Path, name: str) -> Path | None:
     return dst
 
 
-def write_template(project_dir: Path, raw_dir: Path) -> None:
+def write_template(project_dir: Path, raw_dir: Path) -> Path | None:
     """raw_dir is stored relative to the project folder when possible, so a workspace can be moved. Symlinks are
     NOT resolved: a data/<experiment> link to a folder elsewhere is stored as ../../data/<experiment>, so the link
     (not its current target) stays the source of truth. An existing settings.toml is backed up first."""
@@ -321,8 +321,11 @@ def write_template(project_dir: Path, raw_dir: Path) -> None:
     except ValueError:  # different drives on Windows
         raw = str(raw_abs)
     raw = raw.replace("\\", "/")
-    backup(project_dir, "settings.toml")
-    (Path(project_dir) / "settings.toml").write_text(TEMPLATE.format(raw_dir=raw), encoding="utf-8")
+    bk = backup(project_dir, "settings.toml")
+    from .fileio import atomic_write
+
+    atomic_write(Path(project_dir) / "settings.toml", TEMPLATE.format(raw_dir=raw))
+    return bk
 
 
 def section_hash(settings: dict, *sections: str) -> str:

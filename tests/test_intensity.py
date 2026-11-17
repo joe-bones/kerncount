@@ -306,7 +306,7 @@ def test_locked_manual_cutoff_precedence(tmp_path):
                                              "positivity": {"manual_cutoff": 70}})
     assert positivity.decide(both, s3, "Ki67", "n1", locks)["mean"]["rule"] == "negative_control"  # control wins
     data = json.loads((tmp_path / "cutoffs.json").read_text())
-    assert data["locks"][0]["locked_at"] and data["locks"][0]["fields"] == ["fa", "fb"]
+    assert data["locks"][0]["locked_at"] and data["locks"][0]["fields"] == 2  # a count: ids would unblind
 
 
 def test_sweep_is_monotone_and_includes_the_cutoff():
@@ -554,6 +554,6 @@ def test_tuning_api_blinded_and_fast(ki_project):
     with pytest.raises(tuning.TuningError):
         tuning.render(prj, "f_nope", "Ki67", 1.0)
     lock = tuning.lock(prj, "Ki67", 150.0, ids)
-    assert lock["cutoff"] == 150.0 and lock["fields"] == ids and lock["locked_at"]
+    assert lock["cutoff"] == 150.0 and lock["fields"] == len(ids) and lock["locked_at"]
     assert positivity.find_lock(positivity.load_locks(prj), "Ki67", "n1_2026-06-05")["cutoff"] == 150.0
     (prj / "cutoffs.json").unlink()

@@ -28,7 +28,7 @@ matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
 
-from . import acceptance, analysis, design, manifest, modelplots, models
+from . import acceptance, analysis, design, fileio, manifest, modelplots, models
 from . import duplicates as duplicates_mod
 from . import metrics as metrics_mod
 
@@ -142,6 +142,9 @@ def _write_model_outputs(res, m: str, met, ad: Path, ncol: dict, cfg, main_ref: 
         res.loo_summary.to_csv(ad / f"{m}_loo_summary.csv", index=False)
     label = met.label
     frac = res.scale is not None and res.scale.kind == "fraction"
+    raw = res.scale is not None and res.scale.kind == "difference"  # well means <= 0: raw-scale difference (I3)
+    unit = met.unit or ""
+    raw_txt = (models.RAW_SCALE_NOTE + ". ") if raw else ""
     order = res.order or (res.prepared.treatments if res.prepared else [])
     one_n = res.descriptive
     if res.has_estimates:
@@ -149,7 +152,7 @@ def _write_model_outputs(res, m: str, met, ad: Path, ncol: dict, cfg, main_ref: 
         for ref in cfg.controls:
             if ref in set(e["treatment"]):
                 base = float(e.loc[e["treatment"] == ref, "estimate"].iloc[0])
-                e[f"pct_of_{ref}"] = 100 * e["estimate"] / base if base else np.nan
+                e[f"pct_of_{ref}"] = 100 * e["estimate"] / base if base > 0 else np.nan
         e.to_csv(ad / f"{m}_model_means.csv", index=False)
         res.contrasts.to_csv(ad / f"{m}_contrasts.csv", index=False)
         sig = _model_marks(res, main_ref) if (main_ref and star_source == "mixed" and res.ok) else None
@@ -159,7 +162,8 @@ def _write_model_outputs(res, m: str, met, ad: Path, ncol: dict, cfg, main_ref: 
             foot = _stars_footer(res, main_ref)
         else:
             foot = f"Estimand: {res.estimand}. No stars here: the primary test is the RM ANOVA (stars on the bar plots)."
-        foot += f" Response {res.scale.describe}" + ("" if frac else "; zero fields are drawn at the bottom edge") + "."
+        foot = raw_txt + foot + f" Response {res.scale.describe}" + (
+            "" if (frac or raw) else "; zero fields are drawn at the bottom edge") + "."
         modelplots.model_absolute(res, ad / f"{m}_model_absolute", ncol, sig or {}, main_ref, foot,
                                   f"{where}: {label} (mixed model)" if res.ok else f"{where}: {label} (one n)")
         loo = res.loo if (res.primary_test == "mixed" and res.ok) else None
@@ -167,13 +171,18 @@ def _write_model_outputs(res, m: str, met, ad: Path, ncol: dict, cfg, main_ref: 
             fam = fam.reset_index(drop=True)
             kind = fam["family_kind"].iloc[0]
             if kind == "vehicle_check":
-                foot = (f"Equivalence (TOST): the vehicle counts as equivalent if the whole 90% CI of the "
-                        f"{'odds ratio' if frac else 'ratio'} lies within the shaded margin "
-                        f"({1 / (1 + cfg.margin):.2f}-{1 + cfg.margin:.2f}). 'Not significant' alone does not show "
-                        "that there is no effect." + (f" Only one n: {models.NEEDS_2N}." if one_n else ""))
+                what = ("difference in percentage points" if frac else "raw-scale difference" if raw else "ratio")
+                mtxt = (f"±{cfg.margin_pp:g} percentage points" if frac else
+                        f"±{cfg.margin:.0%} of the comparator mean" if raw else
+                        f"{1 / (1 + cfg.margin):.2f}-{1 + cfg.margin:.2f}")
+                ci = str(fam["test"].iloc[0]).rsplit("; ", 1)[-1].rstrip(")") if len(fam) else "90% CI"
+                foot = (raw_txt + f"Equivalence (TOST, Holm across pairs): the vehicle counts as equivalent if the "
+                        f"Holm-adjusted TOST p < 0.05, i.e. the whole {ci} of the {what} lies within the shaded "
+                        f"margin ({mtxt}); not equivalent if it lies wholly outside. 'Not significant' alone does "
+                        "not show that there is no effect." + (f" Only one n: {models.NEEDS_2N}." if one_n else ""))
                 modelplots.forest(fam, None, ad / f"{m}_forest_{fid}", ncol,
-                                  f"{where}: {label}, vehicle check (equivalence, 90% CI)", foot,
-                                  res.scale.estimate_type, margin=cfg.margin)
+                                  f"{where}: {label}, vehicle check (equivalence)", foot,
+                                  res.scale.estimate_type, margin=cfg.margin, pp=frac, unit=unit)
                 continue
             adj = "simultaneous 95% CI (dashed) = adjusted for the family"
             if one_n:
@@ -186,15 +195,17 @@ def _write_model_outputs(res, m: str, met, ad: Path, ncol: dict, cfg, main_ref: 
             extra = (" Odds ratios and % of the comparator are in the contrasts table; a ratio of near-zero fractions "
                      "is not meaningful." if frac else "")
             loo_txt = "" if one_n else " Coloured dots: estimate with that n left out (leave-one-n-out)."
-            foot = (f"Estimand: {res.estimand}. {st_txt}{loo_txt} Model: {res.model}.{extra} "
+            foot = (raw_txt + f"Estimand: {res.estimand}. {st_txt}{loo_txt} Model: {res.model}.{extra} "
                     + ("" if one_n else STARS_LEGEND))
             modelplots.forest(fam, loo, ad / f"{m}_forest_{fid}", ncol, f"{where}: {label}, {fam['family'].iloc[0]}"
-                              + (" (% points)" if frac else ""), foot, res.scale.estimate_type, pp=frac)
+                              + (" (% points)" if frac else " (DIFFERENCE, raw scale)" if raw else ""), foot,
+                              res.scale.estimate_type, pp=frac, unit=unit)
         modelplots.variance_components(
             res.varcomp, ad / f"{m}_variance_components",
             f"{where}: {label}, where the variation comes from" + (" (mixed model)" if res.ok else " (one n)"),
-            ("Variances on the analysis scale (log, or logit for fractions; they add up). SD on the log scale ≈ CV for "
-             "small values. Lines = approximate 95% CI where available (rough with few n's; the n-level variances "
+            (raw_txt + ("Variances on the raw scale (squared intensity units; they add up). " if raw else
+                        "Variances on the analysis scale (log, or logit for fractions; they add up). SD on the log "
+                        "scale ≈ CV for small values. ") + "Lines = approximate 95% CI where available (rough with few n's; the n-level variances "
              "rest on very few levels)." if res.ok else
              f"Only one n: the n-level variances: {models.NEEDS_2N}; the well-to-well variance shown is descriptive "
              "(technical replicates)."))
@@ -208,7 +219,11 @@ def _write_model_outputs(res, m: str, met, ad: Path, ncol: dict, cfg, main_ref: 
             if res.has_estimates:
                 c = res.contrasts
                 fam = c[(c["family_kind"] == "vs_control") & (c["comparator"] == ref)]
-            if frac:
+            if raw:
+                col, txt = "difference", (raw_txt + "Dots: difference of the mean values within each n (colour = n, "
+                                          "joined per n; thin lines = technical 95% interval from the fields, "
+                                          "descriptive).")
+            elif frac:
                 col, txt = "pp_difference", ("Dots: difference of the pooled fractions within each n (colour = n, "
                                              "joined per n; thin lines = technical 95% interval from the fields, "
                                              "descriptive).")
@@ -221,9 +236,10 @@ def _write_model_outputs(res, m: str, met, ad: Path, ncol: dict, cfg, main_ref: 
                    f"Black bar: estimate from the one n ({models.NEEDS_2N} for an across-n test).")
             modelplots.per_n_ratio(
                 res.per_n, fam, ref, order, ad / f"{m}_per_n_ratio_vs_{_slug(ref)}", ncol,
-                f"{where}: {label}, effect in each n " + (f"(difference from {ref})" if frac else f"(ratio to {ref})"),
+                f"{where}: {label}, effect in each n " + (f"(difference from {ref})" if (frac or raw)
+                                                         else f"(ratio to {ref})"),
                 f"{txt} {bar} Spread between the dots = how much the effect differs between experiments.",
-                col=col, pp=frac)
+                col=col, pp=frac or raw)
     if res.density is not None:
         _write_density(res, m, met, ad, cfg, where)
 
@@ -330,11 +346,49 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, metrics: dict | N
           design_table: pd.DataFrame | None = None, duplicates: pd.DataFrame | None = None) -> Path:
     """metrics: the metric registry (metrics.registry) or a legacy {column: label} dict; count is always included.
     design_table: n, treatment, image, well, position, timepoint (optional cell_line) from design.assign (computed
-    here if None). duplicates: duplicates.find() table of byte-identical raw images (None = not checked)."""
-    out = project / "generations" / gen["name"]
+    here if None). duplicates: duplicates.find() table of byte-identical raw images (None = not checked).
+
+    The generation is built in generations/<gN>.tmp and only then swapped in by renaming (fileio.swap_in): a failed
+    build never leaves a half-written gN, and a file in gN held open (Excel on Windows) gives a clear error instead
+    of a half-deleted folder. Files in the old gN that kerncount did not write go to gN/_kept/ (never deleted)."""
+    final = project / "generations" / gen["name"]
+    out = final.with_name(gen["name"] + ".tmp")
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
+    try:
+        _build_into(out, project, gen, image_table, metrics, settings, design_table, duplicates)
+    except BaseException:
+        shutil.rmtree(out, ignore_errors=True)
+        raise
+    kept = fileio.swap_in(out, final, _known_files(final))
+    if kept:
+        print(f"  {gen['name']}: {len(kept)} file(s) not written by kerncount kept in {gen['name']}/{fileio.KEPT}/: "
+              + ", ".join(kept[:5]) + (" ..." if len(kept) > 5 else ""))
+    return final
+
+
+def _raw_scale(model_status: dict, m: str) -> bool:
+    """Was metric m analysed on the raw scale (well means <= 0, models.needs_raw_scale) in any all-n block?"""
+    return any(v.get("raw_scale") for k, v in model_status.items() if k == m or k.endswith("/" + m))
+
+
+GENERATION_FILES = {"README.txt", "generation.json", "manifest.json"}
+
+
+def _known_files(folder: Path) -> set[str] | None:
+    """Files an earlier build wrote into `folder` (its manifest, PDF twins of every plot, and the fixed files);
+    None when there is no manifest (unknown origin: everything not rebuilt is kept)."""
+    try:
+        man = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    paths = {f["path"] for f in man.get("files", []) if isinstance(f, dict) and f.get("path")}
+    return paths | {p.rsplit(".", 1)[0] + ".pdf" for p in paths} | GENERATION_FILES
+
+
+def _build_into(out: Path, project: Path, gen: dict, image_table: pd.DataFrame, metrics: dict | None,
+                settings: dict, design_table: pd.DataFrame | None, duplicates: pd.DataFrame | None) -> Path:
     a = settings["analysis"]
     reg = metrics_mod.normalise(metrics)
     extra_cols = [m.column for k, m in reg.items() if k != "count"]
@@ -445,12 +499,22 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, metrics: dict | N
 
     # all n: once, or once per cell line (never pooled)
     blocks = []
+    mixed_line_note = ""
     if len(lines) > 1:
         for line in lines + (["unknown"] if (live_all["cell_line"] == "").any() else []):
             rows = live_all[live_all["cell_line"] == ("" if line == "unknown" else line)]
             blocks.append((line, out / "all_n" / _slug(line), rows))
     else:
-        blocks.append((lines[0] if lines else None, out / "all_n", live_all))
+        label = lines[0] if lines else None
+        if lines and "cell_line" in live_all and (live_all["cell_line"].fillna("").astype(str).str.strip() == "").any():
+            # some n's are labelled with the one cell line, others are not: do not call the pooled block "U251"
+            unl = sorted(set(live_all.loc[live_all["cell_line"].fillna("").astype(str).str.strip() == "", "n"]))
+            label = f"{lines[0]} + unlabelled"
+            mixed_line_note = (f"cell line: {', '.join(unl)} have no cell line set; they are analysed together with "
+                               f"the {lines[0]} n's (labelled '{label}'). Set [experiment] cell_line (or the "
+                               "cell_line column of layout.csv) if they are a different line: lines are never pooled")
+            print(f"  WARNING: {mixed_line_note}")
+        blocks.append((label, out / "all_n", live_all))
     (out / "all_n").mkdir()
     all_summ, all_stats, results, model_status, fallbacks = {}, {}, {}, {}, []
     one_n_blocks = []
@@ -518,6 +582,8 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, metrics: dict | N
                      "cut-off)")
     elif neg:
         notes.append(f"negative control '{neg}' set but not present in the data")
+    if mixed_line_note:
+        notes.append(mixed_line_note)
     if len(blocks) > 1:
         notes.append(f"cell lines are never pooled: all-n analysis run separately for {', '.join(b[0] for b in blocks)} "
                      f"(folders {', '.join((b[1].relative_to(out)).as_posix() for b in blocks)})")
@@ -556,8 +622,12 @@ def build(project: Path, gen: dict, image_table: pd.DataFrame, metrics: dict | N
                    equivalence_margin=cfg_all.margin)
     extra = dict(
         model_unit=unit,
-        estimands={m: dict(effect=metrics_mod.estimand(met, unit), mean=metrics_mod.estimand(met, unit, "mean"),
-                           headline=("pp_difference" if met.kind == "fraction" else "ratio"))
+        estimands={m: (lambda met_: dict(effect=metrics_mod.estimand(met_, unit),
+                                         mean=metrics_mod.estimand(met_, unit, "mean"),
+                                         headline={"fraction": "pp_difference", "difference": "difference"}.get(
+                                             met_.kind, "ratio"),
+                                         raw_scale=met_.kind == "difference"))(
+                       models.raw_scale_metric(met) if _raw_scale(model_status, m) else met)
                    for m, met in metrics_live.items()},
         density_covariate=cfg_all.density or None,
         n_count=int(live_all["n"].nunique()),

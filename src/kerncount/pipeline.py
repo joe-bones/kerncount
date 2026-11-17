@@ -315,9 +315,15 @@ def build_generations(prj: Project, df: pd.DataFrame, table: pd.DataFrame, rebui
             # metadata changed: nothing manual lives in the generation, so it is rebuilt (docs/statistics.md)
             log(f"  {g['name']}: counts unchanged, rebuilding because: {'; '.join(changed)}")
             g["rebuilt_because"] = changed
-        generations.build(prj.path, g, img_table, measured, prj.settings, design_table, duplicates=dups)
+        from .fileio import FolderInUse
+        try:
+            generations.build(prj.path, g, img_table, measured, prj.settings, design_table, duplicates=dups)
+        except FolderInUse as e:
+            log(f"  ERROR {g['name']}: {e}")
+            continue
         log(f"  {g['name']}: built ({'automatic' if g['source'] == 'auto' else g['source']}, {g['changes']} manual cells)")
-    extra = sorted(p.name for p in root.glob("g*") if p.is_dir() and p.name not in {g["name"] for g in gens})
+    extra = sorted(p.name for p in root.glob("g*") if p.is_dir() and p.name[1:].isdigit()
+                   and p.name not in {g["name"] for g in gens})
     if extra:
         log(f"  note: {', '.join(extra)} exist but no longer have a matching manual column (left untouched)")
 
@@ -475,7 +481,8 @@ def sampling(project_dir: Path, generation: str | None = None, iterations: int =
 
     prj = Project(project_dir)
     root = prj.path / "generations"
-    gens = sorted((p for p in root.glob("g*") if (p / "counts_used.csv").exists()), key=lambda p: int(p.name[1:]))
+    gens = sorted((p for p in root.glob("g*") if p.name[1:].isdigit() and (p / "counts_used.csv").exists()),
+                  key=lambda p: int(p.name[1:]))
     if not gens:
         raise SystemExit("no generations yet - run `kerncount run` first")
     g = root / generation if generation else gens[-1]

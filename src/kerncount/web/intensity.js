@@ -141,7 +141,7 @@ async function renderTune(body, tok) {
         <div class="imgwrap"><img id="tuneImg" alt="marker image with nucleus outlines" ondblclick="openTuneFull()"></div>
         <span class="busy" id="tuneBusy"></span>
         <div class="fieldbar"><button class="small" onclick="tuneStep(-1)" ${T.idx ? "" : "disabled"}>‹ Prev</button>
-          <span>Field <b>${T.idx + 1}</b> of ${fields.length} · id <code>${esc(fields[T.idx].field_id)}</code> · ${fields[T.idx].nuclei} nuclei</span>
+          <span>Field <b>${T.idx + 1}</b> of ${fields.length} · id <code>${esc(fields[T.idx].field_id)}</code></span>
           <button class="small" onclick="tuneStep(1)" ${T.idx < fields.length - 1 ? "" : "disabled"}>Next ›</button>
           <button class="small" onclick="S.tune.zoom=!S.tune.zoom;document.querySelector('.tune .stage').classList.toggle('zoom')">zoom 1:1</button><span class="spacer"></span>
           <span class="legend"><span><i style="border-color:#28dc3c"></i>positive</span><span><i style="border-color:#969696"></i>negative</span><span><i style="border-color:#ff9600"></i>saturated</span></span></div>
@@ -158,7 +158,8 @@ async function renderTune(body, tok) {
           </div>
           <div class="small muted" id="pvLod" style="margin-top:4px"></div></div>
         <div class="lockbox"><b>Lock this cut-off</b>
-          <p class="small" style="margin:4px 0 8px">Fixes ${esc(ch)} ${measure === "p90" ? "(90th percentile)" : ""} for ${scope ? esc(scope) : "every n"}. ${lockNow ? `Currently locked: <b>${(+lockNow.cutoff).toFixed(1)}</b> (${esc((lockNow.locked_at || "").replace("T", " "))}).` : "Nothing is locked yet."}</p>
+          <p class="small" style="margin:4px 0 8px">Fixes ${esc(ch)} ${measure === "p90" ? "(90th percentile)" : "(mean signal)"} for ${scope ? esc(scope) : "every n"}.
+            ${measure === "p90" ? "" : `<b>Only the mean-based % positive:</b> the 90th-percentile readout keeps the automatic rule unless you lock it too (switch to “90th percentile”).`} ${lockNow ? `Currently locked: <b>${(+lockNow.cutoff).toFixed(1)}</b> (${esc((lockNow.locked_at || "").replace("T", " "))}).` : "Nothing is locked yet."}</p>
           <div class="row"><button class="primary" onclick="tuneLock()" ${S.running ? "disabled" : ""}>Lock ${esc(T.cut.toFixed(1))}…</button>
             ${lockNow ? `<button class="small" onclick="tuneUnlock()" ${S.running ? "disabled" : ""}>Unlock</button>` : ""}</div></div>
         <div class="card" style="margin-top:12px">${lockHistory({ ...info, manual_cutoff: "" })}</div>

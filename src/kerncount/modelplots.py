@@ -72,6 +72,7 @@ def model_absolute(res, out: Path, ncol: dict, sig: dict, ref: str | None, foote
     fl = fl[fl["value"].notna()]
     order = [t for t in _order_hint(res) if t in set(p.d["treatment"])]  # user order (the baseline is not shown first)
     frac = p.scale.kind == "fraction"
+    raw = p.scale.kind == "difference"  # well means <= 0: linear axis, values may be negative
     k = 100.0 if frac else 1.0
     fig, ax = plt.subplots(figsize=(max(5.5, 0.85 * len(order) + 2.5), 4.8))
     rng = np.random.default_rng(0)
@@ -89,7 +90,8 @@ def model_absolute(res, out: Path, ncol: dict, sig: dict, ref: str | None, foote
     for i, t in enumerate(order):
         f = fl[fl["treatment"] == t]
         fv = f["value"].to_numpy(float) * k
-        ax.scatter(i + rng.uniform(-0.28, 0.28, len(fv)), np.clip(fv, None, cap) if frac else np.clip(fv, floor, None), s=5,
+        ax.scatter(i + rng.uniform(-0.28, 0.28, len(fv)),
+                   np.clip(fv, None, cap) if frac else fv if raw else np.clip(fv, floor, None), s=5,
                    color="#bbbbbb", zorder=1, edgecolors="none")
         ns = sorted(set(p.d.loc[p.d["treatment"] == t, "n"]))
         xs = i + np.linspace(-0.12, 0.12, max(len(ns), 1)) if len(ns) > 1 else [i]
@@ -105,7 +107,9 @@ def model_absolute(res, out: Path, ncol: dict, sig: dict, ref: str | None, foote
                 ax.vlines(i, r["ci_low"] * k, r["ci_high"] * k, color="black", lw=1.2, zorder=4)
                 for yv in (r["ci_low"], r["ci_high"]):
                     ax.hlines(yv * k, i - 0.08, i + 0.08, color="black", lw=1.2, zorder=4)
-    if not frac:
+    if raw:
+        ax.axhline(0, color="grey", lw=0.8, ls="--", zorder=0)
+    elif not frac:
         _log_axis(ax)
     else:
         ax.set_ylim(bottom=0)
@@ -117,13 +121,15 @@ def model_absolute(res, out: Path, ncol: dict, sig: dict, ref: str | None, foote
         if len(r):
             tops.append(float(r["estimate"].iloc[0]) * k)
         top = max(tops)
-        y = top * 1.12 if not frac else top + 0.04 * (hi - lo)
+        y = top * 1.12 if not (frac or raw) else top + 0.04 * (hi - lo)
         txt = sig.get(t) if sig else None
         if txt:
             ax.text(i, y, txt, ha="center", va="bottom", fontsize=11, fontweight="bold")
         elif t == ref and sig is not None:
             ax.text(i, y, "ref", ha="center", va="bottom", fontsize=8, color="grey")
-    if not frac:
+    if raw:
+        ax.set_ylim(lo, hi + 0.12 * (hi - lo))
+    elif not frac:
         ax.set_ylim(max(lo, floor / 1.2), hi * 1.9)
     else:
         ax.set_ylim(0, min(hi, cap) * 1.12)
@@ -134,11 +140,12 @@ def model_absolute(res, out: Path, ncol: dict, sig: dict, ref: str | None, foote
     else:
         unit = res.metric.unit or res.metric.label
         ylab = (f"{res.metric.label}" + (f" ({unit})" if unit and unit.lower() not in res.metric.label.lower() else "")
-                + " (log scale)")
+                + (" (raw scale)" if raw else " (log scale)"))
         kind = "mean per field" if p.unit == "well" else "geometric mean of fields"
     ax.set_ylabel(ylab, fontsize=9)
     bar = (f"bar = model {kind} ± 95% CI" if res.ok else f"bar = estimate from the data ({kind}; CI {NEEDS_2N_TXT})")
-    ax.set_title(f"{title}\n{bar}; dots = per-n values; grey = fields", fontsize=9)
+    ax.set_title(f"{title}\n{bar}; dots = per-n values; grey = fields"
+                 + ("\nRAW SCALE: some well means <= 0, effects are DIFFERENCES" if raw else ""), fontsize=9)
     _clean(ax)
     handles = [Line2D([], [], marker="o", ls="", color=c, markersize=5, label=short_n(n)) for n, c in ncol.items()
                if n in set(p.d["n"])]
@@ -157,11 +164,15 @@ def _order_hint(res) -> list[str]:
 
 def forest(fam: pd.DataFrame, loo: pd.DataFrame, out: Path, ncol: dict, title: str, footer: str,
            estimate_type: str = "ratio", stars_col: str = "significance", margin: float | None = None,
-           pp: bool = False):
+           pp: bool = False, unit: str = ""):
     """One row per comparison: estimate with 95% CI (log axis, line at 1; pp=True: difference in percentage points
-    on a linear axis, line at 0), leave-one-n-out estimates as small coloured marks (colour = the n that was
-    dropped), stars from the primary test on the right. Rows without a CI show the estimate only ('needs ≥ 2 n')."""
+    on a linear axis, line at 0; estimate_type "difference": raw-scale difference in `unit`, linear axis, line at
+    0), leave-one-n-out estimates as small coloured marks (colour = the n that was dropped), stars from the primary
+    test on the right. Rows without a CI show the estimate only ('needs ≥ 2 n'). margin (equivalence): shaded from
+    the rows' margin_low / margin_high when present (percentage points or raw units), else the ratio margin."""
     fam = fam.reset_index(drop=True)
+    diff = estimate_type == "difference" and not pp
+    lin = pp or diff
     if pp:
         cols = dict(est="pp_difference", lo="pp_ci_low", hi="pp_ci_high", loa="pp_ci_low_adj", hia="pp_ci_high_adj")
     else:
@@ -185,25 +196,44 @@ def forest(fam: pd.DataFrame, loo: pd.DataFrame, out: Path, ncol: dict, title: s
                 if np.isfinite(v):
                     ax.scatter(v, y + 0.22, s=14, color=ncol.get(q.dropped_n, "grey"), zorder=3,
                                edgecolors="white", linewidths=0.4)
-    null = 0.0 if pp else 1.0
+    null = 0.0 if lin else 1.0
     ax.axvline(null, color="grey", lw=0.8, ls="--", zorder=0)
-    if margin:
+    mlo = pd.to_numeric(fam["margin_low"], errors="coerce").dropna() if "margin_low" in fam else pd.Series(dtype=float)
+    mhi = pd.to_numeric(fam["margin_high"], errors="coerce").dropna() if "margin_high" in fam else pd.Series(dtype=float)
+    margin_txt = ""
+    if margin and len(mlo) and len(mhi):
+        a_, b_ = float(mlo.max()), float(mhi.min())
+        ax.axvspan(a_, b_, color="#c7e9c0", alpha=0.6, zorder=0, lw=0)
+        lo, hi = ax.get_xlim()
+        if lin:
+            pad = 0.15 * (b_ - a_)
+            ax.set_xlim(min(lo, a_ - pad), max(hi, b_ + pad))
+        else:
+            ax.set_xlim(min(lo, a_ / 1.15), max(hi, b_ * 1.15))
+        sym = abs(a_ + b_) < 1e-9 * max(abs(b_), 1e-12)
+        margin_txt = (f"±{b_:.3g} pp" if pp else (f"±{b_:.3g}" if sym else f"{a_:.3g} to {b_:.3g}") if diff
+                      else f"{a_:.2f}-{b_:.2f}")
+    elif margin:
         ax.axvspan(1 / (1 + margin), 1 + margin, color="#c7e9c0", alpha=0.6, zorder=0, lw=0)
         lo, hi = ax.get_xlim()
         ax.set_xlim(min(lo, 1 / (1 + margin) / 1.15), max(hi, (1 + margin) * 1.15))
-    if not pp:
+        margin_txt = f"±{margin:.0%}"
+    if not lin:
         _log_axis(ax, "x")
     ax.set_yticks(ys, [c.replace(" vs ", "  vs  ") for c in fam["comparison"]], fontsize=8)
     ax.set_ylim(-0.7, k - 0.2)
     if pp:
         ax.set_xlabel("difference (percentage points; 0 = no difference)", fontsize=8)
+    elif diff:
+        ax.set_xlabel(f"DIFFERENCE ({unit + ', ' if unit else ''}raw scale; 0 = no difference)", fontsize=8)
     else:
         lab = "odds ratio" if estimate_type == "odds_ratio" else "ratio"
         ax.set_xlabel(f"{lab} (log scale; 1 = no difference)", fontsize=8)
     ax.set_title(title, fontsize=9)
     _clean(ax)
     trans = ax.get_yaxis_transform()
-    fmt = (lambda v: f"{v:+.1f}".replace("-0.0", "0.0").replace("+0.0", "0.0")) if pp else (lambda v: f"{v:.2f}")  # noqa: E731
+    fmt = ((lambda v: f"{v:+.1f}".replace("-0.0", "0.0").replace("+0.0", "0.0")) if pp else  # noqa: E731
+           (lambda v: f"{v:.2f}" if abs(v) < 100 else f"{v:.3g}") if diff else (lambda v: f"{v:.2f}"))
     for y, r in zip(ys, fam.itertuples()):
         est, lo_, hi_ = get(r, "est"), get(r, "lo"), get(r, "hi")
         txt = f"{fmt(est)} [{fmt(lo_)}, {fmt(hi_)}]" if np.isfinite(lo_) else f"{fmt(est)} ({NEEDS_2N_TXT})"
@@ -212,13 +242,14 @@ def forest(fam: pd.DataFrame, loo: pd.DataFrame, out: Path, ncol: dict, title: s
         if isinstance(s, str) and s:
             ax.text(1.27, y, s, transform=trans, fontsize=8 if len(s) > 4 else 9, va="center", ha="left",
                     fontweight="bold" if s != "ns" else "normal")
-    unit = " pp" if pp else ""
-    ax.text(1.02, k - 0.35, ("estimate [90% CI]" if margin else f"estimate{unit} [95% CI]"), transform=trans,
+    unit_txt = " pp" if pp else ""
+    ax.text(1.02, k - 0.35, ("estimate [CI]" if margin else f"estimate{unit_txt} [95% CI]"),
+            transform=trans,
             fontsize=6.5, color="grey", ha="left")
     handles = [Line2D([], [], marker="D", ls="-", color="black", markersize=5,
-                      label="all n (90% CI)" if margin else "all n (95% CI)")]
+                      label="all n (TOST CI)" if margin else "all n (95% CI)")]
     if margin:
-        handles.append(plt.Rectangle((0, 0), 1, 1, color="#c7e9c0", label=f"equivalence margin ±{margin:.0%}"))
+        handles.append(plt.Rectangle((0, 0), 1, 1, color="#c7e9c0", label=f"equivalence margin {margin_txt}"))
     elif cols["loa"] in fam and fam[cols["loa"]].notna().any():
         handles.append(Line2D([], [], ls=(0, (2, 2)), color="black", lw=0.8, label="simultaneous 95% CI"))
     if not fam[cols["lo"]].notna().any():
@@ -240,7 +271,9 @@ def per_n_ratio(pn: pd.DataFrame, fam: pd.DataFrame | None, control: str, order:
                 title: str, footer: str, col: str = "ratio", pp: bool = False):
     """Effect of each treatment vs `control` within each n (dots, coloured by n, joined across treatments per n;
     thin vertical lines = technical 95% interval from the fields), with the model estimate (black bar).
-    col: the per-n column drawn (ratio, ratio_of_means or pp_difference); pp = linear axis with 0 as no effect."""
+    col: the per-n column drawn (ratio, ratio_of_means, pp_difference or difference); pp = linear axis with 0 as
+    no effect (percentage points, or the raw-scale difference when col == "difference")."""
+    diff = col == "difference"
     sub = pn[pn["control"] == control]
     trs = [t for t in order if t in set(sub["treatment"])]
     if not trs:
@@ -255,7 +288,7 @@ def per_n_ratio(pn: pd.DataFrame, fam: pd.DataFrame | None, control: str, order:
         ax.scatter(xs, g[col], s=26, color=ncol.get(n, "grey"), zorder=3, edgecolors="white", linewidths=0.6,
                    label=short_n(n))
     if fam is not None and len(fam):
-        mcol = "pp_difference" if pp else "estimate"
+        mcol = "pp_difference" if (pp and not diff) else "estimate"
         for i, t in enumerate(trs):
             r = fam[fam["group"] == t]
             if len(r) and np.isfinite(r[mcol].iloc[0]):
@@ -264,7 +297,8 @@ def per_n_ratio(pn: pd.DataFrame, fam: pd.DataFrame | None, control: str, order:
     if not pp:
         _log_axis(ax)
     ax.set_xticks(range(len(trs)), trs, rotation=45, ha="right")
-    ax.set_ylabel(f"difference from {control} within each n (percentage points)" if pp else
+    ax.set_ylabel(f"DIFFERENCE from {control} within each n (raw scale)" if diff else
+                  f"difference from {control} within each n (percentage points)" if pp else
                   f"ratio to {control} within each n (log scale)", fontsize=9)
     ax.set_title(title, fontsize=9)
     _clean(ax)

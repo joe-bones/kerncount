@@ -65,8 +65,10 @@ def test_model_recovers_known_effects_and_absolute_means():
     assert e.loc["LyoVec", "ci_low"] < e.loc["LyoVec", "estimate"] < e.loc["LyoVec", "ci_high"]
     assert set(res.varcomp["component"]) >= {"n (experiment: day, plate, passage)",
                                              "well (residual: well-to-well within n × treatment)"}
-    # one n x treatment variance per non-control treatment (classes = "auto"), controls pooled
-    assert {"n × treatment [controls]", "n × treatment [A]", "n × treatment [CL075]"} <= set(res.varcomp["component"])
+    # one n x treatment variance per treatment, each control included (classes = "auto")
+    assert {"n × treatment [Control]", "n × treatment [LyoVec]", "n × treatment [A]",
+            "n × treatment [CL075]"} <= set(res.varcomp["component"])
+    assert "n × treatment [controls]" not in set(res.varcomp["component"])
     res = models.analyse(d, POS, _settings(model_unit="field"), positions_ok=True, leave_one_out=False)
     assert res.ok and res.unit == "field"
     assert set(res.varcomp["component"]) >= {"n (experiment: day, plate, passage)", "well (within n × treatment)",
