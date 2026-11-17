@@ -218,3 +218,4 @@ svg.chart .ax{stroke:#9ca3af}svg.chart .gr{stroke:#eef0f3}
 
 @media (max-width:1100px){.cols2,.cols-side,.tune,.plan{grid-template-columns:1fr}.metrics4{grid-template-columns:repeat(2,minmax(0,1fr))}.plots{grid-template-columns:1fr}}
 @media (max-width:900px){.split{grid-template-columns:1fr}.preview{position:static}#side{width:180px}.form-item{grid-template-columns:1fr}.form-item .help{grid-column:1}}
+.pill.active .muted { color: inherit; opacity: 0.85; }

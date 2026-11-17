@@ -175,7 +175,7 @@ def _write_model_outputs(res, m: str, met, ad: Path, ncol: dict, cfg, main_ref: 
                 mtxt = (f"±{cfg.margin_pp:g} percentage points" if frac else
                         f"±{cfg.margin:.0%} of the comparator mean" if raw else
                         f"{1 / (1 + cfg.margin):.2f}-{1 + cfg.margin:.2f}")
-                ci = str(fam["test"].iloc[0]).rsplit("; ", 1)[-1].rstrip(")") if len(fam) else "90% CI"
+                ci = str(fam["test"].iloc[0]).rsplit("; ", 1)[-1][:-1] if len(fam) else "90% CI"  # drop the closing ")"
                 foot = (raw_txt + f"Equivalence (TOST, Holm across pairs): the vehicle counts as equivalent if the "
                         f"Holm-adjusted TOST p < 0.05, i.e. the whole {ci} of the {what} lies within the shaded "
                         f"margin ({mtxt}); not equivalent if it lies wholly outside. 'Not significant' alone does "
