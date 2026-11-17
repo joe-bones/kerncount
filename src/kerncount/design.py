@@ -357,7 +357,7 @@ def describe(table: pd.DataFrame) -> pd.DataFrame:
         k = int(mode.max())
         if (g["fields_per_well"] == k).sum() * 2 <= len(g):
             continue  # no clear majority
-        for i in g.index[g["fields_per_well"] != k]:
+        for i in g.index[g["fields_per_well"] < k]:  # smaller only: 18 images = 9 + 9 is a real, larger design
             r = out.loc[i]
             note = (f"fields per well read as {r.fields_per_well} (highest image {r.max_image} / {r.wells_expected} "
                     f"wells) but {k} in the other conditions of this n: if only one well was imaged or the last "
