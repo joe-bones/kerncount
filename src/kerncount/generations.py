@@ -648,6 +648,18 @@ def _build_into(out: Path, project: Path, gen: dict, image_table: pd.DataFrame, 
         notes.append("duplicate images shared across conditions in: " +
                      "; ".join(f"{n}: {', '.join(trs)}" for n, trs in dup_aff.items()) +
                      " - one of the copies is not the image it claims to be")
+        # duplicates combined with a missing reference (the real n3 case plus an n without LyoVec): say how many
+        # n's are left with a reference that is neither missing nor a copy
+        for line, _, rows in blocks:
+            for ref in cfg_all.controls:
+                have = sorted(set(rows.loc[rows["treatment"] == ref, "n"]))
+                if not have or not any(ref in dup_aff.get(n, []) for n in have):
+                    continue
+                clean = [n for n in have if ref not in dup_aff.get(n, [])]
+                lab = f" ({line})" if len(blocks) > 1 and line else ""
+                notes.append(f"comparisons vs {ref}{lab}: only {len(clean)} n ({', '.join(clean) or 'none'}) "
+                             f"{'has' if len(clean) == 1 else 'have'} a {ref} that is neither missing nor a duplicate"
+                             + (f" - {models.NEEDS_2N} for a trustworthy test" if len(clean) < 2 else ""))
     _excel(out, gen, t, used_cols, a, cfg_all, reg, metrics_live, all_summ, all_stats, per_n_summ, per_n_stats,
            results, acc, acc_sum, model_status, out / "all_n", notes, duplicates)
 

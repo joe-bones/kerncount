@@ -362,7 +362,7 @@ def describe(table: pd.DataFrame) -> pd.DataFrame:
             note = (f"fields per well read as {r.fields_per_well} (highest image {r.max_image} / {r.wells_expected} "
                     f"wells) but {k} in the other conditions of this n: if only one well was imaged or the last "
                     f"images are missing, the well split is wrong; set it in {WELLS_FILE} or fix fields_per_well")
-            out.at[i, "flags"] = "; ".join(x for x in (r.flags, note) if x)
+            out.at[i, "flags"] = "; ".join(x for x in (r["flags"], note) if x)
     return out
 
 

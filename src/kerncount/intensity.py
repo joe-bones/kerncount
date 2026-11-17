@@ -516,21 +516,24 @@ def derive(nuc: pd.DataFrame, ffs: dict, k: float) -> pd.DataFrame:
 SUSPECT_SHARE = 0.5  # at least this share of a folder's fields failing the channel check: the folder is suspect
 
 
-def field_fails_check(fi: dict) -> bool:
-    """A field whose marker file does not look like the partner of its nuclear file."""
+def field_fails_check(fi: dict, max_shift: float = 10.0) -> bool:
+    """A field whose marker file does not look like the partner of its nuclear file: barely correlated
+    (mis-paired), shifted by more than `max_shift` px ([channels] align_max_correct_px: files of one acquisition are
+    not that far apart), or the nuclear channel is not the brightest on its own nuclei."""
     b = fi.get("brightness") or {}
-    mis = any(np.isfinite(a.get("corr", np.nan)) and a["corr"] < MISPAIR_CORR
-              for a in (fi.get("alignment") or {}).values())
-    return bool(mis or (b and not b.get("nuclear_brightest", True)))
+    al = (fi.get("alignment") or {}).values()
+    mis = any(np.isfinite(a.get("corr", np.nan)) and a["corr"] < MISPAIR_CORR for a in al)
+    far = any(a.get("shift_px", 0) > max_shift for a in al)
+    return bool(mis or far or (b and not b.get("nuclear_brightest", True)))
 
 
-def suspect_folders(finfos: list) -> dict:
+def suspect_folders(finfos: list, max_shift: float = 10.0) -> dict:
     """{(n, treatment): (failing fields, fields)} for folders where at least SUSPECT_SHARE of the fields (and at
-    least 2) fail the channel check."""
+    least 2) fail the channel check (`field_fails_check`)."""
     tally: dict = {}
     for r, _, fi, _ in finfos:
         t = tally.setdefault((r.n, r.treatment), [0, 0])
-        t[0] += field_fails_check(fi)
+        t[0] += field_fails_check(fi, max_shift)
         t[1] += 1
     return {k: (b, n) for k, (b, n) in tally.items() if b >= 2 and b >= SUSPECT_SHARE * n}
 
@@ -592,13 +595,13 @@ def process(prj, fields: list, log=print) -> dict | None:
     # a whole folder whose channel files do not behave like marker + nuclear pairs (most fields mis-paired, or the
     # nuclear channel not the brightest on its nuclei): the folder may hold only one channel, or a missing / extra
     # file shifted the pairing. Its marker readouts are left empty (docs/design.md, "Unusual designs").
-    suspect = suspect_folders(finfos)
+    suspect = suspect_folders(finfos, float(s["channels"].get("align_max_correct_px", 10.0)))
     for (n, t), (bad, tot) in suspect.items():
         m = (nuc["n"] == n) & (nuc["treatment"] == t)
         nuc.loc[m, "excluded"] = "channel files of this folder do not pair up"
         nuc.loc[m, "measurable"] = False
-        log(f"  WARNING: {n} / {t}: {bad} of {tot} fields fail the channel check (mis-paired files or the nuclear "
-            f"channel is not the brightest): the folder may hold only one channel, or a missing / extra file shifted "
+        log(f"  WARNING: {n} / {t}: {bad} of {tot} fields fail the channel check (files mis-paired or shifted by more "
+            f"than align_max_correct_px, or the nuclear channel is not the brightest): the folder may hold only one channel, or a missing / extra file shifted "
             f"the pairing. Its marker readouts are left empty; its counts come from every second file only. Check "
             f"the files (Intensity → Channel checks).")
 

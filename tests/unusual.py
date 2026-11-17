@@ -105,9 +105,78 @@ def chain(prj: Path) -> dict:
     lines = gui.plan_lines(prj, gen) or [dict(path=None)]
     out["planner"] = [gui.planner_info(prj, None, ln.get("path")) for ln in lines]
     out["plans"] = gui.plans_info(prj)
-    out["design"] = pd.read_csv(prj / "design_check.csv", keep_default_na=False)
+    out["design"] = pd.read_csv(prj / "design_check.csv").fillna({"flags": ""})
     out["stats_long"] = pd.read_csv(out["gen"] / "stats_long.csv")
     out["notes"] = out["manifest"].get("notes", [])
     json.dumps({k: v for k, v in out.items() if k in ("overview", "manifest", "stats", "planner", "plans")},
                default=str)  # every endpoint answer is serialisable
+    return out
+
+
+# ---------------------------------------------------------------- real (tiny) images for the detection stages
+
+def field_images(rng, count: int, frac: float, shape=(128, 128)) -> list:
+    """[Ki-67 image, DAPI image] of one field: `count` nuclei at random places, a share `frac` of them Ki-67-positive."""
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+    dapi, ki = np.full(shape, 300.0), np.full(shape, 200.0)
+    centres = []
+    for _ in range(5000):
+        if len(centres) >= count:
+            break
+        c = rng.uniform(10, min(shape) - 10, 2)
+        if all((c[0] - a) ** 2 + (c[1] - b) ** 2 >= 17 ** 2 for a, b in centres):
+            centres.append(c)
+    for i, (y, x) in enumerate(centres):
+        m = (yy - y) ** 2 + (xx - x) ** 2 <= 49
+        dapi[m] += 3000
+        if (i + 0.5) / len(centres) < frac:
+            ki[m] += 600
+    return [(im + rng.normal(0, 15, shape)).clip(0).astype(np.uint16) for im in (ki, dapi)]
+
+
+def image_project(root: Path, spec: dict, settings_over: dict | None = None, name: str = "A", seed: int = 0) -> Path:
+    """Interleaved Ki-67 / DAPI files. spec: {n_folder: {treatment_folder: [item, ...]}}; item = (count, frac) for a
+    field (two files), None for a gap in the numbering, "Ki67" / "DAPI" for one file of that channel only."""
+    import tifffile
+
+    rng = np.random.default_rng(seed)
+    raw = root / "data" / name
+    for nf, conds in spec.items():
+        for tf, items in conds.items():
+            folder = raw / nf / tf
+            folder.mkdir(parents=True, exist_ok=True)
+            k = 1
+            for it in items:
+                if it is None:
+                    k += 1
+                    continue
+                if it in ("Ki67", "DAPI"):
+                    ims = field_images(rng, 20, 0.5)[:1] if it == "Ki67" else field_images(rng, 20, 0.5)[1:]
+                else:
+                    ims = field_images(rng, *it)
+                for im in ims:
+                    tifffile.imwrite(folder / f"{k}.tif", im)
+                    k += 1
+    prj = root / "analysis" / name
+    prj.mkdir(parents=True)
+    settings.write_template(prj, raw)
+    over = {"segmentation": {"backend": "classical"}, "readouts": {"enabled": False},
+            "intensity": {"regions": ["nucleus"]},
+            "channels": {"files": "interleaved", "file_order": "Ki67, DAPI", "segment": "DAPI"},
+            "analysis": {"reference": "LyoVec", "normalise_to": ["LyoVec", "Control"], "density_covariate": ""}}
+    for k, v in (settings_over or {}).items():
+        over.setdefault(k, {}).update(v)
+    sp = prj / "settings.toml"
+    sp.write_text(settings_form.update_text(sp.read_text(), settings_form.coerce(over)))
+    discover.write_layout(discover.scan(raw, files="interleaved", n_channels=2), prj / "layout.csv")
+    return prj
+
+
+def run_chain(prj: Path) -> dict:
+    """`kerncount run` (detection, classification, intensity) and then everything `chain` runs."""
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        pipeline.run(prj, no_review=True)
+    out = chain(prj)
+    out["log"] = buf.getvalue() + out["log"]
     return out
