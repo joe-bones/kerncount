@@ -241,3 +241,147 @@ def test_planner_settings_and_form():
         planner.options(_settings(planner={"plate_format": 30}))
     with pytest.raises(ValueError):
         planner.options(_settings(planner={"effects": [1.0]}))
+
+
+# ---------------------------------------------------------------- I1: power for a star (family-adjusted)
+
+def test_family_critical_matches_the_statistics():
+    from kerncount import models
+
+    for k, rho, df in ((7, 0.5, 3.0), (7, 0.3, 6.0), (4, 0.0, 10.0), (7, 0.9, 4.5)):
+        R = np.full((k, k), rho)
+        np.fill_diagonal(R, 1)
+        _, crit = models._mvt_adjust(np.full(k, 2.0), np.full(k, df), R)
+        assert planner.family_critical(k, rho, df) == pytest.approx(crit[0], abs=0.01), (k, rho, df)
+    assert planner.family_critical(1, 0.5, 3) == pytest.approx(stats.t.ppf(0.975, 3))
+
+
+def test_evaluate_uses_the_family_adjusted_level_by_default(plan):
+    adj = planner.evaluate(plan, 4, 2, 6, 0.7)
+    raw = planner.evaluate(plan, 4, 2, 6, 0.7, adjust_for_family=False)
+    k = plan["design"]["conditions"] - 1
+    assert adj["adjust_for_family"] and adj["family_size"] == k and 0 <= adj["family_correlation"] < 1
+    assert adj["t_critical"] == pytest.approx(planner.family_critical(k, adj["family_correlation"], adj["df"]),
+                                              abs=0.01)
+    assert 3 <= adj["df"] <= 6  # Satterthwaite between n - 1 and 2 (n - 1): one class per treatment
+    assert not raw["adjust_for_family"] and raw["df"] == 3 and raw["t_critical"] == pytest.approx(stats.t.ppf(0.975, 3))
+    assert adj["power"]["mid"] < raw["power"]["mid"]
+    assert adj["mde_ratio"]["mid"] < raw["mde_ratio"]["mid"] < 1  # a star needs a bigger effect
+    assert "star" in adj["test"] and "unadjusted" in raw["test"]
+    assert any("share one adjustment" in x for x in adj["notes"])
+    off = dict(plan, options=dict(plan["options"], adjust_for_family=False))
+    assert planner.evaluate(off, 4, 2, 6, 0.7)["t_critical"] == raw["t_critical"]  # [planner] adjust_for_family
+    pts = planner.curve(plan, "n", {"wells": 2, "fields": 6}, 0.7, adjust_for_family=False)
+    assert pts[2]["t_critical"] == pytest.approx(stats.t.ppf(0.975, pts[2]["x"] - 1))
+
+
+def test_tables_and_report_use_the_same_test(tmp_path):
+    df = simulate(np.random.default_rng(7), n=4)
+    out = tmp_path / "g1"
+    plan = planner.run(df, _settings(), out, sims=300)
+    mde = pd.read_csv(out / "mde.csv")
+    key = (plan["design"]["main_reference"], plan["default_class"])
+    row = mde[(mde["reference"] == key[0]) & (mde["class"] == key[1]) & (mde["n"] == 5) & (mde["wells"] == 2)
+              & (mde["fields_per_well"] == 6)].iloc[0]
+    ev = planner.evaluate(plan, 5, 2, 6, 0.7)
+    assert row["mde_ratio_mid"] == pytest.approx(ev["mde_ratio"]["mid"], abs=0.01)  # coarse grid, same test
+    rep = (out / "REPORT.txt").read_text()
+    assert "chance of a STAR" in rep and "single-step multivariate t" in rep
+    plan2 = planner.run(df, _settings(planner={"adjust_for_family": False}), tmp_path / "g2", sims=300)
+    assert plan2["options"]["adjust_for_family"] is False
+    rep2 = (tmp_path / "g2" / "REPORT.txt").read_text()
+    assert "unadjusted ratio paired t-test" in rep2
+    m2 = pd.read_csv(tmp_path / "g2" / "mde.csv")
+    row2 = m2[(m2["reference"] == key[0]) & (m2["class"] == key[1]) & (m2["n"] == 5) & (m2["wells"] == 2)
+              & (m2["fields_per_well"] == 6)].iloc[0]
+    assert row2["mde_ratio_mid"] > row["mde_ratio_mid"]  # unadjusted: smaller effects look detectable
+
+
+def _star_rate(seed):
+    from kerncount import metrics, models
+
+    d = simulate(np.random.default_rng(seed), n=4, **STAR_KW)
+    d = d.assign(well=(d["image"] - 1) // 6 + 1, position=(d["image"] - 1) % 6 + 1, timepoint="")
+    s = _settings()
+    r = models.analyse(d, metrics.Metric("value", "value", "v", "a.u.", "positive"), s, positions_ok=False,
+                       leave_one_out=False, density=False)
+    c = r.contrasts
+    c = c[(c["family"] == f"vs {s['analysis']['reference']}") & c["group"].str.startswith("miR")]
+    return float((c["p_adj"] < 0.05).mean())
+
+
+STAR_KW = dict(s_field=0.3, s_pos=0.0, s_well=0.1, s_bio=0.15, s_shift=0.05, effect=0.75)
+
+
+@pytest.mark.slow
+def test_adjusted_power_predicts_the_share_of_stars():
+    """The planner's power (plan from 40 simulated n's) vs the share of stars the mixed model actually gives at
+    4 n's: the family-adjusted prediction is close; the unadjusted paired-t power (the old default) is not."""
+    plan = planner.build(simulate(np.random.default_rng(99), n=40, **STAR_KW), _settings())
+    adj = planner.evaluate(plan, 4, 2, 6, STAR_KW["effect"], positions="random")["power"]
+    raw = planner.evaluate(plan, 4, 2, 6, STAR_KW["effect"], positions="random", adjust_for_family=False)["power"]
+    rate = float(np.mean([_star_rate(s) for s in range(80)]))
+    assert adj["low"] - 0.05 <= rate <= adj["high"] + 0.05, (rate, adj)
+    assert abs(rate - adj["mid"]) < abs(rate - raw["mid"])
+
+
+def test_bio_fit_keeps_the_pooled_variance_when_the_split_is_clipped():
+    """M9: an interaction mean square bigger than the pooled variance must not inflate V."""
+    ns = [f"n{i}" for i in range(4)]
+    # unbalanced (two missing cells): the additive fit's interaction mean square exceeds the pooled variance
+    lr = pd.DataFrame(np.random.default_rng(24).normal(0, 0.3, (4, 3)), index=ns, columns=list("abc"))
+    lr.iloc[0, 1] = lr.iloc[1, 2] = np.nan
+    coef = pd.DataFrame([dict(n=n, t=t, a_well=0.1, a_field=0.01) for n in ns for t in ("a", "b", "c", "ref")]
+                        ).set_index(["n", "t"])
+    b = planner.bio_fit(lr, coef, "ref")
+    pooled = float(((lr - lr.mean()) ** 2).sum().sum() / (lr.notna().sum() - 1).sum())
+    assert b["kind"] == "two-way" and b["split_clipped"] and b["V"] == pytest.approx(pooled)
+    assert b["ms_e_raw"] * (1 - 1 / b["tbar"]) > pooled  # what used to inflate V
+    assert b["ms_n"] / b["tbar"] + (1 - 1 / b["tbar"]) * b["ms_e"] == pytest.approx(pooled, rel=1e-6)
+
+
+# ---------------------------------------------------------------- I2: one plan per cell line, enforced acceptance
+
+def test_sampling_blocks_per_cell_line_without_enforced_failures(tmp_path):
+    from kerncount import pipeline
+
+    used = pd.concat([simulate(np.random.default_rng(1), n=3).assign(cell_line="U251"),
+                      simulate(np.random.default_rng(2), n=3).assign(cell_line="LN229",
+                                                                     n=lambda d: d["n"] + "b")])
+    g = tmp_path / "g1"
+    g.mkdir()
+    pd.DataFrame([dict(n="n1", criterion="overall", value="", limit="", result="fail", detail=""),
+                  dict(n="n2", criterion="overall", value="", limit="", result="pass", detail="")]
+                 ).to_csv(g / "acceptance.csv", index=False)
+    blocks, dropped = pipeline.sampling_blocks(used, g, _settings())
+    assert dropped == [] and [b[0] for b in blocks] == ["LN229", "U251"]
+    blocks, dropped = pipeline.sampling_blocks(used, g, _settings(acceptance={"enforce": True}))
+    assert dropped == ["n1"] and set(dict(blocks)["U251"]["n"]) == {"n2", "n3"}
+    assert set(dict(blocks)["LN229"]["n"]) == {"n1b", "n2b", "n3b"}
+    one = used[used["cell_line"] == "U251"].copy()
+    one.loc[one["n"] == "n3", "cell_line"] = ""
+    blocks, _ = pipeline.sampling_blocks(one, g, _settings())
+    assert [b[0] for b in blocks] == ["U251 + unlabelled"]
+
+
+def test_plan_per_cell_line_load_and_page(tmp_path):
+    from kerncount import gui
+
+    prj = tmp_path / "ws" / "analysis" / "E"
+    root = prj / "sampling" / "g1"
+    for line, seed in (("U251", 1), ("LN229", 2)):
+        planner.run(simulate(np.random.default_rng(seed), n=3), _settings(), root / line, sims=200, cell_line=line,
+                    excluded_ns=["n9"])
+    (root / "cell_lines.json").write_text(json.dumps({"cell_lines": [
+        {"cell_line": "U251", "path": "U251", "n_count": 3}, {"cell_line": "LN229", "path": "LN229", "n_count": 3}],
+        "excluded_ns": ["n9"]}))
+    assert planner.load(prj, "g1", "LN229")["cell_line"] == "LN229"
+    assert planner.load(prj)["cell_line"] == "U251"  # default: the first line
+    rep = (root / "LN229" / "REPORT.txt").read_text()
+    assert "cell line LN229 only" in rep and "n9 left out" in rep
+    info = gui.planner_info(prj, "g1", "LN229")
+    assert info["cell_line"] == "LN229" and [c["cell_line"] for c in info["cell_lines"]] == ["U251", "LN229"]
+    assert info["base"] == "sampling/g1/LN229/" and info["recommendations"].startswith("Recommendations")
+    r = gui.planner_evaluate(prj, {"gen": "g1", "cell_line": "LN229", "n": 4, "adjust_for_family": "0"})
+    assert r["result"]["adjust_for_family"] is False and r["curve"]
+    assert gui.planner_evaluate(prj, {"gen": "g1", "cell_line": "LN229", "n": 4})["result"]["adjust_for_family"]

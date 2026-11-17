@@ -368,6 +368,19 @@ def test_cell_lines_are_never_pooled(tmp_path):
 
 
 @pytest.mark.slow
+def test_one_cell_line_plus_unlabelled_ns_is_labelled_so(tmp_path):
+    """M6: U251 n's plus n's without a cell line form one block; it must not be called plain "U251"."""
+    rng = np.random.default_rng(4)
+    tab = _gen_table(rng)
+    out, _ = _build(tmp_path, tab, img_extra={"cell_line": np.where(tab["n"] == "n3", "", "U251")})
+    man = json.loads((out / "manifest.json").read_text())
+    assert man["all_n_folders"][0]["cell_line"] == "U251 + unlabelled"
+    assert any("n3 have no cell line set" in x for x in man["notes"])
+    sl = pd.read_csv(out / "stats_long.csv")
+    assert set(sl.loc[sl["level"] == "all_n", "cell_line"]) == {"U251 + unlabelled"}
+
+
+@pytest.mark.slow
 def test_negative_control_is_excluded_everywhere(tmp_path):
     rng = np.random.default_rng(4)
     tab = _gen_table(rng, extra=(("2nd only", 5),))

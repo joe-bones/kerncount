@@ -339,3 +339,85 @@ def test_generation_enforced_acceptance_excludes_n(tmp_path):
     man = json.loads((out / "manifest.json").read_text())
     assert man["acceptance"]["excluded"] == ["n3"]
     assert "n3" not in set(pd.read_csv(out / "all_n" / "count_per_n_ratios.csv")["n"])
+
+
+# ---------------------------------------------------------------- minor review findings (M1-M5)
+
+def test_adjusted_p_stays_within_its_exact_bounds():
+    """M1: single-step p_adj in [raw p, min(1, k p)] even where the numerical integration is imprecise."""
+    from scipy import stats
+
+    k = 7
+    R = np.full((k, k), 0.5)
+    np.fill_diagonal(R, 1)
+    t = np.array([0.1, 1.0, 2.5, 4.0, 6.0, 9.0, 30.0])
+    dfs = np.array([3, 3, 4, 5, 6, 6, 6], float)
+    padj, _ = models._mvt_adjust(t, dfs, R)
+    raw = 2 * stats.t.sf(np.abs(t), dfs)
+    assert (padj >= raw - 1e-15).all() and (padj <= np.minimum(1, k * raw) + 1e-15).all()
+    assert padj[-1] > 0  # far tail: positive (clamped at the raw p), never exactly 0 from integration noise
+
+
+def test_equivalence_verdict_follows_the_adjusted_level_and_fraction_margin_is_pp():
+    """M2: two vehicle pairs -> Holm; 'equivalent' only when the Holm-adjusted TOST p < 0.05, with the matching
+    (1 - 2 alpha / m) CI. M3: fractions use a margin in percentage points (equivalence_margin_pp)."""
+    rng = np.random.default_rng(8)
+    same = simulate(rng, n_n=8, var_n=0.02, var_res=0.05, var_pos=0.02, var_well=0.005)
+    s = _settings(reference="Control", vehicle_check="LyoVec vs Control; CL075 vs Control")
+    res = models.analyse(same, POS, s, positions_ok=True, leave_one_out=False)
+    v = res.contrasts[res.contrasts["family_kind"] == "vehicle_check"]
+    assert len(v) == 2 and "95.0% CI" in v["test"].iloc[0] and "Holm" in v["note"].iloc[0]
+    for r in v.itertuples():
+        assert (r.conclusion == "equivalent") == (r.p_adj < 0.05)
+        assert r.p_adj >= r.p
+    one = models.analyse(same, POS, _settings(reference="Control", vehicle_check="LyoVec vs Control"),
+                         positions_ok=True, leave_one_out=False)
+    assert "90% CI" in one.contrasts.loc[one.contrasts["family_kind"] == "vehicle_check", "test"].iloc[0]
+    # fractions: +-5 pp by default, set with equivalence_margin_pp
+    frac = metrics.Metric("readout_frac_x", "readout_frac_x", "x", "fraction", "fraction")
+    rows = []
+    for i in range(6):
+        for t in TR:
+            for w in (1, 2):
+                for k in range(6):
+                    N = 80
+                    rows.append(dict(n=f"n{i + 1}", treatment=t, well=w, position=k + 1, image=(w - 1) * 6 + k + 1,
+                                     timepoint="", count=N, value=rng.binomial(N, 0.30) / N))
+    d = pd.DataFrame(rows)
+    for margin, want in ((5.0, "equivalent"), (0.5, None)):
+        r = models.analyse(d, frac, _settings(reference="Control", vehicle_check="LyoVec vs Control",
+                                              equivalence_margin_pp=margin), positions_ok=True,
+                           leave_one_out=False, density=False)
+        e = r.contrasts[r.contrasts["family_kind"] == "vehicle_check"].iloc[0]
+        assert e.margin_low == -margin and e.margin_high == margin and "percentage points" in e.test
+        if want:
+            assert e.conclusion == want and -margin < e.pp_ci_low and e.pp_ci_high < margin
+        else:
+            assert e.conclusion in ("inconclusive", "not equivalent")
+
+
+def test_leave_one_out_with_two_n_is_not_testable():
+    """M4: dropping one of 2 n's leaves 1 n: no test, so stability cannot be judged (was 'no')."""
+    rng = np.random.default_rng(3)
+    res = models.analyse(simulate(rng, n_n=2, effects={"A": -1.0}), POS, _settings(), positions_ok=True)
+    s = res.loo_summary
+    assert len(s) and (s["stable"] == "not testable").all() and s["note"].str.contains("needs ≥ 3 n").all()
+
+
+def test_leave_one_out_refits_are_multi_start(monkeypatch):
+    """M5: each leave-one-n-out refit tries every default start (plus the full fit's variances), like the main
+    fit; only the slow statsmodels start is skipped."""
+    from kerncount import reml
+
+    calls = []
+    cls = reml.REML
+    real = cls.fit
+
+    def spy(self, extra_starts=None, n_default=None):
+        calls.append(n_default)
+        return real(self, extra_starts=extra_starts, n_default=n_default)
+
+    monkeypatch.setattr(cls, "fit", spy)
+    rng = np.random.default_rng(6)
+    models.analyse(simulate(rng, effects={"A": np.log(0.4)}), POS, _settings(), positions_ok=True)
+    assert len(calls) >= 5 and all(c is None for c in calls)

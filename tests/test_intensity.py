@@ -298,6 +298,9 @@ def test_locked_manual_cutoff_precedence(tmp_path):
     dec = positivity.decide(d, s, "ki67", "n1", locks)
     assert dec["mean"]["rule"] == "manual" and dec["mean"]["value"] == 80.0 and "2 fields" in dec["mean"]["detail"]
     assert dec["p90"]["rule"] == "lod"  # a mean lock does not set the 90th-percentile cut-off
+    # M8: ... and the p90 readout says so prominently (its own rule, not the manual value)
+    assert dec["p90"]["note"] == positivity.P90_NOT_LOCKED and dec["p90"]["detail"].startswith("AUTOMATIC RULE")
+    assert "note" not in dec["mean"]
     assert positivity.decide(d, s, "Ki67", "n2", locks)["mean"]["value"] == 90.0  # n-specific lock wins
     s2 = settings._merge(settings.DEFAULTS, {"positivity": {"manual_cutoff": {"Ki67": 70}}})
     assert positivity.decide(d, s2, "Ki67", "n1", locks)["mean"]["value"] == 70.0  # settings beat the lock
