@@ -293,6 +293,12 @@ The all-n level keeps **exactly the same files, columns and plot layout** whatev
   only the well-to-well variance, labelled "descriptive: technical replicates".
 - The same applies with 2+ n's to any comparison where fewer than 2 n's contain both groups ("needs ≥ 2 n
   containing both groups"), and to the ratio t-test rows with fewer than 2 pairs.
+- Data that drop out are named in the generation notes (`generations.coverage_notes`, `models.boundary_notes`):
+  a well or condition with no usable field left after exclusions, a condition with no value of a readout in an n
+  ("not testable for this readout" when no n has one), a condition with 0 nuclei in every field (its ratios rest
+  on the +0.5 offset; back-transformed means are never below 0), and a fraction of 0% or 100% in every field (read
+  the percentage-point difference, not the odds ratio). Conditions missing from an n are flagged in
+  `design_check.csv` (docs/design.md, "Unusual designs").
 - The per-n level carries technical intervals, labelled **"descriptive: technical replicates"**: the 95% CI of
   the field mean (`ci_low`, `ci_high`, `interval` in `<n>/<m>_summary.csv`) and the technical 95% interval of each
   per-n effect (`tech_ci_low`, `tech_ci_high` in `all_n/<m>_per_n_ratios.csv`; from the field SEs, delta method on

@@ -41,6 +41,11 @@ segment = "DAPI"               # a name or a 1-based number
   like the same field as `cntrl/18.tif`, not as its DAPI `17.tif`) and `lyovec/19.tif` vs `20.tif`.
 - *channel order*: the nuclear channel should be the brightest on its nuclei; otherwise the field is flagged
   (`file_order` reversed?).
+- *whole folder*: when at least half of a folder's fields (and at least 2) fail a check (mis-paired, shifted by more
+  than `align_max_correct_px`, or the nuclear channel not the brightest), the folder probably holds only one
+  channel, or a missing / extra file shifted every pair after it. All its marker readouts are left empty, the log
+  warns, `channel_check` says "folder fails the channel check", and the Attention panel names the folder
+  (docs/design.md, "Unusual designs").
 
 ## 2. Experiment metadata
 

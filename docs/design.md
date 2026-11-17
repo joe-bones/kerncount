@@ -119,6 +119,35 @@ work: the timepoint is then read from the `n_folder` names on the fly.
 | `single_well` | all images are in one well |
 | `flags` | plain-language list (`; `-separated); empty = nothing unusual |
 
+Rows with `images` = 0 are conditions an n does **not** have (`design.absent`): a condition present in another n of
+the same cell line, or an included `layout.csv` folder without images. Their well/field columns are empty.
+
+## Unusual designs
+
+Every case below runs end to end (detection, design check, statistics, readout ladder, duplicates, planner, plate
+maps, browser) without a traceback. What drops out is said in `design_check.csv`, the run log, the generation notes
+(`manifest.json` `notes`, README, About sheet) and the **Attention** panel; a headline never turns into a silent
+empty value. Tests: `tests/test_unusual_designs.py` (rules: default suite; every case end to end: `-m slow`;
+synthetic projects in `tests/unusual.py`).
+
+| case | behaviour |
+|---|---|
+| **a. Interleaved channel files**: gaps in the numbering | ignored: files pair up in file order (`discover.group_files`); the field's files are listed in `source_file_<channel>`. |
+| odd file count (unpaired last file) | the leftover file is skipped and named in the log and in `layout.csv` `note`; Attention: "folder(s) with files that were not used". |
+| a folder holding one channel only (or pairs shifted by a missing file) | the channel check fails in most fields (mis-paired, shifted by more than `align_max_correct_px`, or the nuclear channel not the brightest): at ≥ 50% of a folder's fields (and ≥ 2) the whole folder is *suspect*: its marker readouts are left empty (counts stay, from every second file), the log warns, `channel_check` says "folder fails the channel check", and Attention names the folder. |
+| **b. An n without a reference** (no LyoVec, or no Control) | `design_check.csv` row with `images` = 0, "reference LyoVec absent from this n (present in n1, n3)"; log warning; Attention "condition(s) missing from an n". Comparisons vs that reference use the n's that have it (`N` in the contrasts); the vehicle check and `vehicle_within` are "not applicable" in that n. |
+| an n without a treatment the others have | the same flag ("condition absent from this n"); its comparisons use the n's that have it; with fewer than 2 such n's: estimate only, "needs ≥ 2 n". |
+| **c. One well instead of 2** (images 1-6 only) / last images missing (1, 7, 8, 9) | `auto` reads the design from the highest image number, so it sees a smaller well; when the rest of the n has another size, the row is flagged "fields per well read as 3 ... but 6 in the other conditions of this n" (fix it in `wells.csv`). |
+| wells with 1, 3 or 9 fields; 18 images | `auto` gives 9 + 9; unequal wells are flagged "unbalanced"; the well-mean model handles unequal fields. |
+| a well with 0 usable fields after QC (`exclude_low_qc`, manual `x`) | generation note "n3 / LyoVec: well 2 has no usable field (all 6 excluded: QC low); this condition rests on 1 well in n3"; a condition with no usable field at all: "left out of every statistic". |
+| **d. An empty condition** (folder without images) | `design_check.csv` row with `images` = 0 ("no images: folder ... is empty"); Attention lists it twice (unused folder, missing condition). |
+| all-zero condition (0 nuclei everywhere) | counts: ratio rests on the +0.5 offset (note "read them as 'close to 0'"); means and their CIs are never below 0. Readouts without nuclei (% positive, intensities): note "has no value in any field of any n ...; not testable for this readout". |
+| every fraction 0 or 1 | analysed (empirical logit keeps it finite); note "0% / 100% in every field ... read the percentage-point difference" (the odds ratio is arbitrary there). |
+| **e. One condition + a reference** | ordinary analysis with one comparison per reference. |
+| a single n | estimates only, "needs ≥ 2 n" everywhere at all n; the planner page says it needs ≥ 2 n. |
+| three cell lines, one with 1 n | never pooled: one all-n block per line (`all_n/<line>/`), the 1-n line gets "needs ≥ 2 n" and no plan; a condition missing in another line is not "missing". |
+| **f. A whole condition duplicates another** (the real n3 case) | `duplicates.csv`, Attention error, acceptance `no_duplicate_images` fails. Combined with a missing reference elsewhere, the note says how many n's are left with a reference that is neither missing nor a copy, e.g. "comparisons vs LyoVec: only 1 n (n1) has a LyoVec that is neither missing nor a duplicate - needs ≥ 2 n for a trustworthy test". |
+
 ## Python interface (for developers)
 
 ```python
@@ -142,7 +171,8 @@ column is kept. Raises `ValueError` for invalid settings or a missing/broken `we
 | function | returns |
 |---|---|
 | `design.describe(assigned)` | the design_check table (one row per n × treatment, columns above) |
-| `design.summary_line(desc, settings)` | the one-line log summary |
+| `design.absent(assigned, settings, layout=None)` | rows (`images` = 0) for conditions an n lacks: present in another n of the same cell line, or an empty included `layout.csv` folder; appended to design_check.csv by `pipeline.check_design` |
+| `design.summary_line(desc, settings)` | the one-line log summary (lists `images` = 0 rows as "missing from an n") |
 | `design.spec(settings)` | `Spec(wells, fields_per_well, well_layout, field_positions, notes)`; `"auto"` stays a string; old names resolved |
 | `design.positions_meaningful(settings)` | `True` if `field_positions = "fixed"`. **Check this before using `position` in any model.** |
 | `design.nominal(desc)` | `(wells, fields_per_well)` of the largest condition: the "full design" for the sampling analysis |

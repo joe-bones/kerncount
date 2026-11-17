@@ -41,7 +41,10 @@ command line: `init --force`, `wells-template --force`); the message names the c
 `gui.attention_items` gathers every issue, most serious first (error → warn → info), each with a plain-language
 explanation and a link to the evidence (a table, or the page that shows it): duplicate images across conditions
 (`duplicates.csv`), acceptance failures (`acceptance.csv` of the latest generation), mis-paired and shifted channel
-files (`intensity/alignment.csv`), design flags (`design_check.csv`), a high QC-low share per n, model fallbacks
+files (`intensity/alignment.csv`; whole folders that fail the channel check are named first), folders with files
+that were not used (an unpaired channel file, non-numbered files, an empty folder: `layout.csv` notes), conditions
+missing from an n (`design_check.csv` rows with 0 images: a missing reference or treatment), other design flags
+(`design_check.csv`; docs/design.md, "Unusual designs"), a high QC-low share per n, model fallbacks
 (`manifest.model_status`), the one-n notice, an automatic cut-off that calls almost every nucleus positive, a
 missing negative control, a locked cut-off not yet applied, settings changed after the latest generation, and a
 fresh folder scan (`layout.new.csv`).
