@@ -18,15 +18,19 @@ One image (field) value y in condition (n, t), well j, field position p:
     biological           : sigma2_bio     n x treatment variation of the log ratio treatment / reference (biology +
                                           day/plate effects on the effect size), pooled within a treatment class
 
-The main analysis is a paired comparison across n of d_n = log(mean_t / mean_ref) (ratio paired t-test,
-df = N - 1). Its per-n variance for a design with w wells x k fields (reference: w_r wells) is
+The planned comparison is d_n = log(mean_t / mean_ref) across n. Its per-n variance for a design with w wells x
+k fields (reference: w_r wells) is
 
     V = sigma2_bio + sigma2_well (1/w + 1/w_r) + sigma2_f (1/(w k) + 1/(w_r k))
     sigma2_f = sigma2_field (standardised positions) or sigma2_field + sigma2_pos (random positions)
 
-Power = noncentral t (df = N - 1, noncentrality |log effect| / sqrt(V / N)); expected 95% CI half-width =
-t_{0.975, N-1} sqrt(V / N). Every component has a generalized-pivotal-quantity (GPQ) confidence interval;
-joint GPQ draws give the optimistic / expected / pessimistic band of every prediction.
+Power = P(|T| > c), T noncentral t (noncentrality |log effect| / sqrt(V / N)). By default ([planner]
+adjust_for_family = true) c and df are those of a STAR on the headline plot: the family's single-step
+multivariate-t critical value over the conditions - 1 comparisons vs the reference, correlated through the
+reference (family_test), df between N - 1 and 2 (N - 1); with adjust_for_family = false one unadjusted paired
+t-test (c = t_{1-alpha/2, N-1}). Expected 95% CI half-width of one comparison = t_{0.975, df} sqrt(V / N).
+Every component has a generalized-pivotal-quantity (GPQ) confidence interval; joint GPQ draws give the
+optimistic / expected / pessimistic band of every prediction.
 
 Public API (used by the browser planner; pure functions, no file writes):
     load(project_dir, generation=None) -> plan

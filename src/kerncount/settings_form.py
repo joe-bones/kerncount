@@ -185,8 +185,13 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
                                    "(equivalence, not just 'not significant'). auto = every other control group vs the "
                                    "main comparison group; empty = off. Several: separate with ;"),
         "equivalence_margin": dict(kind="float", min=0.01, max=1, label="Equivalence margin",
-                                   help="0.2 = the vehicle counts as equivalent if its ratio to the control (90% CI) "
-                                        "lies entirely within 1/1.2 to 1.2 (about ±20%)."),
+                                   help="0.2 = the vehicle counts as equivalent if its ratio to the control (90% CI; "
+                                        "with several vehicle pairs the Holm-matched CI) lies entirely within 1/1.2 "
+                                        "to 1.2 (about ±20%)."),
+        "equivalence_margin_pp": dict(kind="float", min=0.1, max=50, label="Equivalence margin, fractions (points)",
+                                      help="For % positive and other fractions: equivalent if the difference vehicle "
+                                           "minus control lies entirely within ± this many percentage points "
+                                           "(default 5). Odds ratios are not used for this."),
         "positive_control": dict(kind="text", label="Positive control",
                                  help="e.g. CL075. Every treatment that is not a control is also compared with it. "
                                       "Empty = none."),

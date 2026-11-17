@@ -17,13 +17,24 @@ Terms follow `CONTEXT.md`: one n = one plate on one day; field ⊂ well ⊂ cond
    - **well**: two wells of the same condition differ;
    - **biological (n-to-n)**: the treatment effect itself differs between independent experiments
      (biology, transfection efficiency, passage). Only more n's reduce it.
-2. The main result is the ratio treatment / reference per n, tested across n's with a paired t-test
-   on log ratios (as in the analysis). Its noise per n is the biological part plus a measurement
-   part that more wells and fields shrink.
-3. With 3–4 n's every estimate of variation is uncertain, so every prediction comes as
+2. The main result is the ratio treatment / reference per n. Its noise per n is the biological part plus a
+   measurement part that more wells and fields shrink.
+3. **Power means the chance of a star on the headline plot** (`[planner] adjust_for_family = true`, the
+   default): the statistics adjust every comparison vs a reference for the whole family (single-step
+   multivariate t over all other conditions, `models._mvt_adjust`), so the planner uses the same adjusted
+   critical value. With 8 conditions and 4 n's it is about 3.6 instead of 3.18 for one unadjusted test, so
+   power is lower and the smallest detectable effect larger than an unadjusted paired t-test suggests
+   (on the current DAPI data 34 instead of 23 n's for ratio 0.7). `adjust_for_family = false` (or the
+   toggle on the planner page) gives the old answer: one unadjusted paired t-test of the per-n ratios.
+4. With 3–4 n's every estimate of variation is uncertain, so every prediction comes as
    **pessimistic / expected / optimistic**. Plan with the pessimistic number when it matters.
-4. The number of n's is usually the bottleneck: the t critical value is 12.7 at 2 n's, 4.30 at 3,
-   3.18 at 4, 2.78 at 5, and extra images cannot remove the biological part.
+5. The number of n's is usually the bottleneck: the critical value is 12.7 at 2 n's, 4.30 at 3,
+   3.18 at 4, 2.78 at 5 for one unadjusted test (higher for a star), and extra images cannot remove the
+   biological part.
+6. **One plan per cell line.** Cell lines are never pooled (as in the statistics): with several lines in a
+   generation, `sampling/gN/<line>/` holds one plan each (index: `sampling/gN/cell_lines.json`) and the planner
+   page shows a cell-line selector. n's left out of the statistics by **enforced** acceptance criteria
+   (`[acceptance] enforce = true`) are left out of the plan too (listed in REPORT.txt and on the page).
 
 ## The model
 
@@ -58,7 +69,7 @@ cannot be separated; all of it is counted as well.
 
 For reference `r` and a **class** of treatments, `d_nt = log(mean_t / mean_r)` per n. Classes come
 from `[analysis] classes`, with the same rule as the statistics (`models.config`): the default `"auto"` = one
-class per non-control treatment, references (`reference` + `normalise_to`) pooled as `controls`; a table
+class per treatment, every reference (`reference` + `normalise_to`) included as its own class; a table
 (class → names or glob patterns, e.g. `mirna = ["miR-*"]`) = those classes; `{}` = references vs everything
 else (`treatments`). With `"auto"`, generic planning effects (`planning 0.7`, the cost analysis) use the
 `default_class` = the treatment whose biological variance vs the main reference is the (upper) median, noted in
@@ -72,6 +83,11 @@ n + treatment fit (missing cells allowed):
 
     V = MS_n / t̄ + (1 − 1/t̄) MS_e      t̄ = cells per n,  df_n = N − 1,  df_e = cells − N − T + 1
     df(V) = V² / ((MS_n/t̄)²/df_n + ((1 − 1/t̄) MS_e)²/df_e)        (Satterthwaite)
+
+`V` itself is always the pooled within-treatment variance; the split into the n part and the interaction part
+only sets its uncertainty (pivots, df). With missing cells the interaction part `(1 − 1/t̄) MS_e` can exceed the
+pooled `V`; it is then scaled down to `V` (n part ≈ 0; `split_clipped` in `bio`), so the pivots stay centred on
+the pooled variance instead of inflating it.
 
 Pooling treatments that share a reference this way is honest about their correlation: the shared
 part has only N − 1 df. A class with one treatment uses its own variance (df = pairs − 1).
@@ -93,13 +109,33 @@ pessimistic predictions stay honest when 3–4 n's happen to look similar.
 N n's, w wells × k fields per treatment, w_r wells per reference:
 
     V(w, k, w_r) = σ²_bio + σ²_well (1/w + 1/w_r) + σ²_f (1/(w k) + 1/(w_r k))
-    power        = P(|T| > t_{1−α/2, N−1}),  T ~ noncentral t(df = N − 1, nc = |log effect| / sqrt(V/N))
-    CI half-width (95%, on the ratio) = exp(t_{0.975, N−1} sqrt(V/N)) − 1      reported as ±x %
-    MDE (ratio, target power)        = exp(−nc* sqrt(V/N)),  nc* solves power(nc*, N−1) = target
+    power        = P(|T| > c),  T ~ noncentral t(df, nc = |log effect| / sqrt(V/N))
+    CI half-width (95%, on the ratio) = exp(t_{0.975, df} sqrt(V/N)) − 1      reported as ±x % (one comparison)
+    MDE (ratio, target power)        = exp(−nc* sqrt(V/N)),  nc* solves P(|T| > c; df, nc*) = target
+
+**The test behind c and df** (`planner.family_test`):
+
+- `adjust_for_family = true` (default; power for a **star**): the mixed-model contrast at the family's
+  single-step multivariate-t level, as the stars. k = conditions − 1 comparisons vs the reference share the
+  reference, so they are correlated: `ρ = S / V`, with `S` = the reference's part of V (its own n-to-n
+  variance `ref_bio` plus its measurement part at the design). `ref_bio` = the mean covariance across n's of
+  the log ratios of different treatments vs that reference (`shared_variance`) minus the reference's
+  measurement part. `c = family_critical(k, ρ, df)` solves P(max |T_i| < c) = 1 − α for k equicorrelated t's
+  (quadrature; matches `models._mvt_adjust` to < 0.01). df = Satterthwaite of the treatment part (V − S) and
+  the reference part (S), each with N − 1 df, i.e. between N − 1 and 2 (N − 1), the containment df of the
+  models with one class per treatment.
+- `adjust_for_family = false`: one unadjusted paired t-test of the per-n log ratios, `c = t_{1−α/2, N−1}`,
+  df = N − 1 (each n contributes one log ratio). This is *not* the chance of a star.
+
+Every table and the report use the same test as `evaluate` (`design_forward.csv`, `mde.csv`, n's needed in
+REPORT.txt, `allocation.csv`, the position comparison); the grids round ρ to 0.05 and df to 0.5 (< 0.5% change
+in c). Check against the real thing (slow test `test_adjusted_power_predicts_the_share_of_stars`): plan built
+from 40 simulated n's, then 80 data sets of 4 n's analysed by the mixed model: share of stars 0.14, planner
+power for a star 0.19 (band 0.13–0.25), unadjusted planner power 0.32.
+`more_n.csv` (section below) stays the unadjusted paired t-test of one treatment (labelled so).
 
 The ±x% CI means: upper limit = ratio × (1 + x/100), lower limit = ratio / (1 + x/100).
-The paired test has df = N − 1 because each n contributes one log ratio; n's missing the reference
-are left out of that reference's comparisons (as in the analysis).
+n's missing the reference are left out of that reference's comparisons (as in the analysis).
 
 ### Cost / effort
 
@@ -137,7 +173,7 @@ then test once. They are planning information, not a stopping rule. The posterio
 observed mean of few n's, so an effect seen by chance can look promising: treat high probabilities for
 small observed effects with caution.
 
-## Outputs (`sampling/gN/`, next to the sampling files)
+## Outputs (`sampling/gN/`, next to the sampling files; `sampling/gN/<cell line>/` with several lines)
 
 | file | content |
 |---|---|
@@ -150,7 +186,8 @@ small observed effects with caution.
 | `more_n.csv` | predicted probability of p < α after k more n's |
 | `variance_components.png`, `power_vs_n.png`, `ci_width_vs_fields.png`, `cost_frontier.png`, `more_n.png` | plots (+ PDF) |
 | `manifest.json` | `{"files": [{path, kind, title, description, pdf?}]}` for every file in the folder |
-| `REPORT.txt` | now starts with **Recommendations for the next experiment** |
+| `REPORT.txt` | now starts with **Recommendations for the next experiment** (which test the power is for; the cell line and any n's left out by enforced acceptance) |
+| `cell_lines.json` | only with several cell lines: `{cell_lines: [{cell_line, path, n_count}], excluded_ns}` |
 
 "low/mid/high" are in numeric order: `power_low` is the pessimistic power, `ci_halfwidth_pct_high`
 the pessimistic width, `mde_ratio_low` the pessimistic (smallest) detectable ratio.
@@ -193,6 +230,7 @@ wells have condition `""`), `platemap.render(df, path)`, `platemap.edge_usage(pl
 | `plate_format` | `24` | 6, 12, 24, 48 or 96 |
 | `avoid_edge` | `true` | plate maps: inner wells first |
 | `reference_wells` | `"auto"` | wells per reference; `"auto"` = Dunnett √k |
+| `adjust_for_family` | `true` | power / MDE for a star on the headline plot (family-adjusted); `false` = one unadjusted paired t-test |
 
 `[analysis] classes` (owned by the statistics settings) is read if present.
 
@@ -203,18 +241,21 @@ Pure functions, no file writes. `evaluate` takes well under 5 ms (tested < 50 ms
 ```python
 from kerncount import planner
 
-plan = planner.load(project_dir, generation=None)       # reads sampling/<gN>/planner.json (latest if None)
+plan = planner.load(project_dir, generation=None,       # reads sampling/<gN>/planner.json (latest if None)
+                    cell_line=None)                     # several cell lines: sampling/<gN>/<line>/ (default: first)
 
 r = planner.evaluate(plan, n=5, wells=2, fields=6, effect=0.7,   # or effect="miR-132-5p" (observed ratio)
                      reference_wells=None,               # None = wells; "auto" = Dunnett; or an int
                      alpha=0.05, target_power=0.8,
                      reference=None,                     # default: plan["design"]["main_reference"]
                      cls=None,                           # default: plan["default_class"]
-                     positions=None)                     # "standardised" | "random"; default from [design]
+                     positions=None,                     # "standardised" | "random"; default from [design]
+                     adjust_for_family=None)             # None = [planner] adjust_for_family (default true)
 # r = {n, wells, fields, reference_wells, effect_ratio, effect_label, reference, cls, positions,
 #      power: {low, mid, high}, ci_halfwidth_pct: {low, mid, high}, mde_ratio: {low, mid, high},
-#      sd_log_ratio: {low, mid, high}, measurement_share, cost, images, wells_per_n, t_critical,
-#      notes: [plain-language strings]}
+#      sd_log_ratio: {low, mid, high}, measurement_share, cost, images, wells_per_n,
+#      t_critical, df, adjust_for_family, family_size, family_correlation, t_critical_unadjusted,
+#      test: plain description of the test, notes: [plain-language strings]}
 
 pts = planner.curve(plan, vary="n", fixed={"wells": 2, "fields": 6}, effect=0.7, values=None, **evaluate_kwargs)
 # vary: "n" | "wells" | "fields" | "reference_wells"; returns [{"x": value, **evaluate(...)}, ...]
@@ -232,6 +273,8 @@ Useful parts of `planner.json`:
 | `options`, `costs` | `[planner]` settings, cost unit |
 | `summaries` | `cost` (frontier cheapest designs, optimum k*, w*), `allocation`, `more_n` (incl. optional-stopping false positive rate), `positions`, `missing_reference`, `focus_effect` |
 | `draws` | 1000 joint GPQ draws of `field, position, well` and `bio["<ref>|<class>"]` (used for bands) |
+| `ref_bio`, `ref_shared` | per reference: its own n-to-n variance, and the shared covariance / measurement part it comes from (family correlation) |
+| `cell_line`, `excluded_ns` | what the plan is based on (one cell line; n's left out by enforced acceptance) |
 | `notes` | plain-language caveats |
 
 ## Assumptions and limits
@@ -239,7 +282,10 @@ Useful parts of `planner.json`:
 - Log-normal-ish counts, delta method (relative variance ≈ log-scale variance); fine for CVs up to
   ~70% per field because predictions concern means of many fields.
 - Classes share one biological variance; a treatment with a much more variable response than its
-  class is under-predicted. Per-treatment raw values are in `effects.csv` / `planner.json`.
+  class is under-predicted ("auto" avoids this: one class per treatment). Per-treatment raw values are in
+  `effects.csv` / `planner.json`.
+- The family adjustment assumes equal correlation between the comparisons (the planned class's V for all of
+  them) and plans for one comparison; the other comparisons' effects do not change its critical value.
 - Planning effects are taken as true effects; observed effects from few n's are usually too large.
 - The position pattern is assumed shared by all wells of a plate (true on the current data);
   standardised positions assume the same spots in treatment and reference wells.

@@ -619,7 +619,7 @@ def _build_into(out: Path, project: Path, gen: dict, image_table: pd.DataFrame, 
                    classes_mode=cfg_all.classes_mode,
                    positive_control=cfg_all.positive_control or None,
                    vehicle_check=[f"{v} vs {c}" for v, c in cfg_all.vehicle_pairs],
-                   equivalence_margin=cfg_all.margin)
+                   equivalence_margin=cfg_all.margin, equivalence_margin_pp=cfg_all.margin_pp)
     extra = dict(
         model_unit=unit,
         estimands={m: (lambda met_: dict(effect=metrics_mod.estimand(met_, unit),

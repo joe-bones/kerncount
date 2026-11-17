@@ -95,6 +95,7 @@ DEFAULTS: dict = {
         "primary_family": "",  # control whose comparisons are the main claim; "" = `reference`
         "vehicle_check": "auto",  # equivalence test, e.g. "LyoVec vs Control"; "auto" = other controls vs reference; "" = off
         "equivalence_margin": 0.2,  # vehicle check: ratio must lie within [1/1.2, 1.2] to call it equivalent
+        "equivalence_margin_pp": 5.0,  # vehicle check of fractions (% positive): difference within +-5 points
         "positive_control": "",  # e.g. "CL075": every non-control treatment is also compared with it
         "model_unit": "well",  # all-n model unit: "well" (mean per field of each well; ratios of means) or "field"
         "classes": "auto",  # own n x treatment variance per class: "auto" = one per treatment, each control
@@ -226,7 +227,8 @@ exclude_low_qc = false
 primary_test = "mixed"               # what drives the stars: "mixed" (hierarchical model on the log scale) or "rm_anova"
 primary_family = ""                  # control whose comparisons are the main claim, e.g. "LyoVec"; "" = reference
 vehicle_check = "auto"               # equivalence test, e.g. "LyoVec vs Control"; "auto" = other controls vs reference; "" = off
-equivalence_margin = 0.2             # equivalent = ratio (90% CI) within [1/1.2, 1.2]
+equivalence_margin = 0.2             # equivalent = ratio (90% CI; Holm-matched with several pairs) within [1/1.2, 1.2]
+equivalence_margin_pp = 5.0          # fractions (% positive): equivalent = difference within +-5 percentage points
 positive_control = ""                # e.g. "CL075": every non-control treatment is also compared with it
 model_unit = "well"                  # model unit: "well" (well mean per field; ratios of mean nuclei per field) or "field"
 classes = "auto"                     # own n-to-n variance per class: "auto" = one per treatment, each control
