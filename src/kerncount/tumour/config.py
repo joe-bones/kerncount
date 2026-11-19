@@ -10,6 +10,9 @@ from dataclasses import dataclass, field
 
 ROLES = ("row", "panel", "x", "colour")
 SOURCES = ("filename", "session")
+EFFECTS = ("simple", "interaction")  # simple effect of one factor / interaction of several, within cells of the rest
+FAMILY_ROLES = ("confirmatory", "exploratory", "descriptive")
+READOUT_ROLES = ("confirmatory", "exploratory")
 
 DEFAULTS: dict = {
     "smooth_sigma_um": 2.0,  # Gaussian smoothing before thresholding (physical scale, same for every tumour)
@@ -22,6 +25,34 @@ DEFAULTS: dict = {
          "source": "filename", "aliases": {}},
         {"name": "clodronate", "levels": ["-clodro", "+clodro"], "reference": "-clodro", "role": "panel",
          "source": "filename", "aliases": {"-clodron": "-clodro"}},
+    ],
+    # Readouts analysed by the factorial statistics (ADR 0003): column in tumours.csv + confirmatory/exploratory.
+    # Only confirmatory readouts in confirmatory families carry significance stars.
+    "readouts": [
+        {"name": "main_mass_volume", "column": "main_mass_volume_mm3", "label": "Main-mass volume (mm³)",
+         "role": "confirmatory"},
+    ],
+    # Factor whose reference level normalised values are expressed against ("" = the factor with role x).
+    "normalise_by": "",
+    # Contrast families (ADR 0003 amendment), Holm within each family and readout. effect = "simple": each level of
+    # the factor vs its reference within every cell of the other factors; "interaction": ratio of ratios of the listed
+    # factors (each non-reference vs reference) within every cell of the rest. role = confirmatory (stars),
+    # exploratory (p-values, no stars) or descriptive (estimate + CI only, never tested).
+    "families": [
+        {"id": "F1", "effect": "simple", "factors": ["tumour_line"], "role": "confirmatory",
+         "label": "tumour line vs cntrl within genotype × clodronate"},
+        {"id": "F2", "effect": "simple", "factors": ["clodronate"], "role": "confirmatory",
+         "label": "+clodro vs −clodro within genotype × tumour line"},
+        {"id": "F3", "effect": "interaction", "factors": ["tumour_line", "clodronate"], "role": "exploratory",
+         "label": "tumour line × clodronate interaction within genotype"},
+        {"id": "F4", "effect": "interaction", "factors": ["genotype", "tumour_line"], "role": "confirmatory",
+         "label": "genotype × tumour line (ratio of line effects) within clodronate"},
+        {"id": "F5", "effect": "interaction", "factors": ["genotype", "clodronate"], "role": "exploratory",
+         "label": "genotype × clodronate (ratio of clodronate effects) within tumour line"},
+        {"id": "F6", "effect": "simple", "factors": ["genotype"], "role": "descriptive",
+         "label": "direct TLR7 KO vs WT within tumour line × clodronate"},
+        {"id": "F7", "effect": "interaction", "factors": ["genotype", "tumour_line", "clodronate"],
+         "role": "exploratory", "label": "three-way interaction"},
     ],
 }
 
@@ -66,6 +97,66 @@ reference = "-clodro"
 role = "panel"
 source = "filename"
 aliases = {{ "-clodron" = "-clodro" }}
+
+# Statistics (ADR 0003): LOCKED before results are viewed — the run records a hash of factors, readouts and families.
+# Readouts: column in tumours.csv; role = "confirmatory" (stars) or "exploratory" (effect sizes, labelled).
+[[tumour.readouts]]
+name = "main_mass_volume"
+column = "main_mass_volume_mm3"
+label = "Main-mass volume (mm³)"
+role = "confirmatory"
+
+# Contrast families, Holm within each. effect = "simple" (each level of the factor vs its reference, within every
+# combination of the other factors) or "interaction" (ratio of ratios of the listed factors, within the rest; the last
+# factor is the inner ratio). role = confirmatory / exploratory / descriptive (never tested).
+[[tumour.families]]
+id = "F1"
+effect = "simple"
+factors = ["tumour_line"]
+role = "confirmatory"
+label = "tumour line vs cntrl within genotype × clodronate"
+
+[[tumour.families]]
+id = "F2"
+effect = "simple"
+factors = ["clodronate"]
+role = "confirmatory"
+label = "+clodro vs −clodro within genotype × tumour line"
+
+[[tumour.families]]
+id = "F3"
+effect = "interaction"
+factors = ["tumour_line", "clodronate"]
+role = "exploratory"
+label = "tumour line × clodronate interaction within genotype"
+
+[[tumour.families]]
+id = "F4"
+effect = "interaction"
+factors = ["genotype", "tumour_line"]
+role = "confirmatory"
+label = "genotype × tumour line (ratio of line effects) within clodronate"
+
+[[tumour.families]]
+id = "F5"
+effect = "interaction"
+factors = ["genotype", "clodronate"]
+role = "exploratory"
+label = "genotype × clodronate (ratio of clodronate effects) within tumour line"
+
+[[tumour.families]]
+id = "F6"
+effect = "simple"
+factors = ["genotype"]
+role = "descriptive"
+label = "direct TLR7 KO vs WT within tumour line × clodronate"
+
+[[tumour.families]]
+id = "F7"
+effect = "interaction"
+factors = ["genotype", "tumour_line", "clodronate"]
+role = "exploratory"
+label = "three-way interaction"
 '''
 
 
@@ -117,3 +208,63 @@ def factors(settings: dict) -> list[Factor]:
             raise ValueError(f"[tumour.factors] {name}: aliases point to unknown levels {bad}")
         out.append(Factor(name, levels, ref, role, source, aliases))
     return out
+
+
+@dataclass(frozen=True)
+class Readout:
+    """One analysed readout: `column` in tumours.csv, a short `name` for file names, a plot `label` and its role."""
+    name: str
+    column: str
+    label: str
+    role: str = "exploratory"
+
+
+@dataclass(frozen=True)
+class Family:
+    """One contrast family (ADR 0003 amendment): `effect` of `factors`, within every cell of the other factors."""
+    id: str
+    effect: str
+    factors: tuple[str, ...]
+    role: str
+    label: str = ""
+
+
+def readouts(settings: dict) -> list[Readout]:
+    out = []
+    for r in tumour_settings(settings)["readouts"]:
+        col = str(r["column"])
+        name = str(r.get("name") or col)
+        role = str(r.get("role", "exploratory"))
+        if role not in READOUT_ROLES:
+            raise ValueError(f"[tumour.readouts] {name}: role {role!r} must be one of {', '.join(READOUT_ROLES)}")
+        out.append(Readout(name, col, str(r.get("label") or name), role))
+    return out
+
+
+def families(settings: dict) -> list[Family]:
+    """Declared contrast families, validated for shape. Factor names are checked against the factors by the caller
+    (`families.usable`), so a family on an undeclared factor is reported, not silently dropped."""
+    out = []
+    for f in tumour_settings(settings)["families"]:
+        fid = str(f["id"])
+        effect, role = str(f.get("effect", "simple")), str(f.get("role", "exploratory"))
+        fs = tuple(str(x) for x in f.get("factors") or ())
+        if effect not in EFFECTS:
+            raise ValueError(f"[tumour.families] {fid}: effect {effect!r} must be one of {', '.join(EFFECTS)}")
+        if role not in FAMILY_ROLES:
+            raise ValueError(f"[tumour.families] {fid}: role {role!r} must be one of {', '.join(FAMILY_ROLES)}")
+        if not fs or (effect == "simple" and len(fs) != 1) or (effect == "interaction" and len(fs) < 2):
+            raise ValueError(f"[tumour.families] {fid}: a simple effect names one factor, an interaction two or more")
+        out.append(Family(fid, effect, fs, role, str(f.get("label", ""))))
+    return out
+
+
+def normalise_by(settings: dict, facs: list[Factor]) -> Factor | None:
+    """The focus factor for normalised values: `[tumour] normalise_by`, else the factor plotted on x."""
+    name = str(tumour_settings(settings).get("normalise_by") or "")
+    if name:
+        f = next((f for f in facs if f.name == name), None)
+        if f is None:
+            raise ValueError(f"[tumour] normalise_by = {name!r} is not a declared factor")
+        return f
+    return next((f for f in facs if f.role == "x"), facs[0] if facs else None)

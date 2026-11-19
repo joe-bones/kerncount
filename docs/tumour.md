@@ -2,8 +2,9 @@
 
 mCherry tumours in brain sections, imaged as z-stacks. One **tumour** (hemisphere A or B of a section) is one n.
 Vocabulary: `CONTEXT.md` (Tumour experiments). Decisions: ADR 0002 (measurement), 0003 (statistics), 0004 (types,
-factor tables). Status: tracer bullet (ticket 02) — layout, primary segmentation, main-mass volume, one group plot.
-Statistics, shape readouts, QC flags, Fiji legacy readout and validation follow in tickets 03–07.
+factor tables). Status: layout, primary segmentation, main-mass volume (ticket 02) and the pre-registered factorial
+statistics with group, forest and interaction plots (ticket 04). Shape readouts, QC flags, Fiji legacy readout and
+sensitivity models follow in tickets 05–08.
 
 ## Quick start
 ```
@@ -89,10 +90,69 @@ light is the open question for the threshold sweep and Fiji concordance (ticket 
 ## Outputs
 - `layout.csv` (init), `tumours.csv` — one row per included tumour: factor columns, imaging session, IDs, voxel
   size, `n_layers`, main-mass volume (µm³, mm³), threshold method / value / levels, satellites, saturation fractions.
-- `plots/main_mass_volume_absolute.png|pdf` — one row of panels per genotype present, −/+clodro panels, tumour
-  line on x, every tumour a dot, geometric-mean line, n under each group, log y. No statistics yet (ticket 04).
+- Statistics outputs (see **Statistics** below), per readout `<name>` (e.g. `main_mass_volume`):
+  - `plots/<name>_absolute.png|pdf` — one row of panels per genotype present, −/+clodro panels, tumour line on x,
+    every tumour a dot, model geometric mean with 95 % CI, n under each group, log y.
+  - `plots/<name>_normalised.png|pdf` — the same as % of the model-estimated cntrl in the same genotype and
+    clodronate level (dashed line = 100 %); bars = the F1 fold-change CI × 100, stars from F1 (Holm).
+  - `plots/<name>_forest.png|pdf` — every contrast grouped by family, fold-change and 95 % CI on a log axis, with
+    stars / labels (exploratory, descriptive, confounded, needs … data).
+  - `plots/<name>_interaction.png|pdf` — model means (95 % CI): line on x, one line per clodronate level, one plot
+    per genotype.
+  - `prism/<name>_prism.csv` and `prism/<name>_pct_prism.csv` — Prism column tables, one column per group
+    (`TLR7 KO / HERV / -clodro`), one tumour per row (absolute / normalised %).
+- `stats_long.csv` — every estimated mean and contrast in kerncount's long stats format (`docs/statistics.md`):
+  `level = all_n`, `metric` = readout name, `family` = F1…F7 / `estimated means`, `estimate_type = ratio`, Holm `p_adj`,
+  `significance`, `note` (family role, labels, `lock <hash>`).
+- `results.xlsx` — sheets About (analysis plan, lock hash, levels without data), Tumours (tumours.csv + `<name>_pct`
+  columns), Statistics (= stats_long), Estimated means (absolute and % of reference with CIs), Families.
+- `stats_report.md` — the locked plan (readout split, families) and one table per readout and family.
 - `_work/tumour/<slug>.json` + `<slug>.labels.tif` — cache per tumour (zlib uint8/uint16 labels, ~1 MB for the
   largest stack). Re-runs reuse it unless the file or the segmentation settings changed; `--resegment` forces it.
+
+## Statistics (ADR 0003 + amendment)
+**Model.** For each readout: one linear model on log(readout) with one mean per **cell** (combination of all
+declared factor levels = full N-way interaction) and one residual variance pooled across all cells, fitted with
+whatever cells are present (one genotype today). Tumours are independent n's. A contrast is a set of weights on cell
+means; `exp` gives a fold-change (ratio of geometric means) or a ratio of fold-changes, with a 95 % t-CI on the pooled
+residual df (tumours − cells). With every group n = 1 there is no residual df: estimates only, nothing tested.
+
+**Readouts** (`[[tumour.readouts]]`: `name`, `column` in tumours.csv, `label`, `role` = `confirmatory` /
+`exploratory`). Adding a readout (ticket 05) = add the column to the table and a settings entry; nothing in the
+statistics knows readout names. Declared readouts missing from the table are reported, not fatal.
+
+**Families** (`[[tumour.families]]`: `id`, `effect`, `factors`, `role`, `label`) are generic over factor names:
+- `effect = "simple"`, one factor X: each non-reference level of X vs the reference, within every combination of the
+  other factors (`HERV vs cntrl | TLR7 KO, -clodro`);
+- `effect = "interaction"`, factors X1…Xk: the product of (non-reference − reference) over the listed factors, within
+  every combination of the rest. Two factors = ratio of ratios, the last factor the inner ratio:
+  `(HERV / cntrl in TLR7 KO) ÷ (HERV / cntrl in WT) | -clodro`.
+
+| default | effect | role |
+|---|---|---|
+| F1 | simple, tumour_line (within genotype × clodronate) | confirmatory |
+| F2 | simple, clodronate (within genotype × line) | confirmatory |
+| F3 | interaction tumour_line × clodronate (within genotype) | exploratory |
+| F4 | interaction genotype × tumour_line (within clodronate) | confirmatory |
+| F5 | interaction genotype × clodronate (within line) | exploratory |
+| F6 | simple, genotype (within line × clodronate) | descriptive |
+| F7 | interaction genotype × line × clodronate | exploratory |
+
+**Rules.** Holm within each family and readout, over the contrasts that are tested. Stars only for confirmatory
+families of confirmatory readouts; exploratory families/readouts get p and Holm p but no stars and are labelled;
+descriptive families show estimate + CI only. **Imaging session:** a contrast whose weights do not cancel within every
+imaging session (a multiplicative day shift would move it) is labelled "confounded with imaging session" and never
+tested — direct WT vs KO (F6) is; within-session ratios and ratios of them (F1–F5, F7) are not. **Missing levels:**
+contrasts needing cells without tumours stay in every table, labelled `needs WT data` (whole level absent) or
+`needs data for <group>`. A family naming an undeclared factor is skipped with a note.
+
+**Normalised values** (`[tumour] normalise_by`, default the factor on x): % of the model-estimated reference level
+(cntrl) in the same cell of all other factors. Reference tumours scatter around 100 % (their geometric mean is exactly
+100 %); a group's normalised estimate and CI equal its F1 fold-change × 100.
+
+**Lock.** The analysis plan (factors + levels + references, readouts + roles, families, normalise_by) is hashed
+(`lock <12 hex>`); the hash is in every stats_long note, the workbook's About sheet and `stats_report.md`. Change the
+plan only before results are viewed; a different hash means a different plan.
 
 ## Memory
 One stack at a time: uint8 stack + float32 smoothed copy, then mask + int32 labels; peak ≈ 10 × the stack size

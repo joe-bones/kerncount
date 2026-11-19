@@ -90,9 +90,7 @@ class TumourVolume(ExperimentType):
         return t
 
     def analyse(self, project_dir: Path, table: pd.DataFrame, settings: dict, options: RunOptions) -> None:
-        from . import plots
-        from .config import factors
+        from . import results
 
-        out = plots.group_plot(table, factors(settings), "main_mass_volume_mm3", "Main-mass volume (mm³)",
-                               Path(project_dir) / "plots" / "main_mass_volume_absolute")
-        print(f"Wrote {Path(project_dir) / 'tumours.csv'} and {out}")
+        written = results.analyse(Path(project_dir), table, settings)
+        print(f"Wrote {Path(project_dir) / 'tumours.csv'}, " + ", ".join(written))
