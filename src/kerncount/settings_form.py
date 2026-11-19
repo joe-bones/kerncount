@@ -30,7 +30,8 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
     "experiment": {
         "type": dict(kind="choice", options=sorted(experiment_types.TYPES), label="Experiment type",
                      help="How the raw data are found, measured and analysed. cell_count = nuclei and marker intensity "
-                          "on plates. After changing it, scan the raw folder again (init with a fresh layout)."),
+                          "on plates; tumour_volume = mCherry tumour z-stacks (one tumour = one n, docs/tumour.md). "
+                          "After changing it, scan the raw folder again (init with a fresh layout)."),
         "cell_line": dict(kind="text", label="Cell line",
                           help="e.g. LN229. Experiments (n's) of different cell lines are never pooled. Override per n "
                                "or condition with a cell_line column in layout.csv."),

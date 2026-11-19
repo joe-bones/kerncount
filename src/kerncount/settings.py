@@ -313,10 +313,11 @@ def backup(project_dir: Path, name: str) -> Path | None:
     return dst
 
 
-def write_template(project_dir: Path, raw_dir: Path) -> Path | None:
+def write_template(project_dir: Path, raw_dir: Path, template: str | None = None) -> Path | None:
     """raw_dir is stored relative to the project folder when possible, so a workspace can be moved. Symlinks are
     NOT resolved: a data/<experiment> link to a folder elsewhere is stored as ../../data/<experiment>, so the link
-    (not its current target) stays the source of truth. An existing settings.toml is backed up first."""
+    (not its current target) stays the source of truth. An existing settings.toml is backed up first.
+    `template` (with a {raw_dir} field): an experiment type's own settings template; default TEMPLATE."""
     import os
 
     raw_abs, prj_abs = os.path.abspath(raw_dir), os.path.abspath(project_dir)
@@ -328,7 +329,7 @@ def write_template(project_dir: Path, raw_dir: Path) -> Path | None:
     bk = backup(project_dir, "settings.toml")
     from .fileio import atomic_write
 
-    atomic_write(Path(project_dir) / "settings.toml", TEMPLATE.format(raw_dir=raw))
+    atomic_write(Path(project_dir) / "settings.toml", (template or TEMPLATE).format(raw_dir=raw))
     return bk
 
 

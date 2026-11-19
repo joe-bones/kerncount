@@ -74,15 +74,28 @@ def _experiment_type(s: dict):
         sys.exit(str(e))
 
 
-def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False):
-    from . import discover, settings
+def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False, etype_name: str | None = None):
+    from . import discover, experiment_types, settings
 
+    new_type = None
+    if etype_name:
+        try:
+            new_type = experiment_types.get(etype_name)
+        except experiment_types.UnknownExperimentType as e:
+            sys.exit(str(e).replace("settings.toml [experiment] type", "--type"))
     prj.mkdir(parents=True, exist_ok=True)
     if (prj / "settings.toml").exists() and not force:
+        current = _experiment_type(settings.load(prj))
+        if new_type is not None and new_type.name != current.name:
+            sys.exit(f"settings.toml in {prj} is for type {current.name!r}; use --force to reset it to "
+                     f"--type {new_type.name}")
         print(f"settings.toml already exists in {prj} (kept). Use --force to reset it.")
     else:
         had = (prj / "settings.toml").exists()
-        settings.write_template(prj, raw)  # backs up an existing settings.toml to _work/backups/ first
+        template = new_type.settings_template() if new_type is not None else None
+        if new_type is not None and template is None:  # a type without its own template: default + type line
+            template = settings.TEMPLATE.replace('type = "cell_count"', f'type = "{new_type.name}"', 1)
+        settings.write_template(prj, raw, template)  # backs up an existing settings.toml to _work/backups/ first
         if had:
             print(f"settings.toml reset to the defaults; the previous version is kept in {settings.BACKUPS}/")
     s = settings.load(prj)
@@ -107,7 +120,7 @@ def cmd_init(a):
         ws = workspace_root() or sys.exit("--all needs a workspace: run from a folder that contains data/")
         for exp in _experiments(ws):
             print(f"\n=== {exp}")
-            _init_one(ws / DATA / exp, ws / ANALYSIS / exp, a.force, a.force_layout)
+            _init_one(ws / DATA / exp, ws / ANALYSIS / exp, a.force, a.force_layout, a.type)
         return
     if not a.raw_dir:
         sys.exit("give an experiment name (from data/), a raw folder, or --all")
@@ -119,7 +132,7 @@ def cmd_init(a):
         # data/<name> may be a symlink to a folder elsewhere: the project still belongs in this workspace
         in_ws = ws and (raw.parent == (ws / DATA).resolve() or (ws / DATA / raw.name).resolve() == raw)
         prj = (ws / ANALYSIS / raw.name) if in_ws else raw.parent.parent / ANALYSIS / raw.name
-    _init_one(raw, prj, a.force, a.force_layout)
+    _init_one(raw, prj, a.force, a.force_layout, a.type)
 
 
 def _projects(a) -> list[Path]:
@@ -204,6 +217,8 @@ def main(argv=None):
     i.add_argument("--force", action="store_true", help="overwrite settings.toml and layout.csv")
     i.add_argument("--force-layout", action="store_true",
                    help="keep settings.toml, rewrite layout.csv (e.g. after setting [channels] files = \"interleaved\")")
+    i.add_argument("--type", default=None, metavar="NAME",
+                   help="experiment type of a new project, e.g. tumour_volume (default: cell_count)")
     i.set_defaults(func=cmd_init)
     r = sub.add_parser("run", help="count, check, and analyse (safe to re-run any time)")
     r.add_argument("project", nargs="?", help="experiment name, or a project folder path")

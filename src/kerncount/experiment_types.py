@@ -39,6 +39,10 @@ class ExperimentType:
     name: ClassVar[str]
     label: ClassVar[str]
 
+    def settings_template(self) -> str | None:
+        """The type's own settings.toml template for `kerncount init --type` (a {raw_dir} field); None = default."""
+        return None
+
     def scan_layout(self, raw: Path, settings: dict) -> pd.DataFrame:
         """Layout parsing: read the raw folder (never modify it) into layout.csv rows."""
         raise NotImplementedError
@@ -138,3 +142,6 @@ class CellCount(ExperimentType):
         from . import pipeline
 
         pipeline.run(project_dir, rebuild=options.rebuild, resegment=options.resegment, no_review=options.no_review)
+
+
+from .tumour import etype as _tumour_etype  # noqa: E402,F401  registers "tumour_volume"

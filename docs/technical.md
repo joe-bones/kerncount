@@ -195,6 +195,9 @@ above). A type is an `ExperimentType` subclass registered with `@register` and i
 `run()`, which chains measure → readout table → analyse. `cell_count` overrides `run()` to call `pipeline.run`
 unchanged (its stages are interleaved there). An unknown type stops with the list of valid types. Data system,
 backups and GUI are shared; other commands (`regen`, `sampling`, `platemap`, …) are cell-count only.
+`kerncount init <exp> --type <name>` writes that type's own settings template (`settings_template()`; default: the
+cell-count template with the type line changed). `tumour_volume` lives in the `kerncount.tumour` package (imported at
+the bottom of `experiment_types.py` so it is always registered); see [tumour.md](tumour.md).
 
 ## Tests
 `pip install -e .[test]` then `pytest`.
