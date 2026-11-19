@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import plots, sensitivity, stats
+from . import planner, plots, sensitivity, stats
 from .config import Factor, Family, Readout, factors, families, normalise_by, readouts
 
 MODEL = "N-way linear model on log(readout), full interaction, pooled variance"
@@ -106,6 +106,8 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
     all_res, all_means, written = [], [], []
     n_perm, seed = sensitivity.options(settings)
     all_sens: list[pd.DataFrame] = []
+    plans: list[pd.DataFrame] = []
+    pooled_sd: dict[str, float] = {}
     for ro in readouts(settings):
         if ro.column not in table.columns:
             notes.append(f"readout {ro.name}: column {ro.column} not in tumours.csv (not analysed)")
@@ -127,6 +129,10 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
         sens = sensitivity.readout_sensitivity(table, facs, fams, ro, res, n_perm, seed)
         stats_rows += sensitivity.long_rows(sens, ro, h)
         all_sens.append(sens)
+        if ro.role == "confirmatory":
+            fc, pw, alpha = planner.options(settings)
+            plans.append(planner.plan_readout(model, facs, fams, ro, fc, pw, alpha))
+            pooled_sd[ro.name] = float(np.sqrt(model.s2))
         written.append(str(sensitivity.residual_plot(sensitivity.groups(table, facs, ro.column), facs, ro.label,
                                                      out / "plots" / f"{ro.name}_residuals")))
         all_res.append(res)
@@ -144,6 +150,7 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
     _excel(out, lines, tum, stats_rows, all_means, fams)
     report = _report(out, lines, all_res)
     _sensitivity_outputs(out, report, all_sens, n_perm, seed)
+    _planning_outputs(out, report, plans, pooled_sd, planner.options(settings))
     print("\n".join(x for x in lines if x.startswith(("Tumour statistics", "Readouts", "Levels without", "NOTE"))))
     return [str(out / "stats_long.csv"), str(out / "results.xlsx"), str(report), *written]
 
@@ -155,6 +162,18 @@ def _sensitivity_outputs(out: Path, report: Path, sens: list[pd.DataFrame], n_pe
          ).to_excel(xw, sheet_name="Sensitivity", index=False)
     with report.open("a", encoding="utf-8") as fh:
         fh.write("\n" + "\n".join(sensitivity.report_lines(sens, n_perm, seed)) + "\n")
+
+
+def _planning_outputs(out: Path, report: Path, plans: list[pd.DataFrame], sd: dict[str, float],
+                      opts: tuple[float, float, float]) -> None:
+    """Ticket 09: 'Planning aid' sheets (family summary + per contrast) and a separate report section."""
+    rows = pd.concat(plans, ignore_index=True) if plans else pd.DataFrame(columns=planner.PLAN_COLUMNS)
+    summ = planner.summarise(rows)
+    with pd.ExcelWriter(out / "results.xlsx", engine="openpyxl", mode="a") as xw:
+        summ.to_excel(xw, sheet_name="Planning aid", index=False)
+        rows.to_excel(xw, sheet_name="Planning aid (contrasts)", index=False)
+    with report.open("a", encoding="utf-8") as fh:
+        fh.write("\n" + "\n".join(planner.report_lines(summ, sd, *opts)) + "\n")
 
 
 def _plots(out: Path, table: pd.DataFrame, tum: pd.DataFrame, facs: list[Factor], focus: Factor | None,

@@ -111,6 +111,8 @@ light is the open question for the threshold sweep and Fiji concordance (ticket 
   of the studentised residuals), sheet **Sensitivity** in `results.xlsx` (one row per contrast: Welch CI/df/p/Holm p,
   permutation p/Holm p, permutations, seed, `concordant`, `concordance`), stats_long rows with family
   `<id> (Welch-type)` / `<id> (permutation)` (never starred), and a `## Sensitivity` section in `stats_report.md`.
+- Planning aid (ticket 09; confirmatory readouts only, never in stats_long): sheets **Planning aid** (one row per
+  readout and family) and **Planning aid (contrasts)** in `results.xlsx`, section `## Planning aid` in the report.
 - `_work/tumour/<slug>.json` + `<slug>.labels.tif` — cache per tumour (zlib uint8/uint16 labels, ~1 MB for the
   largest stack). Re-runs reuse it unless the file or the segmentation settings changed; `--resegment` forces it.
 
@@ -173,6 +175,26 @@ twice; contrasts it does not test (confounded with imaging session, descriptive,
 - Holm within each family and readout, per method. **Concordant** = both methods reach the same Holm-adjusted
   conclusion at 0.05 as the primary model (direction always agrees: the point estimate is shared). A `no` means the
   conclusion depends on the pooled-variance assumption or on the t approximation — report it alongside.
+
+**Planning aid** (power planner; ADR 0003: never feeds confirmatory results; `tumour/planner.py`). From the pooled
+residual SD of the current data (log scale), per confirmatory readout and every family that is tested (descriptive
+families and contrasts confounded with imaging session are not planned):
+- **MDFC** — minimum detectable fold-change (up or down) of each contrast at the current group sizes with 80 % power
+  (`planner_power`), two-sided α = 0.05 per family (`planner_alpha`): SE = s·√(Σ w²/n), noncentral t on the current
+  residual df. The family row shows best – worst over its contrasts.
+- **Multiplicity:** Holm is approximated by **Bonferroni within family** (α / m, m = contrasts the family tests in the
+  full declared design, also those still needing data). Holm's first step is Bonferroni and later steps are less
+  strict, so for any one contrast Holm power ≥ Bonferroni power: the planner is conservative.
+- **Tumours per group** for `planner_fold_change` (default 1.5): *balanced* = every group of the design at k
+  (df = groups × (k − 1)); *top-up* = raise only the hardest contrast's groups below k, others unchanged. The
+  **limiting group** is the contrast's group with the largest share of its variance (the smallest; ties listed).
+- **Absent levels:** a contrast needing groups without tumours (F4 genotype × line with only KO imaged) has no MDFC
+  yet; its tumours-per-group are planned from the present data's variance with the note "assumes WT variance equals
+  that of TLR7 KO" (wording built from the factor levels).
+- Example (synthetic, 48 KO tumours in groups of 12/6 like the KO set, pooled SD 0.37 on log scale): F1 MDFC
+  1.75–2.21, F2 1.95–2.16; for 1.5× F1 needs 22 and F2 21 tumours per group; F4 needs 37–38 per group
+  in each genotype. Validated in `tests/test_tumour_planner.py` by simulation (power at the MDFC and at the planned
+  n ≈ 80 %, Bonferroni within family) and against the normal approximation at large df.
 
 **Lock.** The analysis plan (factors + levels + references, readouts + roles, families, normalise_by) is hashed
 (`lock <12 hex>`); the hash is in every stats_long note, the workbook's About sheet and `stats_report.md`. Change the

@@ -21,6 +21,10 @@ DEFAULTS: dict = {
     # Sensitivity models (ticket 08): random permutations per contrast (when not enumerated exactly) and their seed.
     "sensitivity_permutations": 9999,
     "sensitivity_seed": 20261119,
+    # Power planner (ticket 09, planning aid only): fold-change to plan for, target power, two-sided alpha per family.
+    "planner_fold_change": 1.5,
+    "planner_power": 0.8,
+    "planner_alpha": 0.05,
     "factors": [
         {"name": "genotype", "levels": ["WT", "TLR7 KO"], "reference": "WT", "role": "row", "source": "session",
          "aliases": {"KO7": "TLR7 KO", "KO": "TLR7 KO"}},
@@ -76,6 +80,7 @@ threshold = "intermedians"   # per-tumour automatic threshold without rolling ba
 min_object_um3 = 1000.0   # smaller connected objects are noise; larger ones besides the main mass are satellites
 sensitivity_permutations = 9999   # sensitivity: random permutations per contrast (exact enumeration when fewer splits)
 sensitivity_seed = 20261119       # seed of the permutations (recorded in the report; same seed = same p-values)
+planner_fold_change = 1.5         # power planner (planning aid): tumours per group needed to detect this fold-change
 
 # Factors: one column per factor in layout.csv. levels = allowed values, reference = comparison baseline,
 # role = where the factor goes in group plots (row, panel, x, colour), source = where the value is read
