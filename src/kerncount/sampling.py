@@ -28,6 +28,7 @@ import pandas as pd
 from scipy import stats
 
 from . import analysis
+from . import design as design_mod
 
 WELL_Z_FLAG = 2.5  # well pair flagged when its difference is this many field-noise SEs (two-sided p ~ 0.012)
 SHIFT_FLAG = 1.5  # n flagged when its treatment ratios are on average >1.5x or <1/1.5 of the across-n value...
@@ -35,24 +36,19 @@ SHIFT_AGREE = 0.8  # ...and at least 80% of treatments move in the same directio
 
 
 def design(settings: dict) -> tuple[int, int, str, list[str]]:
-    """(wells, fields_per_well, well_layout, notes). Accepts the old names plates / fields_per_plate / plate_layout."""
-    d = settings["design"]
-    notes = []
-    old = {"plates": "wells", "fields_per_plate": "fields_per_well", "plate_layout": "well_layout"}
-    vals = {}
-    for o, new in old.items():
-        if o in d:  # old names are no longer in the defaults, so their presence means the user's file uses them
-            vals[new] = d[o]
-            notes.append(f"settings.toml [design] uses the old name '{o}'; please rename it to '{new}'")
-        else:
-            vals[new] = d[new]
-    return int(vals["wells"]), int(vals["fields_per_well"]), vals["well_layout"], notes
+    """Backward-compatible wrapper around design.spec: (wells, fields_per_well, well_layout, notes) as fixed numbers.
+    "auto" is reported as the nominal 2 wells / 6 fields; the real per-condition design comes from design.assign."""
+    sp = design_mod.spec(settings)
+    w = design_mod.DEFAULT_WELLS if sp.wells == "auto" else sp.wells
+    k = 6 if sp.fields_per_well == "auto" else sp.fields_per_well
+    return int(w), int(k), sp.well_layout, sp.notes
 
 
 def well_of(image: int, fields_per_well: int, wells: int, layout: str) -> int:
+    """Backward-compatible: the well of one image under a fixed design (see design.assign for the real thing)."""
     if layout == "alternating":
-        return (image - 1) % wells + 1
-    return min((image - 1) // fields_per_well + 1, wells)
+        return design_mod._alternating(image, wells)[0]
+    return design_mod._consecutive(image, fields_per_well, wells)[0]
 
 
 def variance_components(df: pd.DataFrame) -> dict:
@@ -174,12 +170,17 @@ def batch_checks(df: pd.DataFrame, refs: list[str], cv2_field: float) -> tuple[p
 
 # ---------------------------------------------------------------- main
 def run(df: pd.DataFrame, settings: dict, out: Path, metric_label: str = "nuclei per field",
-        iterations: int = 1000, seed: int = 0) -> pd.DataFrame:
-    """df columns: n, treatment, image, value (excluded images already removed)."""
+        iterations: int = 1000, seed: int = 0, project_dir: Path | None = None) -> pd.DataFrame:
+    """df columns: n, treatment, image, value (excluded images already removed); a `well` column is used as is,
+    otherwise wells come from design.assign (project_dir: where wells.csv is read)."""
     out.mkdir(parents=True, exist_ok=True)
-    W, K, layout, notes = design(settings)
+    sp = design_mod.spec(settings)
+    layout, notes = sp.well_layout, sp.notes
     a = settings["analysis"]
-    df = df.assign(well=[well_of(int(i), K, W, layout) for i in df["image"]])
+    assigned = design_mod.assign(df, settings, project_dir)
+    if "well" not in df:
+        df = df.assign(well=assigned["well"])
+    W, K = design_mod.nominal(design_mod.describe(assigned))
     means = _means(df)
     refs = [r for r in dict.fromkeys([a["reference"]] + list(a["normalise_to"])) if r in means]
 
@@ -261,9 +262,12 @@ def run(df: pd.DataFrame, settings: dict, out: Path, metric_label: str = "nuclei
     cond.to_csv(out / "batch_by_condition.csv", index=False)
     per_n.to_csv(out / "batch_by_n.csv", index=False)
     keys = ["reference", "wells", "fields_per_well", "images"]
-    summary = (pw.groupby(keys)
-               .agg(median_variance_vs_current=("variance_vs_current", "median"),
-                    median_n_for_80pct_power=("n_for_80pct_power", "median")).reset_index())
+    if pw.empty:  # e.g. one n: no across-n variance, so no power table (the report says why)
+        summary = pd.DataFrame(columns=keys + ["median_variance_vs_current", "median_n_for_80pct_power"])
+    else:
+        summary = (pw.groupby(keys)
+                   .agg(median_variance_vs_current=("variance_vs_current", "median"),
+                        median_n_for_80pct_power=("n_for_80pct_power", "median")).reset_index())
     if len(emp):
         summary = summary.merge(emp.groupby(keys).agg(
             same_conclusion_pct=("same_conclusion_pct", "mean"),
@@ -371,7 +375,13 @@ def _report(vc, eff, summary, cond, per_n, out, W, K, layout, refs, means, notes
     else:
         L.append("  No well pair differs more than field noise explains.")
 
+    if eff.empty or "reference" not in eff:
+        L += ["", "3. Design table", "-" * 70,
+              "  No treatment has a ratio to a reference in 2 or more n's (e.g. only one n): the across-n design table",
+              "  and power need >= 2 n. The within-n components above (field, well) are still estimated."]
     for i, ref in enumerate(refs):
+        if eff.empty or "reference" not in eff:
+            break
         e = eff[eff["reference"] == ref]
         s = summary[summary["reference"] == ref].drop(columns="reference")
         if not len(e):

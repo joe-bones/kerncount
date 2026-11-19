@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+NEEDS_2N = "needs ≥ 2 n"
 N_COLOURS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "#e377c2", "#17becf", "#7f7f7f", "#bcbd22"]
 
 
@@ -127,6 +128,7 @@ def two_way(df: pd.DataFrame, factor_b: str, order: list[str], factor_a: str = "
     anova = pd.DataFrame(rows)
     anova["significance"] = [stars(p) for p in anova["p"]]
     anova.insert(0, "model", "interaction" if full == "ABX" else "additive (no replication: interaction not estimable)")
+    anova["note"] = ""
 
     g = d.groupby([factor_a, factor_b])["value"]
     cm, cn = g.mean().unstack(factor_b), g.count().unstack(factor_b)
@@ -151,11 +153,12 @@ def two_way(df: pd.DataFrame, factor_b: str, order: list[str], factor_a: str = "
     pairs = pd.DataFrame(pairs)
     pairs["significance"] = [stars(p) for p in pairs["p_adj"]]
     pairs.insert(0, "test", f"Tukey all pairs ({factor_a}, matched within {factor_b}; residual df {df_res})")
+    pairs["note"] = ""
     return anova, pairs, cm.reindex(index=la)
 
 
 def _two_way_plot(df: pd.DataFrame, factor_b: str, order: list[str], res, label: str, title: str, out: Path,
-                  colours: dict | None = None, b_label: str | None = None, note: str = ""):
+                  colours: dict | None = None, b_label: str | None = None, note: str = "", empty: bool = False):
     anova, pairs, cm = res
     la = list(cm.index)
     lb = list(cm.columns)
@@ -204,15 +207,40 @@ def _two_way_plot(df: pd.DataFrame, factor_b: str, order: list[str], res, label:
     cb = fig.colorbar(im, ax=axm, fraction=0.046, pad=0.04)
     cb.set_label("-log10 p", fontsize=7)
     cb.ax.tick_params(labelsize=6)
-    parts = [f"{r['source']}: F({int(r['df'])},{int(anova['df'].iloc[-1])})={r['F']:.2f}, p={r['p']:.2g} ({r['significance']})"
-             for _, r in anova.iterrows() if r["source"] != "residual"]
-    foot = ("Two-way ANOVA (Type II SS; fields = replicates): " + "; ".join(parts) +
-            ". * p<0.05  ** p<0.01  *** p<0.001  **** p<0.0001; ns = not significant." + note)
+    if empty:
+        axm.text((k - 1) / 2, (k - 1) / 2, NEEDS_2N, ha="center", va="center", fontsize=9, color="#555555")
+        foot = "Two-way ANOVA (treatment x n): not computed." + note
+    else:
+        parts = [f"{r['source']}: F({int(r['df'])},{int(anova['df'].iloc[-1])})={r['F']:.2f}, p={r['p']:.2g} "
+                 f"({r['significance']})" for _, r in anova.iterrows() if r["source"] != "residual"]
+        foot = ("Two-way ANOVA (Type II SS; fields = replicates): " + "; ".join(parts) +
+                ". * p<0.05  ** p<0.01  *** p<0.001  **** p<0.0001; ns = not significant." + note)
     fig.text(0.01, 0.005, foot, fontsize=6.5, color="#444444", ha="left", va="bottom", wrap=True)
     fig.tight_layout(rect=(0, 0.07, 1, 1))
     fig.savefig(out.with_suffix(".png"), dpi=200)
     fig.savefig(out.with_suffix(".pdf"))
     plt.close(fig)
+
+
+def _write_two_way_placeholder(df: pd.DataFrame, order: list[str], metric: str, label: str, title: str,
+                               out_dir: Path, colours: dict) -> None:
+    """One n: the all-n two-way files with the same columns and layout, without any test (needs >= 2 n)."""
+    la = [t for t in order if t in set(df["treatment"])]
+    if not la:
+        return
+    anova = pd.DataFrame([dict(model="not estimable", source=s, SS=np.nan, df=np.nan, MS=np.nan, F=np.nan, p=np.nan,
+                               pct_of_total_variation=np.nan, significance="", note=NEEDS_2N)
+                          for s in ("treatment", "n", "residual")])
+    pairs = pd.DataFrame([dict(test=f"Tukey all pairs (treatment, matched within n; {NEEDS_2N})", comparison=f"{x} vs {y}",
+                               group_1=x, group_2=y, matched_levels=1, mean_diff=np.nan, ci_low=np.nan, ci_high=np.nan,
+                               q=np.nan, p_adj=np.nan, significance="", note=NEEDS_2N)
+                          for i, x in enumerate(la) for y in la[i + 1:]])
+    anova.to_csv(out_dir / f"{metric}_twoway_anova.csv", index=False)
+    pairs.to_csv(out_dir / f"{metric}_twoway_pairs.csv", index=False)
+    cm = df.groupby(["treatment", "n"])["value"].mean().unstack("n").reindex(index=la)
+    _two_way_plot(df, "n", order, (anova[anova["source"] == "residual"], pairs, cm), label, title,
+                  out_dir / f"{metric}_twoway", colours, "n",
+                  note=f" Only one n: no two-way test ({NEEDS_2N}).", empty=True)
 
 
 def _write_two_way(df: pd.DataFrame, factor_b: str, order: list[str], metric: str, label: str, title: str,
@@ -295,10 +323,14 @@ def per_n(df: pd.DataFrame, metric: str, label: str, n: str, out_dir: Path, sett
     rows = []
     for t in order:
         v = np.asarray(groups[t])
+        sem = v.std(ddof=1) / np.sqrt(len(v)) if len(v) > 1 else np.nan
+        q = stats.t.ppf(0.975, len(v) - 1) if len(v) > 1 else np.nan
         rows.append(dict(n=n, treatment=t, fields=len(v), mean=v.mean() if len(v) else np.nan,
-                         sd=v.std(ddof=1) if len(v) > 1 else np.nan,
-                         sem=v.std(ddof=1) / np.sqrt(len(v)) if len(v) > 1 else np.nan,
-                         median=np.median(v) if len(v) else np.nan))
+                         sd=v.std(ddof=1) if len(v) > 1 else np.nan, sem=sem,
+                         median=np.median(v) if len(v) else np.nan,
+                         ci_low=v.mean() - q * sem if len(v) > 1 else np.nan,
+                         ci_high=v.mean() + q * sem if len(v) > 1 else np.nan,
+                         interval="descriptive: technical replicates (95% CI of the field mean)"))
     summ = pd.DataFrame(rows)
     for ref in a["normalise_to"]:
         if ref in groups and groups[ref]:
@@ -334,11 +366,12 @@ def per_n(df: pd.DataFrame, metric: str, label: str, n: str, out_dir: Path, sett
         stem = metric if i == 0 else f"{metric}_vs_{ref}"
         _bar_plot(order, groups, "SD", label, title, out_dir / stem,
                   sig=significance_marks(st, ref, f"Dunnett vs {ref} ("), ref=ref, footer=foot)
-    if a.get("two_way_anova", True) and "image" in sub:
-        from .sampling import design, well_of  # local import: sampling imports this module
-        W, K, layout, _ = design(settings)
-        if W >= 2:
-            sw = sub.assign(well=[f"well {well_of(int(i), K, W, layout)}" for i in sub["image"]])
+    if a.get("two_way_anova", True) and ("well" in sub or "image" in sub):
+        if "well" not in sub:  # callers normally pass the well from design.assign; fall back to the settings alone
+            from . import design
+            sub = sub.assign(well=design.assign(sub, settings)["well"])
+        if sub["well"].nunique() >= 2:
+            sw = sub.assign(well=[f"well {int(w)}" for w in sub["well"]])
             _write_two_way(sw, "well", order, metric, label, f"{n}: {label}, two-way ANOVA (treatment x well)",
                            out_dir, b_label="well", note=" Describes this experiment only.")
     return st.assign(n=n)
@@ -411,7 +444,11 @@ def rm_anova_dunnett(means: pd.DataFrame, order: list[str], ref: str) -> tuple[d
     return anova, rows
 
 
-def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: dict, stars_by_ref: dict | None = None,
+          main_ref: str | None = None, star_note: str = "") -> tuple[pd.DataFrame, pd.DataFrame]:
+    """stars_by_ref: {control: (marks, footer)} replaces the RM ANOVA stars on the plots of that control (the
+    primary test decides; see models.py). main_ref: the control of the headline plot (default: first control
+    present). star_note: text put in front of the RM ANOVA footers (e.g. why the mixed model was not used)."""
     a = settings["analysis"]
     ns = sorted(df["n"].unique())
     order = treatment_order(df["treatment"], a["treatment_order"])
@@ -448,13 +485,22 @@ def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: di
     st = []
     rows = []
     refs = control_groups(a)
+    one_n = len(ns) < 2
     for ref in refs:
         if ref not in means:
             continue
         anova, dun = rm_anova_dunnett(means, order, ref)
         if anova is not None and not st:
             st.append(anova)
+        if one_n:  # same rows as with several n: the difference from the one n, no test
+            dun = [dict(test=f"Dunnett vs {ref} (RM ANOVA, pooled error; Prism standard)", comparison=f"{t} vs {ref}",
+                        N=int(means[[t, ref]].dropna().shape[0]), effect=float((means[t] - means[ref]).mean()),
+                        ci_low=np.nan, ci_high=np.nan, statistic=np.nan, p=np.nan, p_adj=np.nan, note=NEEDS_2N)
+                   for t in order if t != ref]
         rows += dun
+    if one_n and not st:
+        st.append(dict(test=f"RM one-way ANOVA (n = matched replicate; {len(ns)} n)", comparison="all", N=len(ns),
+                       effect=np.nan, ci_low=np.nan, ci_high=np.nan, statistic=np.nan, p=np.nan, note=NEEDS_2N))
     for ref in refs:
         if ref not in means:
             continue
@@ -462,23 +508,33 @@ def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: di
         for t in order:
             if t == ref:
                 continue
-            pair = means[[t, ref]].dropna()
-            pair = pair[(pair > 0).all(axis=1)]
+            full = means[[t, ref]].dropna()
+            pair = full[(full > 0).all(axis=1)]
             r = dict(test=f"ratio paired t-test vs {ref} (Holm within this family; check)", comparison=f"{t} vs {ref}",
                      N=len(pair), effect=np.nan, ci_low=np.nan, ci_high=np.nan, statistic=np.nan, p=np.nan)
+            if len(pair) < len(full):  # e.g. background-subtracted intensities: a ratio of a mean <= 0 is impossible
+                r["note"] = (f"{len(full) - len(pair)} n('s) with a mean <= 0 left out (no ratio possible); the mixed "
+                             "model analyses this metric as a raw-scale difference")
             if len(pair) >= 2:
                 lr = np.log(pair[t] / pair[ref])
                 tt = stats.ttest_1samp(lr, 0)
                 ci = tt.confidence_interval()
                 r.update(effect=float(np.exp(lr.mean())), ci_low=float(np.exp(ci.low)), ci_high=float(np.exp(ci.high)),
                          statistic=tt.statistic, p=tt.pvalue)
+            else:
+                r["note"] = "; ".join(x for x in (r.get("note"), NEEDS_2N + (" containing both groups" if not one_n
+                                                                               else "")) if x)
+                if len(pair) == 1:
+                    r["effect"] = float(pair[t].iloc[0] / pair[ref].iloc[0])
             fam.append(r)
         for r, pa in zip(fam, holm([r["p"] for r in fam])):
             r["p_adj"] = pa
         rows += fam
     for r in st:
         r["p_adj"] = r["p"]
-    st = pd.DataFrame(st + rows, columns=["test", "comparison", "N", "effect", "ci_low", "ci_high", "statistic", "p", "p_adj"])
+    st = pd.DataFrame(st + rows, columns=["test", "comparison", "N", "effect", "ci_low", "ci_high", "statistic", "p", "p_adj",
+                                          "note"])
+    st["note"] = st["note"].fillna("")
     st.insert(3, "effect_type", ["mean difference vs control" if "Dunnett" in x else "ratio vs control (geometric mean)"
                                  if "ratio" in x else "" for x in st["test"]])
     st["significance"] = [stars(p) for p in st["p_adj"]]
@@ -488,26 +544,40 @@ def all_n(df: pd.DataFrame, metric: str, label: str, out_dir: Path, settings: di
         anova = st[st["test"].str.startswith("RM one-way ANOVA")]
         a_txt = (f"RM one-way ANOVA p={anova['p'].iloc[0]:.2g} ({stars(anova['p'].iloc[0])}). "
                  if len(anova) and not np.isnan(anova["p"].iloc[0]) else "")
-        return (f"{a_txt}Stars: Dunnett vs {ref_} after RM one-way ANOVA (n = matched replicate, pooled error). "
-                "* p<0.05  ** p<0.01  *** p<0.001  **** p<0.0001; no mark = not significant.")
+        if stars_by_ref and ref_ in stars_by_ref:
+            return stars_by_ref[ref_][1]
+        if one_n:
+            return (f"{star_note}Only one n: bars and dots are that n's values. Across-n CIs, p-values and stars: "
+                    f"{NEEDS_2N} (fields are technical replicates and are not used as a biological test).")
+        return (f"{star_note}{a_txt}Stars: Dunnett vs {ref_} after RM one-way ANOVA (n = matched replicate, pooled "
+                "error). * p<0.05  ** p<0.01  *** p<0.001  **** p<0.0001; no mark = not significant.")
+
+    def marks_for(ref_):
+        if stars_by_ref and ref_ in stars_by_ref:
+            return stars_by_ref[ref_][0]
+        return significance_marks(st, ref_, f"Dunnett vs {ref_} (")
 
     vals = {t: means[t].tolist() for t in order}
     colour = lambda t: [ncol[n] for n in means.index if not np.isnan(means.at[n, t])]
-    main_ref = next((r_ for r_ in refs if r_ in means), None)
+    if main_ref not in means:
+        main_ref = next((r_ for r_ in refs if r_ in means), None)
     _bar_plot(order, vals, "SEM", label, f"All n: {label} (mean of n ± SEM; dots = n)", out_dir / metric, colour, legend=ncol,
-              sig=significance_marks(st, main_ref, f"Dunnett vs {main_ref} (") if main_ref else None, ref=main_ref,
+              sig=marks_for(main_ref) if main_ref else None, ref=main_ref,
               footer=foot_for(main_ref) if main_ref else "")
     for ref_, pct in norms.items():
         pv = {t: pct[t].tolist() for t in order}
         colour_p = lambda t, pct=pct: [ncol[n] for n in pct.index if not np.isnan(pct.at[n, t])]
         _bar_plot(order, pv, "SEM", f"{label} (% of {ref_})", f"All n: % of {ref_} (mean ± SEM)",
                   out_dir / f"{metric}_pct_of_{ref_}", colour_p, ref_line=100, legend=ncol,
-                  sig=significance_marks(st, ref_, f"Dunnett vs {ref_} ("), ref=ref_, footer=foot_for(ref_))
+                  sig=marks_for(ref_), ref=ref_, footer=foot_for(ref_))
     if a.get("two_way_anova", True) and len(ns) >= 2:
         _write_two_way(df, "n", order, metric, label, f"All n: {label}, two-way ANOVA (treatment x n)", out_dir,
                        colours=ncol, b_label="n",
                        note=" Fields are counted as replicates here, so these p-values are optimistic; the RM ANOVA +"
                             " Dunnett across n (one value per n) remains the main result.")
+    elif a.get("two_way_anova", True):
+        _write_two_way_placeholder(df, order, metric, label, f"All n: {label}, two-way ANOVA (treatment x n)",
+                                   out_dir, ncol)
     legend = pd.DataFrame({"n": ns, "colour": [ncol[n] for n in ns]})
     legend.to_csv(out_dir / "n_colours.csv", index=False)
     return summ.reset_index(), st

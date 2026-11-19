@@ -33,13 +33,21 @@ def _experiments(ws: Path) -> list[str]:
     return sorted(d.name for d in (ws / DATA).iterdir() if d.is_dir() and not d.name.startswith("."))
 
 
+def _bare(arg: str) -> bool:
+    """An experiment name (no folder separators, not absolute) rather than a path."""
+    return not Path(arg).is_absolute() and "/" not in arg and "\\" not in arg and arg not in (".", "..")
+
+
 def resolve_raw(arg: str) -> Path:
+    """A bare name is looked up in <workspace>/data/ FIRST, then as a folder in the working directory; a path is
+    used as given. Symlinks are kept (absolute path, not resolved): data/<exp> may link to a folder elsewhere and
+    the project should keep pointing at the link."""
+    ws = workspace_root()
+    if _bare(arg) and ws and (ws / DATA / arg).is_dir():
+        return Path(os.path.abspath(ws / DATA / arg))
     p = Path(arg)
     if p.is_dir():
-        return p.resolve()
-    ws = workspace_root()
-    if ws and (ws / DATA / arg).is_dir():
-        return (ws / DATA / arg).resolve()
+        return Path(os.path.abspath(p))
     sys.exit(f"raw folder not found: {arg}" + (f" (also looked in {ws / DATA})" if ws else ""))
 
 
@@ -56,23 +64,39 @@ def resolve_project(arg: str, must_exist: bool = True) -> Path:
              + " - create it with `kerncount init`")
 
 
-def _init_one(raw: Path, prj: Path, force: bool):
+def _experiment_type(s: dict):
+    """The project's [experiment] type (ADR 0004); an unknown name stops with the list of valid ones."""
+    from . import experiment_types
+
+    try:
+        return experiment_types.of(s)
+    except experiment_types.UnknownExperimentType as e:
+        sys.exit(str(e))
+
+
+def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False):
     from . import discover, settings
 
     prj.mkdir(parents=True, exist_ok=True)
     if (prj / "settings.toml").exists() and not force:
         print(f"settings.toml already exists in {prj} (kept). Use --force to reset it.")
     else:
-        settings.write_template(prj, raw)
+        had = (prj / "settings.toml").exists()
+        settings.write_template(prj, raw)  # backs up an existing settings.toml to _work/backups/ first
+        if had:
+            print(f"settings.toml reset to the defaults; the previous version is kept in {settings.BACKUPS}/")
     s = settings.load(prj)
-    layout = discover.scan(raw, s["project"]["date_order"])
+    etype = _experiment_type(s)
+    layout = etype.scan_layout(raw, s)
     lp = prj / "layout.csv"
-    if lp.exists() and not force:
+    if lp.exists() and not (force or force_layout):
         lp = prj / "layout.new.csv"
         print(f"layout.csv already exists (kept); fresh scan written to {lp.name} for comparison.")
+    elif lp.exists():
+        bk = settings.backup(prj, "layout.csv")
+        print(f"layout.csv overwritten; the previous version is kept in {bk.relative_to(prj).as_posix()}")
     discover.write_layout(layout, lp, s["project"]["csv_delimiter"])
-    with __import__("pandas").option_context("display.width", 200, "display.max_colwidth", 60, "display.max_rows", 500):
-        print(layout[["n", "treatment", "treatment_folder", "images", "note"]].to_string(index=False))
+    etype.report_layout(layout, s, raw)
     ws = workspace_root()
     target = prj.name if ws and prj.resolve().parent == (ws / ANALYSIS).resolve() else str(prj)
     print(f"\nWrote {lp}\nCheck the n / treatment names (edit the CSV if needed), then run:  kerncount run \"{target}\"")
@@ -83,7 +107,7 @@ def cmd_init(a):
         ws = workspace_root() or sys.exit("--all needs a workspace: run from a folder that contains data/")
         for exp in _experiments(ws):
             print(f"\n=== {exp}")
-            _init_one(ws / DATA / exp, ws / ANALYSIS / exp, a.force)
+            _init_one(ws / DATA / exp, ws / ANALYSIS / exp, a.force, a.force_layout)
         return
     if not a.raw_dir:
         sys.exit("give an experiment name (from data/), a raw folder, or --all")
@@ -92,8 +116,10 @@ def cmd_init(a):
         prj = Path(a.project_dir).resolve()
     else:
         ws = workspace_root()
-        prj = (ws / ANALYSIS / raw.name) if ws and raw.parent == (ws / DATA).resolve() else raw.parent.parent / ANALYSIS / raw.name
-    _init_one(raw, prj, a.force)
+        # data/<name> may be a symlink to a folder elsewhere: the project still belongs in this workspace
+        in_ws = ws and (raw.parent == (ws / DATA).resolve() or (ws / DATA / raw.name).resolve() == raw)
+        prj = (ws / ANALYSIS / raw.name) if in_ws else raw.parent.parent / ANALYSIS / raw.name
+    _init_one(raw, prj, a.force, a.force_layout)
 
 
 def _projects(a) -> list[Path]:
@@ -110,11 +136,12 @@ def _projects(a) -> list[Path]:
 
 
 def cmd_run(a):
-    from . import pipeline
+    from . import experiment_types, settings
 
+    opts = experiment_types.RunOptions(rebuild=a.rebuild, resegment=a.resegment, no_review=a.no_review)
     for prj in _projects(a):
         print(f"\n=== {prj.name}")
-        pipeline.run(prj, rebuild=a.rebuild, resegment=a.resegment, no_review=a.no_review)
+        _experiment_type(settings.load(prj)).run(prj, opts)
 
 
 def cmd_regen(a):
@@ -133,6 +160,34 @@ def cmd_sampling(a):
         pipeline.sampling(prj, a.generation, a.iterations)
 
 
+def cmd_wells_template(a):
+    from . import pipeline
+
+    for prj in _projects(a):
+        print(f"\n=== {prj.name}")
+        pipeline.wells_template(prj, overwrite=a.force)
+
+
+def cmd_platemap(a):
+    from . import platemap
+
+    for prj in _projects(a):
+        print(f"\n=== {prj.name}")
+        try:
+            out = platemap.plan_project(prj, plates=a.plates, plate_format=a.format, wells=a.wells,
+                                        reference_wells=a.reference_wells, avoid_edge=True if a.avoid_edge else None,
+                                        seed=a.seed, balance=not a.no_balance, negative_control=a.negative_control,
+                                        negative_control_wells=a.control_wells)
+        except ValueError as e:
+            sys.exit(f"platemap: {e}")
+        print((out / "README.txt").read_text(encoding="utf-8"))
+        print(f"Written to {out}")
+
+
+def _ref_wells(v: str):
+    return v if v.strip().lower() == "auto" else int(v)
+
+
 def cmd_gui(a):
     from . import gui
 
@@ -147,6 +202,8 @@ def main(argv=None):
     i.add_argument("project_dir", nargs="?", help="optional; default analysis/<experiment>")
     i.add_argument("--all", action="store_true", help="every experiment in data/")
     i.add_argument("--force", action="store_true", help="overwrite settings.toml and layout.csv")
+    i.add_argument("--force-layout", action="store_true",
+                   help="keep settings.toml, rewrite layout.csv (e.g. after setting [channels] files = \"interleaved\")")
     i.set_defaults(func=cmd_init)
     r = sub.add_parser("run", help="count, check, and analyse (safe to re-run any time)")
     r.add_argument("project", nargs="?", help="experiment name, or a project folder path")
@@ -168,7 +225,31 @@ def main(argv=None):
     m.add_argument("--generation", default=None, help="e.g. g2 (default: latest)")
     m.add_argument("--iterations", type=int, default=1000)
     m.set_defaults(func=cmd_sampling)
-    g = sub.add_parser("gui", help="open the point-and-click web interface in your browser")
+    wt = sub.add_parser("wells-template", help="write wells.csv (which well / field each image is) to edit by hand")
+    wt.add_argument("project", nargs="?", help="experiment name, or a project folder path")
+    wt.add_argument("--all", action="store_true", help="every initialised experiment")
+    wt.add_argument("--force", action="store_true", help="overwrite an existing wells.csv (default: write wells.new.csv)")
+    wt.set_defaults(func=cmd_wells_template)
+    pm = sub.add_parser("platemap", help="randomised plate maps for the next experiment (one plate per n)")
+    pm.add_argument("project", nargs="?", help="experiment name, or a project folder path")
+    pm.add_argument("--all", action="store_true", help="every initialised experiment")
+    pm.add_argument("--plates", type=int, default=3, help="number of plates (= n's) to plan (default 3)")
+    pm.add_argument("--format", type=int, default=None, choices=[6, 12, 24, 48, 96],
+                    help="wells per plate (default: [planner] plate_format)")
+    pm.add_argument("--wells", type=int, default=2, help="wells per treatment condition (default 2)")
+    pm.add_argument("--reference-wells", type=_ref_wells, default=None,
+                    help='wells per reference condition, or "auto" (Dunnett sqrt(k)); default: [planner] reference_wells')
+    pm.add_argument("--avoid-edge", action="store_true",
+                    help="inner wells first (default: [planner] avoid_edge)")
+    pm.add_argument("--seed", type=int, default=None, help="random seed (default: new; printed for reuse)")
+    pm.add_argument("--no-balance", action="store_true", help="independent random plates (no rotation across plates)")
+    pm.add_argument("--negative-control", default=None, metavar="NAME",
+                    help='reserve wells for a negative-control condition (e.g. "secondary only"); '
+                         'default: [experiment] negative_control; "" = none')
+    pm.add_argument("--control-wells", type=int, default=2, choices=[1, 2],
+                    help="wells per plate for the negative control (default 2)")
+    pm.set_defaults(func=cmd_platemap)
+    g = sub.add_parser("gui",help="open the point-and-click web interface in your browser")
     g.add_argument("workspace", nargs="?", help="workspace folder (default: found automatically)")
     g.add_argument("--port", type=int, default=8765)
     g.add_argument("--no-browser", action="store_true", help="don't open a browser tab")

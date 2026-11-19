@@ -77,3 +77,27 @@ def read(path: Path) -> Image:
     if arr.shape[0] == 3 and np.array_equal(arr[0], arr[1]) and np.array_equal(arr[0], arr[2]):
         arr = arr[:1]
     return Image(arr, max_value, px)
+
+
+def read_field(paths) -> Image:
+    """One field from one file per channel (interleaved channel files): a (C, Y, X) stack in the order of `paths`.
+    Each file must hold one channel; greyscale stored as RGB (three identical channels) is collapsed to one.
+    Raises ValueError when a file has several different channels or the image sizes differ."""
+    paths = list(paths)
+    planes, max_value, px = [], 0.0, None
+    for p in paths:
+        im = read(p)
+        if im.data.shape[0] != 1:
+            raise ValueError(f"{p}: holds {im.data.shape[0]} different channels, but [channels] files = "
+                             "\"interleaved\" expects one channel per file")
+        if planes and im.data.shape[1:] != planes[0].shape:
+            raise ValueError(f"{p}: image size {im.data.shape[1:]} differs from {paths[0]} {planes[0].shape}")
+        planes.append(im.data[0])
+        max_value = max(max_value, im.max_value)
+        px = px or im.pixel_size_um
+    return Image(np.stack(planes), max_value, px)
+
+
+def read_record(rec) -> Image:
+    """The field of a discover.ImageRecord: one multi-channel file, or (interleaved) one file per channel."""
+    return read_field(rec.paths) if getattr(rec, "paths", ()) else read(rec.path)

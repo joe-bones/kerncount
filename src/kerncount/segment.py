@@ -12,7 +12,27 @@ from skimage import feature, filters, measure, morphology, segmentation
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
-MODEL_DIR = Path(__file__).parent / "models"
+MODEL_DIR = Path(__file__).parent / "models"  # weights shipped with (or saved next to) the package
+# per-user cache for downloaded weights when the package folder is read-only (installed system-wide, an app bundle)
+USER_MODEL_DIR = Path(os.environ.get("KERNCOUNT_MODELS") or Path.home() / ".kerncount" / "models")
+STARDIST_MODEL = "2D_versatile_fluo"
+
+
+def _writable(d: Path) -> bool:
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        probe = d / f".write_test_{os.getpid()}"
+        probe.write_bytes(b"")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def model_cache_dir() -> Path | None:
+    """Where downloaded StarDist weights are kept: the package's models/ folder when it is writable, else
+    ~/.kerncount/models (KERNCOUNT_MODELS overrides). None when neither is writable."""
+    return next((d for d in (MODEL_DIR, USER_MODEL_DIR) if _writable(d)), None)
 
 
 @dataclass
@@ -56,15 +76,31 @@ _MODEL = None
 
 
 def _stardist_model():
+    """The StarDist model: saved weights from the package folder or the user cache, else downloaded once (keras
+    cache; ~/.keras, or the user cache when the home folder's .keras is not writable) and saved to the first
+    writable of the two folders so later runs work offline."""
     global _MODEL
     if _MODEL is None:
+        for base in (MODEL_DIR, USER_MODEL_DIR):
+            if (base / STARDIST_MODEL / "config.json").exists():
+                from stardist.models import StarDist2D
+
+                _MODEL = StarDist2D(None, name=STARDIST_MODEL, basedir=str(base))
+                return _MODEL
+        cache = model_cache_dir()
+        if cache is not None and "keras" not in __import__("sys").modules and not _writable(Path.home() / ".keras"):
+            os.environ.setdefault("KERAS_HOME", str(cache / ".keras"))  # keras downloads into a writable folder
         from stardist.models import StarDist2D
 
-        local = MODEL_DIR / "2D_versatile_fluo"
-        if (local / "config.json").exists():
-            _MODEL = StarDist2D(None, name=local.name, basedir=str(local.parent))
-        else:
-            _MODEL = StarDist2D.from_pretrained("2D_versatile_fluo")
+        _MODEL = StarDist2D.from_pretrained(STARDIST_MODEL)
+        src = Path(getattr(_MODEL, "logdir", "") or "")
+        if cache is not None and (src / "config.json").exists():
+            import shutil
+
+            try:
+                shutil.copytree(src, cache / STARDIST_MODEL, dirs_exist_ok=True)
+            except OSError:
+                pass  # a cache is a convenience: the downloaded model is used either way
     return _MODEL
 
 

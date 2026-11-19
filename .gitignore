@@ -22,3 +22,6 @@ _work/
 
 # launcher build
 launcher/app.zip
+
+# agent worktrees and local dev env
+.claude/worktrees/

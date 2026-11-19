@@ -250,3 +250,181 @@ def test_all_n_prism_standard_drives_stars(tmp_path):
     assert st["test"].str.startswith("Dunnett vs LyoVec").any()
     assert st["test"].str.contains("ratio paired t-test", regex=False).any()
     assert "Drop" in analysis.significance_marks(st, "Control", "Dunnett vs Control (")
+
+
+# ---------------------------------------------------------------- I5: generations swapped in by rename
+
+def test_swap_in_keeps_user_files_and_drops_known_outputs(tmp_path):
+    from kerncount import fileio
+
+    final, tmp = tmp_path / "g1", tmp_path / "g1.tmp"
+    for rel, txt in (("stats_long.csv", "old"), ("all_n/old_plot.png", "x"), ("my_notes.txt", "mine"),
+                     ("_kept/earlier.txt", "kept before")):
+        (final / rel).parent.mkdir(parents=True, exist_ok=True)
+        (final / rel).write_text(txt)
+    tmp.mkdir()
+    (tmp / "stats_long.csv").write_text("new")
+    kept = fileio.swap_in(tmp, final, known={"stats_long.csv", "all_n/old_plot.png"})
+    assert kept == ["my_notes.txt"] and not tmp.exists()
+    assert (final / "stats_long.csv").read_text() == "new"
+    assert not (final / "all_n" / "old_plot.png").exists()  # a known output that is no longer written
+    assert (final / "_kept" / "my_notes.txt").read_text() == "mine"
+    assert (final / "_kept" / "earlier.txt").read_text() == "kept before"
+    assert not any(p.name.startswith(".g1") for p in tmp_path.iterdir())
+
+
+def test_swap_in_reports_a_file_open_in_excel(tmp_path, monkeypatch):
+    import os
+
+    from kerncount import fileio
+
+    final, tmp = tmp_path / "g2", tmp_path / "g2.tmp"
+    final.mkdir()
+    (final / "results.xlsx").write_text("old")
+    tmp.mkdir()
+    (tmp / "results.xlsx").write_text("new")
+    real = os.replace
+
+    def locked(src, dst):  # Windows: renaming a folder with an open file fails
+        if Path(src) == final:
+            raise PermissionError(13, "in use")
+        return real(src, dst)
+
+    monkeypatch.setattr(fileio.os, "replace", locked)
+    with pytest.raises(fileio.FolderInUse, match="open in Excel"):
+        fileio.swap_in(tmp, final, known={"results.xlsx"})
+    assert (final / "results.xlsx").read_text() == "old" and (tmp / "results.xlsx").read_text() == "new"
+
+
+def test_failed_generation_build_leaves_the_old_one(tmp_path, monkeypatch):
+    from kerncount import generations
+
+    final = tmp_path / "generations" / "g1"
+    final.mkdir(parents=True)
+    (final / "stats_long.csv").write_text("old")
+
+    def boom(out, *a, **k):
+        (out / "half.csv").write_text("half")
+        raise RuntimeError("model crashed")
+
+    monkeypatch.setattr(generations, "_build_into", boom)
+    with pytest.raises(RuntimeError):
+        generations.build(tmp_path, dict(name="g1"), None, None, {})
+    assert (final / "stats_long.csv").read_text() == "old"
+    assert not (tmp_path / "generations" / "g1.tmp").exists()
+
+
+def test_atomic_write_keeps_permissions(tmp_path):
+    from kerncount import fileio
+
+    p = tmp_path / "settings.toml"
+    p.write_text("a = 1\n")
+    p.chmod(0o640)
+    fileio.atomic_write(p, "a = 2\n")
+    assert p.read_text() == "a = 2\n" and (p.stat().st_mode & 0o777) == 0o640
+    assert [x.name for x in tmp_path.iterdir()] == ["settings.toml"]  # no temp file left
+
+
+# ---------------------------------------------------------------- workspace paths, backups, model cache
+
+def test_resolve_raw_prefers_data_and_keeps_symlinks(tmp_path, monkeypatch):
+    from kerncount import cli, settings
+
+    ws = tmp_path / "ws"
+    real = tmp_path / "elsewhere" / "exp"
+    real.mkdir(parents=True)
+    (ws / "data").mkdir(parents=True)
+    (ws / "data" / "exp").symlink_to(real)
+    (ws / "exp").mkdir()  # a same-named folder in the working directory must not win over data/exp
+    monkeypatch.chdir(ws)
+    monkeypatch.delenv("KERNCOUNT_WORKSPACE", raising=False)
+    raw = cli.resolve_raw("exp")
+    assert raw == ws.resolve() / "data" / "exp" and raw.is_symlink()  # the link, not its target
+    assert cli.resolve_raw("./exp") == ws.resolve() / "exp"  # a path is used as given
+    prj = ws / "analysis" / "exp"
+    prj.mkdir(parents=True)
+    settings.write_template(prj, raw)
+    assert settings.load(prj)["project"]["raw_dir"] == "../../data/exp"
+
+
+def test_overwrites_keep_timestamped_backups(tmp_path):
+    from kerncount import design, settings
+
+    prj = tmp_path / "prj"
+    prj.mkdir()
+    assert settings.write_template(prj, tmp_path / "raw") is None  # nothing to back up yet
+    (prj / "settings.toml").write_text((prj / "settings.toml").read_text() + "\n# my edit\n")
+    bk = settings.write_template(prj, tmp_path / "raw")
+    assert bk.parent == prj / "_work" / "backups" and "# my edit" in bk.read_text()
+    assert "# my edit" not in (prj / "settings.toml").read_text()
+    bk2 = settings.backup(prj, "settings.toml")
+    assert bk2 != bk and bk2.exists()  # same second: a second copy, never overwritten
+    table = pd.DataFrame(dict(n="n1", treatment="A", image=range(1, 13)))
+    s = settings.load(prj)
+    design.write_wells_template(prj, table, s)
+    (prj / "wells.csv").write_text((prj / "wells.csv").read_text() + "# hand edit\n")
+    assert design.write_wells_template(prj, table, s).name == "wells.new.csv"  # default: never overwrite
+    design.write_wells_template(prj, table, s, overwrite=True)
+    kept = list((prj / "_work" / "backups").glob("wells_*.csv"))
+    assert len(kept) == 1 and "# hand edit" in kept[0].read_text()
+
+
+def test_stardist_weights_fall_back_to_a_user_cache(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    from kerncount import segment
+
+    pkg, user = tmp_path / "pkg_models", tmp_path / "home_models"
+    pkg.mkdir()
+    pkg.chmod(0o500)  # installed read-only
+    monkeypatch.setattr(segment, "MODEL_DIR", pkg)
+    monkeypatch.setattr(segment, "USER_MODEL_DIR", user)
+    try:
+        assert segment.model_cache_dir() == user
+        dl = tmp_path / "keras_cache" / "2D_versatile_fluo"
+        dl.mkdir(parents=True)
+        (dl / "config.json").write_text("{}")
+        loaded = []
+
+        class Fake:
+            def __init__(self, config=None, name=None, basedir=None):
+                self.logdir, self.basedir = dl, basedir
+                loaded.append(basedir)
+
+            @classmethod
+            def from_pretrained(cls, name):
+                return cls()
+
+        mod = types.ModuleType("stardist.models")
+        mod.StarDist2D = Fake
+        monkeypatch.setitem(sys.modules, "stardist", types.ModuleType("stardist"))
+        monkeypatch.setitem(sys.modules, "stardist.models", mod)
+        monkeypatch.setattr(segment, "_MODEL", None)
+        segment._stardist_model()  # downloads (fake) and saves a copy in the user cache
+        assert (user / "2D_versatile_fluo" / "config.json").exists() and loaded == [None]
+        monkeypatch.setattr(segment, "_MODEL", None)
+        segment._stardist_model()  # next time: loaded from the user cache, no download
+        assert loaded[-1] == str(user)
+    finally:
+        pkg.chmod(0o700)
+
+
+def test_concurrent_lock_writes_do_not_lose_updates(tmp_path):
+    """cutoffs.json is read-modify-written under a per-file lock with an atomic replace: 16 threads locking
+    different channels at once keep all 16 locks, and no temporary file is left behind."""
+    import json
+    import threading
+
+    from kerncount import positivity
+
+    ts = [threading.Thread(target=positivity.save_lock, args=(tmp_path, f"C{i}", float(i), ["a", "b"]))
+          for i in range(16)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    data = json.loads((tmp_path / "cutoffs.json").read_text())
+    assert sorted(lk["channel"] for lk in data["locks"]) == sorted(f"C{i}" for i in range(16))
+    assert all(lk["fields"] == 2 for lk in data["locks"])
+    assert [p.name for p in tmp_path.iterdir()] == ["cutoffs.json"]

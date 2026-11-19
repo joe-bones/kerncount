@@ -1,4 +1,4 @@
-"""Settings as a form: field descriptions for the web interface, and a comment-preserving settings.toml writer.
+"""Settings as a form: form items (one per setting) for the web interface, and a comment-preserving settings.toml writer.
 
 Standard library only (the web interface must start without the scientific stack).
 """
@@ -8,11 +8,17 @@ import json
 import re
 import tomllib
 
+from . import experiment_types
 from .settings import DEFAULTS
 
-# kind: bool | int | float | choice | multi | list | num_or (a number, or one of `special`) | measure | text
+# short names of classify.READOUTS (without "readout_"); kept here because this module must not import numpy/pandas
+READOUT_NAMES = ["frac_out_of_focus", "micronuclei_per_nucleus", "nuclear_area_median", "nuclear_area_median_um2",
+                 "nuclear_area_cv", "frac_irregular", "coverage", "nn_distance_median"]
+
+# FORM_ITEMS: one form item per setting (not to be confused with a microscope field). kind: bool | int | float | choice | multi | list | num_or (a number, or one of `special`) | measure | names ("all" or some of `options`) | text
+# | table (TOML inline table of name = [strings], e.g. { mirna = ["miR-*"] }; shown and edited as text)
 # reseg = changing it re-detects every nucleus (the slow step, ~2-3 s per image)
-FIELDS: dict[str, dict[str, dict]] = {
+FORM_ITEMS: dict[str, dict[str, dict]] = {
     "project": {
         "raw_dir": dict(kind="text", label="Raw images folder",
                         help="Where the raw images are. Relative paths are relative to the project folder."),
@@ -21,9 +27,53 @@ FIELDS: dict[str, dict[str, dict]] = {
         "csv_delimiter": dict(kind="choice", options=[",", ";"], label="CSV delimiter",
                               help='Use ";" if Excel (German/European locale) shows CSVs in one column.'),
     },
+    "experiment": {
+        "type": dict(kind="choice", options=sorted(experiment_types.TYPES), label="Experiment type",
+                     help="How the raw data are found, measured and analysed. cell_count = nuclei and marker intensity "
+                          "on plates. After changing it, scan the raw folder again (init with a fresh layout)."),
+        "cell_line": dict(kind="text", label="Cell line",
+                          help="e.g. LN229. Experiments (n's) of different cell lines are never pooled. Override per n "
+                               "or condition with a cell_line column in layout.csv."),
+        "magnification": dict(kind="num_or", special=[""], label="Objective magnification",
+                              help="e.g. 20 for a 20x objective. With the camera pixel size it gives the pixel size."),
+        "camera_pixel_um": dict(kind="num_or", special=[""], label="Camera pixel size (µm)",
+                                help="Physical size of one camera pixel, e.g. 6.5. Pixel size in the image = this ÷ "
+                                     "magnification (used when 'Pixel size (µm)' under Finding nuclei is empty)."),
+        "seeding_density": dict(kind="num_or", special=[""], label="Seeding density",
+                                help="Cells seeded, e.g. 30000. Override per n or condition in layout.csv."),
+        "seeding_unit": dict(kind="text", label="Seeding unit", help='e.g. "cells/well" or "cells/cm²".'),
+        "stain": dict(kind="text", label="Stain / antibodies",
+                      help="e.g. Ki-67 (rabbit) + anti-rabbit AF488, DAPI. For the record only."),
+        "notes": dict(kind="text", label="Notes", help="Anything worth knowing about this experiment."),
+        "negative_control": dict(kind="text", no_dash=True, label="Negative-control condition",
+                                 help="Name of the condition with negative-control wells (stained without the specific "
+                                      "signal). If present in an n, its nuclei set that n's positivity cut-off and it is "
+                                      "left out of the statistics. Empty = no control wells."),
+        "negative_control_type": dict(kind="choice", options=["secondary_only", "isotype", "unstained"],
+                                      label="Negative-control type",
+                                      help="secondary_only = secondary antibody without the primary (indirect "
+                                           "staining); isotype = non-binding antibody of the same isotype; unstained "
+                                           "= no antibody (only autofluorescence)."),
+    },
     "channels": {
-        "names": dict(kind="list", label="Channel names", help='e.g. DAPI, marker. Empty = C1, C2, ...', reseg=True),
-        "segment": dict(kind="int", min=1, label="Channel used to find nuclei", help="1 = first channel.", reseg=True),
+        "names": dict(kind="list", label="Channel names",
+                      help='e.g. DAPI, marker. Empty = C1, C2, ... (separate files: empty = the file order below).',
+                      reseg=True),
+        "segment": dict(kind="text", label="Channel used to find nuclei",
+                        help='A number (1 = first channel) or a channel name, e.g. DAPI.', reseg=True),
+        "files": dict(kind="choice", options=["single", "interleaved"], label="How channels are saved", reseg=True,
+                      help="single = all channels inside one file per image; interleaved = one file per channel, "
+                           "alternating in file order (e.g. 1 = Ki67, 2 = DAPI, 3 = Ki67, 4 = DAPI, ...). Gaps in the "
+                           "numbering are ignored. Run init again (--force-layout) after changing it."),
+        "file_order": dict(kind="list", label="Channel order of the files",
+                           help="Interleaved only: channel names in file order, e.g. Ki67, DAPI.", reseg=True),
+        "align": dict(kind="choice", options=["check", "correct", "off"], label="Channel alignment",
+                      help="Interleaved only: check = measure the shift between the files of a field and flag big "
+                           "ones; correct = also shift the marker back (whole pixels, up to the limit below); off."),
+        "align_warn_px": dict(kind="float", min=0, label="Alignment warning above (px)",
+                              help="Fields whose channels are shifted by more than this are flagged."),
+        "align_max_correct_px": dict(kind="float", min=0, label="Correct shifts up to (px)",
+                                     help="Bigger shifts are not corrected (they suggest mis-paired files) but flagged."),
     },
     "segmentation": {
         "backend": dict(kind="choice", options=["stardist", "classical"], label="Detector", reseg=True,
@@ -61,10 +111,60 @@ FIELDS: dict[str, dict[str, dict]] = {
     "intensity": {
         "enabled": dict(kind="bool", label="Measure intensities", reseg=True, help="Per-cell mean intensity (replaces the Mean-intensity macros)."),
         "measure": dict(kind="measure", label="Channels to measure", reseg=True, help='"all", or channel numbers, e.g. 2 or 2, 3.'),
-        "regions": dict(kind="multi", options=["nucleus", "ring", "cell"], label="Regions", reseg=True,
-                        help="ring = band around the nucleus (cytoplasm); cell = nucleus + ring (Fiji's 'enlarge')."),
+        "regions": dict(kind="multi", options=["nucleus", "ring", "cell", "fiji_cell"], label="Regions", reseg=True,
+                        help="ring = band around the nucleus (cytoplasm); cell = nucleus + ring; fiji_cell = nucleus "
+                             "enlarged by the Fiji ring width below (the old macro's 'Enlarge 6 px'). Changing only "
+                             "fiji_cell does not re-detect."),
         "ring_px": dict(kind="num_or", special=["auto"], label="Ring width (px)", reseg=True, help="auto = 0.25 × nucleus diameter."),
         "subtract_background": dict(kind="bool", label="Subtract background", reseg=True, help="Median of empty areas, per image."),
+        "per_nucleus": dict(kind="text", label="Marker channels measured per nucleus",
+                            help='auto = every channel except the nuclear one; or names, e.g. Ki67; off = none. '
+                                 "Per nucleus: mean, total, 90th percentile, local background. Does not re-detect."),
+        "erode_px": dict(kind="num_or", special=["auto"], label="Shrink nucleus outline by (px)",
+                         help="Measured inside the outline shrunk by this much, so the blurry rim and neighbours' "
+                              "light are left out. auto = 1 px, 2 px for nuclei at least 16 px across."),
+        "bg_gap_px": dict(kind="int", min=0, label="Background: gap around nuclei (px)",
+                          help="The local background ring starts this far outside the nucleus and keeps this far "
+                               "from every other nucleus."),
+        "bg_ring_px": dict(kind="num_or", special=["auto"], label="Background ring width (px)",
+                           help="auto = half a nucleus diameter. The median of the ring is the nucleus' background."),
+        "bg_min_px": dict(kind="int", min=1, label="Background: minimum ring pixels",
+                          help="Crowded nuclei with fewer ring pixels get a wider ring, then the image background."),
+        "fiji_ring_px": dict(kind="int", min=1, label="Fiji ring width (px)",
+                             help="Region fiji_cell = nucleus enlarged by this (the old macro used 6 px)."),
+        "flatfield": dict(kind="text", label="Flat-field correction",
+                          help="Uneven illumination (e.g. darker edges). auto = estimated per n and channel from all "
+                               "of that n's images; off = none; or a folder of reference images (uniform slide; "
+                               "files named with the channel; 'dark' in the name = dark frames). Intensities only, "
+                               "never counts."),
+        "flatfield_dark": dict(kind="bool", label="Flat field: remove background pattern first",
+                               help="Estimate and remove the additive background (camera offset, autofluorescence) "
+                                    "pattern before estimating the illumination."),
+    },
+    "readouts": {
+        "enabled": dict(kind="bool", label="Extra readouts",
+                        help="Per-image readouts besides the count (out-of-focus fraction, micronuclei, nuclear size and "
+                             "shape, crowding), computed from the detected nuclei. Fast: does not re-detect."),
+        "include": dict(kind="names", options=READOUT_NAMES, label="Readouts to include",
+                        help='"all", or names separated by commas: ' + ", ".join(READOUT_NAMES) + "."),
+    },
+    "positivity": {
+        "enabled": dict(kind="bool", label="% positive nuclei",
+                        help="Classify each nucleus as positive or negative for the marker; per image the % positive "
+                             "(primary readout) and the same with the 90th percentile."),
+        "channels": dict(kind="text", label="Channels", help="auto = every per-nucleus channel; or names, e.g. Ki67."),
+        "control_percentile": dict(kind="float", min=50, max=100, label="Negative control: percentile",
+                                   help="With negative-control wells in an n: cut-off = this percentile of their nuclei "
+                                        "(99 = 1% of control nuclei would be called positive)."),
+        "manual_cutoff": dict(kind="text", label="Manual cut-off",
+                              help="A fixed cut-off (corrected intensity units), used when there are no control wells. "
+                                   "Empty = the value locked in the tuning view (cutoffs.json), else the automatic "
+                                   "rule. Fix it before looking at the statistics."),
+        "lod_k": dict(kind="float", min=0.5, max=20, label="Automatic rule: k x noise",
+                      help="Limit of detection: a nucleus is positive when its signal exceeds k x the background "
+                           "noise expected for its size. 3 = about 1 false positive in 700 unstained nuclei."),
+        "min_nuclei": dict(kind="int", min=1, label="Minimum nuclei per image",
+                           help="Images with fewer measurable nuclei get no % positive."),
     },
     "analysis": {
         "reference": dict(kind="text", label="Main comparison group", help="Used for the headline plots."),
@@ -75,30 +175,122 @@ FIELDS: dict[str, dict[str, dict]] = {
         "treatment_order": dict(kind="list", label="Treatment order", help="Order in tables and plots; others follow alphabetically."),
         "exclude_low_qc": dict(kind="bool", label="Leave out QC-low images",
                                help="Images with QC low (and no manual value) are left out of the statistics."),
+        "primary_test": dict(kind="choice", options=["mixed", "rm_anova"], label="Test behind the stars",
+                             help="mixed = hierarchical model on the log scale (fields in wells in n; each treatment "
+                                  "class gets its own n-to-n variability; results as ratios). rm_anova = Prism-style "
+                                  "repeated-measures ANOVA + Dunnett on the per-n means. Both are always computed; this "
+                                  "only decides which one draws the stars. If the model cannot be fitted, rm_anova is "
+                                  "used and the plot says so."),
+        "primary_family": dict(kind="text", label="Main claim: compare with",
+                               help="The control whose comparisons are the main result (headline stars), e.g. LyoVec. "
+                                    "Empty = the main comparison group above."),
+        "vehicle_check": dict(kind="text", label="Vehicle check (equivalence test)",
+                              help='e.g. "LyoVec vs Control": tests whether the vehicle has NO meaningful effect '
+                                   "(equivalence, not just 'not significant'). auto = every other control group vs the "
+                                   "main comparison group; empty = off. Several: separate with ;"),
+        "equivalence_margin": dict(kind="float", min=0.01, max=1, label="Equivalence margin",
+                                   help="0.2 = the vehicle counts as equivalent if its ratio to the control (90% CI; "
+                                        "with several vehicle pairs the Holm-matched CI) lies entirely within 1/1.2 "
+                                        "to 1.2 (about ±20%)."),
+        "equivalence_margin_pp": dict(kind="float", min=0.1, max=50, label="Equivalence margin, fractions (points)",
+                                      help="For % positive and other fractions: equivalent if the difference vehicle "
+                                           "minus control lies entirely within ± this many percentage points "
+                                           "(default 5). Odds ratios are not used for this."),
+        "positive_control": dict(kind="text", label="Positive control",
+                                 help="e.g. CL075. Every treatment that is not a control is also compared with it. "
+                                      "Empty = none."),
+        "model_unit": dict(kind="choice", options=["well", "field"], label="Model unit",
+                           help="well = each well's mean per field (pooled % for fractions) is one value: results are "
+                                "ratios of mean nuclei per field, as biologists read them; missing fields are "
+                                "position-adjusted. field = every field is one value (older model; compares geometric "
+                                "means of fields, which uneven, sparse fields pull down)."),
+        "classes": dict(kind="table", special=["auto"], label="Treatment classes",
+                        help="Groups of treatments whose effects may vary differently between n's, each with its own "
+                             "n-to-n variance in the model. auto (recommended) = every treatment, each control included, "
+                             "gets its own class (conservative: each comparison rests on the n-to-n variability of "
+                             "its own two groups). Or a TOML inline table of name = [patterns], * = wildcard, e.g. "
+                             '{ mirna = ["miR-*"] }. Empty {} = controls form one class, everything else another.'),
+        "density_covariate": dict(kind="text", label="Density covariate (fractions)",
+                                  help="For every fraction metric (% out of focus, % Ki-67-positive) a second model "
+                                       "adjusts for local crowding with this per-field column (default "
+                                       "readout_coverage). The raw estimate stays the headline. Empty = off."),
+        "among_classes": dict(kind="list", label="Compare within classes",
+                              help="Class names whose members are compared with each other (all pairs), e.g. mirna."),
+    },
+    "acceptance": {
+        "vehicle_within": dict(kind="num_or", special=[""], label="Vehicle within ± (ratio)",
+                               help="Per n, the vehicle / control ratio of nuclei per field must lie within 1 ± this "
+                                    "(0.3 = 0.7 to 1.3). Uses the vehicle check pair. Empty = off."),
+        "positive_control_max_ratio": dict(kind="num_or", special=[""], label="Positive control must reach (ratio)",
+                                           help="Per n, positive control / main comparison group must be at most this "
+                                                "ratio (e.g. 0.8 = at least 20% fewer nuclei); a value above 1 means "
+                                                "at least this ratio. Needs a positive control. Empty = off."),
+        "min_images_per_condition": dict(kind="int", min=0, label="Minimum images per condition",
+                                         help="Every condition in that n needs at least this many usable images."),
+        "max_low_qc_fraction": dict(kind="float", min=0, max=1, label="Maximum share of QC-low images",
+                                    help="e.g. 0.5 = at most half of that n's images may have QC low."),
+        "no_duplicate_images": dict(kind="bool", label="No duplicate images",
+                                    help="An n fails if one of its raw image files is byte-identical to an image of "
+                                         "another condition (a copied folder). Listed in duplicates.csv."),
+        "enforce": dict(kind="bool", label="Leave out n's that fail",
+                        help="Off = only report (acceptance.csv). On = n's that fail any criterion are left out of "
+                             "every all-n statistic; they are listed in the About sheet and the manifest."),
     },
     "design": {
-        "wells": dict(kind="int", min=1, label="Wells per condition per n", help="Used by the sampling analysis."),
-        "fields_per_well": dict(kind="int", min=1, label="Fields (images) per well"),
-        "well_layout": dict(kind="choice", options=["consecutive", "alternating"], label="Well layout",
-                            help="consecutive = images 1-6 well 1, 7-12 well 2; alternating = odd/even."),
+        "wells": dict(kind="num_or", special=["auto"], label="Wells per condition per n",
+                      help="Usually 2. auto = take the wells from wells.csv in the project folder if it exists, else 2."),
+        "fields_per_well": dict(kind="num_or", special=["auto"], label="Fields (images) per well",
+                                help="auto = per condition, highest image number ÷ wells, rounded up (11 images = 6 + 5, "
+                                     "18 images = 9 + 9). A number fixes it; images beyond wells × fields are flagged."),
+        "well_layout": dict(kind="choice", options=["consecutive", "alternating", "file"], label="Well layout",
+                            help="consecutive = images 1-6 well 1, 7-12 well 2; alternating = odd/even; "
+                                 "file = wells.csv in the project folder (columns image, well, position; optional n, treatment)."),
+        "field_positions": dict(kind="choice", options=["fixed", "random"], label="Field positions",
+                                help="fixed = field 1 of every well is the same spot (e.g. centre), so position can "
+                                     "explain differences between fields; random = fields were taken anywhere, "
+                                     "position is ignored."),
     },
     "review": {
         "overlay_alpha": dict(kind="float", label="Overlay transparency", help="0 = invisible, 1 = opaque."),
         "jpeg_quality": dict(kind="int", min=1, max=100, label="Review image JPEG quality"),
     },
+    "planner": {
+        "effects": dict(kind="list", label="Effects to plan for (ratios)",
+                        help="Treatment ÷ reference ratios, e.g. 0.8, 0.7, 0.5 (0.7 = 30% fewer nuclei)."),
+        "target_power": dict(kind="float", min=0.05, max=0.999, label="Target power",
+                             help="Chance of finding a real effect (p < alpha); 0.8 is usual."),
+        "alpha": dict(kind="float", min=0.0001, max=0.5, label="Significance level (alpha)", help="Usually 0.05."),
+        "cost_per_n": dict(kind="float", min=0, label="Effort per n (plate / day)",
+                           help="Seeding, transfection, staining for one independent experiment. Any unit, e.g. minutes."),
+        "cost_per_well": dict(kind="float", min=0, label="Effort per well", help="Same unit; pipetting and handling one more well."),
+        "cost_per_field": dict(kind="float", min=0, label="Effort per field (image)",
+                               help="Same unit; taking and checking one more image."),
+        "max_n": dict(kind="int", min=3, max=100, label="Largest number of n's in the tables"),
+        "plate_format": dict(kind="int", min=6, max=96, label="Plate format (wells)", help="6, 12, 24, 48 or 96."),
+        "avoid_edge": dict(kind="bool", label="Plate maps: avoid edge wells",
+                           help="Use inner wells first; edge wells (evaporation) only when the inner ones are not enough."),
+        "reference_wells": dict(kind="num_or", special=["auto"], label="Wells per reference condition",
+                                help="auto = Dunnett's rule: wells × √(number of comparisons), as far as the plate allows."),
+        "adjust_for_family": dict(kind="bool", label="Power for a star on the headline plot (family-adjusted)",
+                                  help="On: power and smallest detectable effect use the multiple-comparison adjustment "
+                                       "of the statistics (all comparisons vs the reference). Off: one unadjusted test."),
+    },
 }
 
 SECTION_TITLES = {
-    "project": "Project", "channels": "Channels", "segmentation": "Finding nuclei", "counting": "What counts as a nucleus",
-    "qc": "Quality levels", "intensity": "Intensity per cell", "analysis": "Statistics",
-    "design": "Plate design (sampling analysis)", "review": "Review images",
+    "project": "Project", "experiment": "Experiment (cell line, imaging, controls)", "channels": "Channels", "segmentation": "Finding nuclei", "counting": "What counts as a nucleus",
+    "qc": "Quality levels", "intensity": "Intensity per cell / nucleus",
+    "positivity": "% positive nuclei (e.g. Ki-67)", "readouts": "Extra readouts (beyond the count)",
+    "analysis": "Statistics", "acceptance": "Acceptance criteria per n",
+    "design": "Plate design (wells, fields, positions)", "review": "Review images",
+    "planner": "Planning the next experiment",
 }
 
 
 def schema() -> list[dict]:
     return [dict(section=s, title=SECTION_TITLES.get(s, s),
-                 fields=[dict(key=k, default=DEFAULTS[s][k], **meta) for k, meta in keys.items()])
-            for s, keys in FIELDS.items()]
+                 items=[dict(key=k, default=DEFAULTS[s][k], **meta) for k, meta in keys.items()])
+            for s, keys in FORM_ITEMS.items()]
 
 
 def _num(v, as_int=False):
@@ -113,16 +305,18 @@ def _num(v, as_int=False):
 
 
 def coerce(values: dict) -> dict:
-    """Turn form values (strings, booleans, lists) into typed settings; raise ValueError naming the bad field."""
+    """Turn form values (strings, booleans, lists) into typed settings; raise ValueError naming the bad form item."""
     out: dict[str, dict] = {}
     for sec, keys in values.items():
-        if sec not in FIELDS:
+        if sec not in FORM_ITEMS:
             continue
         for key, v in keys.items():
-            meta = FIELDS[sec].get(key)
+            meta = FORM_ITEMS[sec].get(key)
             if meta is None:
                 continue
             k, where = meta["kind"], f"{SECTION_TITLES[sec]} → {meta.get('label', key)}"
+            if meta.get("no_dash") and str(v).strip().startswith("-"):
+                raise ValueError(f"{where}: may not start with - (it would be read as a command-line option)")
             try:
                 if k == "bool":
                     val = bool(v)
@@ -144,15 +338,57 @@ def coerce(values: dict) -> dict:
                 elif k == "num_or":
                     s = str(v).strip()
                     val = s if s in meta["special"] else _num(s)
+                elif k == "table":
+                    sv = v.strip() if isinstance(v, str) else None
+                    val = sv.lower() if sv is not None and sv.lower() in meta.get("special", []) else parse_table(v)
                 elif k == "measure":
                     s = str(v).strip().lower()
                     val = "all" if s in ("", "all") else [_num(c, as_int=True) for c in s.replace(";", ",").split(",") if c.strip()]
+                elif k == "names":  # "all", or a subset of `options` (the readout_ prefix is optional)
+                    items = v if isinstance(v, list) else str(v).replace(";", ",").split(",")
+                    items = [str(i).strip().removeprefix("readout_") for i in items if str(i).strip()]
+                    if not items or "all" in items:
+                        val = "all"
+                    else:
+                        if any(i not in meta["options"] for i in items):
+                            raise ValueError
+                        val = [o for o in meta["options"] if o in items]
                 else:
                     val = str(v).strip()
             except (ValueError, TypeError):
                 raise ValueError(f"{where}: '{v}' is not a valid value") from None
             out.setdefault(sec, {})[key] = val
     return out
+
+
+def parse_table(v) -> dict:
+    """kind "table": a TOML inline table of name = [strings] (dict or its text form, e.g. '{ mirna = ["miR-*"] }')."""
+    if isinstance(v, dict):
+        t = v
+    else:
+        s = str(v).strip()
+        if not s:
+            return {}
+        if not s.startswith("{"):
+            s = "{ " + s + " }"
+        t = tomllib.loads(f"x = {s}")["x"]
+    if not isinstance(t, dict):
+        raise ValueError
+    out = {}
+    for name, pats in t.items():
+        if isinstance(pats, str):
+            pats = [pats]
+        if not isinstance(pats, list) or not all(isinstance(p, str) for p in pats):
+            raise ValueError
+        out[str(name)] = [p.strip() for p in pats if p.strip()]
+    return out
+
+
+def table_text(v: dict) -> str:
+    """Display form of a kind "table" value ("auto" stays a word)."""
+    if isinstance(v, str):
+        return v
+    return toml_value(v or {})
 
 
 def toml_value(v) -> str:
@@ -162,6 +398,11 @@ def toml_value(v) -> str:
         return repr(v)
     if isinstance(v, list):
         return "[" + ", ".join(toml_value(i) for i in v) + "]"
+    if isinstance(v, dict):
+        if not v:
+            return "{}"
+        keys = [k if re.fullmatch(r"[A-Za-z0-9_\-]+", k) else json.dumps(k) for k in v]
+        return "{ " + ", ".join(f"{k} = {toml_value(x)}" for k, x in zip(keys, v.values())) + " }"
     return json.dumps(str(v), ensure_ascii=False)  # a JSON string is a valid TOML basic string
 
 
