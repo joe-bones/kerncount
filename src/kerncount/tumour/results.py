@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import plots, stats
+from . import plots, sensitivity, stats
 from .config import Factor, Family, Readout, factors, families, normalise_by, readouts
 
 MODEL = "N-way linear model on log(readout), full interaction, pooled variance"
@@ -104,6 +104,8 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
     tum = table.copy()
     stats_rows: list[dict] = []
     all_res, all_means, written = [], [], []
+    n_perm, seed = sensitivity.options(settings)
+    all_sens: list[pd.DataFrame] = []
     for ro in readouts(settings):
         if ro.column not in table.columns:
             notes.append(f"readout {ro.name}: column {ro.column} not in tumours.csv (not analysed)")
@@ -122,6 +124,11 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
                 columns={"pct": "pct_of_reference", "ci_low": "pct_ci_low", "ci_high": "pct_ci_high"}),
                 on=[f.name for f in facs], how="left")
         stats_rows += _stats_rows(res, means, facs, ro, h)
+        sens = sensitivity.readout_sensitivity(table, facs, fams, ro, res, n_perm, seed)
+        stats_rows += sensitivity.long_rows(sens, ro, h)
+        all_sens.append(sens)
+        written.append(str(sensitivity.residual_plot(sensitivity.groups(table, facs, ro.column), facs, ro.label,
+                                                     out / "plots" / f"{ro.name}_residuals")))
         all_res.append(res)
         all_means.append(means.assign(readout=ro.name))
         # Prism-ready per-tumour tables (one column per group)
@@ -136,8 +143,18 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
     lines = _about(settings, h, spec, fams, notes, table, facs)
     _excel(out, lines, tum, stats_rows, all_means, fams)
     report = _report(out, lines, all_res)
+    _sensitivity_outputs(out, report, all_sens, n_perm, seed)
     print("\n".join(x for x in lines if x.startswith(("Tumour statistics", "Readouts", "Levels without", "NOTE"))))
     return [str(out / "stats_long.csv"), str(out / "results.xlsx"), str(report), *written]
+
+
+def _sensitivity_outputs(out: Path, report: Path, sens: list[pd.DataFrame], n_perm: int, seed: int) -> None:
+    """Ticket 08: 'Sensitivity' sheet in results.xlsx and a '## Sensitivity' section at the end of the report."""
+    with pd.ExcelWriter(out / "results.xlsx", engine="openpyxl", mode="a") as xw:
+        (pd.concat(sens, ignore_index=True) if sens else pd.DataFrame(columns=sensitivity.SENSITIVITY_COLUMNS)
+         ).to_excel(xw, sheet_name="Sensitivity", index=False)
+    with report.open("a", encoding="utf-8") as fh:
+        fh.write("\n" + "\n".join(sensitivity.report_lines(sens, n_perm, seed)) + "\n")
 
 
 def _plots(out: Path, table: pd.DataFrame, tum: pd.DataFrame, facs: list[Factor], focus: Factor | None,
@@ -233,7 +250,8 @@ def _report(out: Path, lines: list[str], results: list[pd.DataFrame]) -> Path:
             for _, r in g.iterrows():
                 p = f"{r['p']:.3g}" if np.isfinite(r["p"]) else ""
                 pa = f"{r['p_adj']:.3g}" if np.isfinite(r["p_adj"]) else ""
-                md.append(f"| {r['comparison']} | {_fmt(r)} | {p} | {pa} | {r['significance']} | {r['note']} |")
+                md.append(f"| {sensitivity.md_cell(r['comparison'])} | {_fmt(r)} | {p} | {pa} | {r['significance']} | "
+                          f"{r['note']} |")
             md.append("")
     path = out / "stats_report.md"
     path.write_text("\n".join(md), encoding="utf-8")

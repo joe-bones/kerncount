@@ -107,6 +107,10 @@ light is the open question for the threshold sweep and Fiji concordance (ticket 
 - `results.xlsx` — sheets About (analysis plan, lock hash, levels without data), Tumours (tumours.csv + `<name>_pct`
   columns), Statistics (= stats_long), Estimated means (absolute and % of reference with CIs), Families.
 - `stats_report.md` — the locked plan (readout split, families) and one table per readout and family.
+- Sensitivity (ticket 08): `plots/<name>_residuals.png|pdf` (residuals by group with each group's SD + normal QQ
+  of the studentised residuals), sheet **Sensitivity** in `results.xlsx` (one row per contrast: Welch CI/df/p/Holm p,
+  permutation p/Holm p, permutations, seed, `concordant`, `concordance`), stats_long rows with family
+  `<id> (Welch-type)` / `<id> (permutation)` (never starred), and a `## Sensitivity` section in `stats_report.md`.
 - `_work/tumour/<slug>.json` + `<slug>.labels.tif` — cache per tumour (zlib uint8/uint16 labels, ~1 MB for the
   largest stack). Re-runs reuse it unless the file or the segmentation settings changed; `--resegment` forces it.
 
@@ -149,6 +153,26 @@ contrasts needing cells without tumours stay in every table, labelled `needs WT 
 **Normalised values** (`[tumour] normalise_by`, default the factor on x): % of the model-estimated reference level
 (cntrl) in the same cell of all other factors. Reference tumours scatter around 100 % (their geometric mean is exactly
 100 %); a group's normalised estimate and CI equal its F1 fold-change × 100.
+
+**Sensitivity models** (ADR 0003; `tumour/sensitivity.py`). Every contrast the primary model tests is re-tested
+twice; contrasts it does not test (confounded with imaging session, descriptive, needing absent groups) stay untested.
+- *Welch-type*: same point estimate, SE² = Σ w²·s²ᵢ/nᵢ with each group's own variance, Satterthwaite df. Needs ≥ 2
+  tumours in every group the contrast uses.
+- *Permutation*, simple effects (two groups in one cell of the other factors): the focus-factor labels of the two
+  compared groups are permuted. Other levels of the focus factor are left out: under the null of *this* contrast only
+  these two groups are exchangeable. Every split is enumerated when there are at most `sensitivity_permutations`
+  (6 + 6 tumours = 924 splits, smallest p 2/924 = 0.0022, still < 0.05/8 for Holm over the 8 contrasts of F1);
+  otherwise random permutations, p = (1 + #extreme)/(B + 1) (B = 9999: smallest p 0.0001).
+- *Permutation*, interactions: **Freedman–Lane** — fit the reduced model (cell means with this contrast constrained
+  to 0: μᵢ − λ·wᵢ/nᵢ), permute its residuals across the tumours of the contrast's cells, add them back to the reduced
+  fit, refit, compare |t|. Unlike raw label permutation this keeps the main effects in the null, so it tests only the
+  ratio of ratios. For two groups it coincides with label permutation. The t of the permutation tests pools the
+  variance over the contrast's own groups (not all groups), so it does not lean on equal variances elsewhere.
+- Random permutations are seeded: `[tumour] sensitivity_seed` (default 20261119) combined with the contrast label,
+  so reruns are identical and independent of order. Seed and permutation count are in every output.
+- Holm within each family and readout, per method. **Concordant** = both methods reach the same Holm-adjusted
+  conclusion at 0.05 as the primary model (direction always agrees: the point estimate is shared). A `no` means the
+  conclusion depends on the pooled-variance assumption or on the t approximation — report it alongside.
 
 **Lock.** The analysis plan (factors + levels + references, readouts + roles, families, normalise_by) is hashed
 (`lock <12 hex>`); the hash is in every stats_long note, the workbook's About sheet and `stats_report.md`. Change the

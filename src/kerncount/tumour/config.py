@@ -18,6 +18,9 @@ DEFAULTS: dict = {
     "smooth_sigma_um": 2.0,  # Gaussian smoothing before thresholding (physical scale, same for every tumour)
     "threshold": "intermedians",  # per-tumour automatic threshold, no rolling ball (docs/tumour.md)
     "min_object_um3": 1000.0,  # connected objects smaller than this are noise (not satellites)
+    # Sensitivity models (ticket 08): random permutations per contrast (when not enumerated exactly) and their seed.
+    "sensitivity_permutations": 9999,
+    "sensitivity_seed": 20261119,
     "factors": [
         {"name": "genotype", "levels": ["WT", "TLR7 KO"], "reference": "WT", "role": "row", "source": "session",
          "aliases": {"KO7": "TLR7 KO", "KO": "TLR7 KO"}},
@@ -71,6 +74,8 @@ notes = ""
 smooth_sigma_um = 2.0     # Gaussian smoothing (µm) before the threshold; identical for every tumour
 threshold = "intermedians"   # per-tumour automatic threshold without rolling ball: "intermedians" or "otsu"
 min_object_um3 = 1000.0   # smaller connected objects are noise; larger ones besides the main mass are satellites
+sensitivity_permutations = 9999   # sensitivity: random permutations per contrast (exact enumeration when fewer splits)
+sensitivity_seed = 20261119       # seed of the permutations (recorded in the report; same seed = same p-values)
 
 # Factors: one column per factor in layout.csv. levels = allowed values, reference = comparison baseline,
 # role = where the factor goes in group plots (row, panel, x, colour), source = where the value is read
