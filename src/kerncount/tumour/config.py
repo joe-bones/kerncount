@@ -25,6 +25,15 @@ DEFAULTS: dict = {
     "planner_fold_change": 1.5,
     "planner_power": 0.8,
     "planner_alpha": 0.05,
+    # Fiji legacy readout + concordance (ticket 07, ADR 0002): fiji_* columns from the lab's Fiji outputs; the macro
+    # is re-run on the original stack when they are missing (fiji_fallback). Objects >= fiji_min_voxels (macro: 200000).
+    "fiji_legacy": True,
+    "fiji_fallback": True,
+    "fiji_min_voxels": 200000,
+    # Threshold sweep (ADR 0002): every confirmatory effect recomputed with the primary threshold x each scale.
+    # Off by default: re-segments every stack once (cached in _work/tumour/<slug>.sweep.json).
+    "threshold_sweep": False,
+    "sweep_scales": [0.8, 0.9, 1.1, 1.2],
     "factors": [
         {"name": "genotype", "levels": ["WT", "TLR7 KO"], "reference": "WT", "role": "row", "source": "session",
          "aliases": {"KO7": "TLR7 KO", "KO": "TLR7 KO"}},
@@ -81,6 +90,11 @@ min_object_um3 = 1000.0   # smaller connected objects are noise; larger ones bes
 sensitivity_permutations = 9999   # sensitivity: random permutations per contrast (exact enumeration when fewer splits)
 sensitivity_seed = 20261119       # seed of the permutations (recorded in the report; same seed = same p-values)
 planner_fold_change = 1.5         # power planner (planning aid): tumours per group needed to detect this fold-change
+fiji_legacy = true        # Fiji legacy readout (fiji_* columns, exploratory) and the new-vs-Fiji concordance report
+fiji_fallback = true      # no Fiji statistics/mask for a tumour: re-run the macro on its original stack
+fiji_min_voxels = 200000  # 3D Objects Counter minimum object size of the macro (voxels)
+threshold_sweep = false   # true: recompute every confirmatory effect at the threshold x sweep_scales (slow first run)
+sweep_scales = [0.8, 0.9, 1.1, 1.2]
 
 # Factors: one column per factor in layout.csv. levels = allowed values, reference = comparison baseline,
 # role = where the factor goes in group plots (row, panel, x, colour), source = where the value is read
@@ -249,6 +263,25 @@ def readouts(settings: dict) -> list[Readout]:
             raise ValueError(f"[tumour.readouts] {name}: role {role!r} must be one of {', '.join(READOUT_ROLES)}")
         out.append(Readout(name, col, str(r.get("label") or name), role))
     return out
+
+
+# Fiji legacy counterpart of a readout column (concordance plots / side-by-side effects). A `[[tumour.readouts]]`
+# entry may name its own with `legacy = "<fiji column>"` (e.g. after the confirmatory readout definition changes).
+LEGACY_COUNTERPARTS = {
+    "main_mass_volume_mm3": "fiji_main_volume_mm3",
+    "main_mass_volume_um3": "fiji_main_volume_um3",
+    "main_mass_surface_mm2": "fiji_main_surface_mm2",
+    "main_mass_surface_um2": "fiji_main_surface_um2",
+    "tumour_burden_mm3": "fiji_total_volume_mm3",
+}
+
+
+def legacy_counterpart(settings: dict, readout: Readout) -> str:
+    """The fiji_* column compared with `readout` ("" = none)."""
+    for r in tumour_settings(settings)["readouts"]:
+        if str(r.get("name") or r["column"]) == readout.name and "legacy" in r:
+            return str(r["legacy"] or "")
+    return LEGACY_COUNTERPARTS.get(readout.column, "")
 
 
 def families(settings: dict) -> list[Family]:

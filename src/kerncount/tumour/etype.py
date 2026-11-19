@@ -77,9 +77,11 @@ class TumourVolume(ExperimentType):
         self.analyse(project_dir, table, s, options)
 
     def measure(self, project_dir: Path, layout: pd.DataFrame, settings: dict, options: RunOptions) -> pd.DataFrame:
-        from . import measure
+        from . import legacy, measure
 
-        return measure.measure(project_dir, layout, settings, resegment=options.resegment)
+        m = measure.measure(project_dir, layout, settings, resegment=options.resegment)
+        fiji = legacy.measure(project_dir, layout, settings, m)  # ticket 07: fiji_* legacy readouts
+        return m.merge(fiji, on="tumour_id", how="left") if len(fiji.columns) > 1 else m
 
     def readout_table(self, project_dir: Path, layout: pd.DataFrame, measurements: pd.DataFrame,
                       settings: dict) -> pd.DataFrame:

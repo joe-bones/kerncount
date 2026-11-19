@@ -151,6 +151,9 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
     report = _report(out, lines, all_res)
     _sensitivity_outputs(out, report, all_sens, n_perm, seed)
     _planning_outputs(out, report, plans, pooled_sd, planner.options(settings))
+    from . import concordance  # ticket 07: primary vs Fiji legacy, threshold sweep
+
+    written += concordance.analyse(out, table, settings, facs, fams, report)
     print("\n".join(x for x in lines if x.startswith(("Tumour statistics", "Readouts", "Levels without", "NOTE"))))
     return [str(out / "stats_long.csv"), str(out / "results.xlsx"), str(report), *written]
 

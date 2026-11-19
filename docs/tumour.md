@@ -200,6 +200,55 @@ families and contrasts confounded with imaging session are not planned):
 (`lock <12 hex>`); the hash is in every stats_long note, the workbook's About sheet and `stats_report.md`. Change the
 plan only before results are viewed; a different hash means a different plan.
 
+## Fiji legacy readout and method concordance (ticket 07, ADR 0002)
+**Legacy readout** (`fiji_*` columns of `tumours.csv`; exploratory, labelled legacy, never starred):
+`fiji_main_volume_um3|mm3` (largest 3D object), `fiji_main_surface_um2|mm2` (Fiji's border-voxel surface),
+`fiji_n_objects` (objects ≥ `fiji_min_voxels`), `fiji_total_volume_mm3`, `fiji_main_z_start` (1 = first layer),
+`fiji_main_z_layers`, `fiji_main_full_depth` (main object spans every layer), `fiji_source`, `fiji_note`.
+Source per tumour, in order: the lab's 3D Objects Counter table (`legacy_stats`), objects counted on the lab's mask
+(`legacy_mask`), the macro re-run on the original stack (`[tumour] fiji_fallback = true`). Statistics files are read
+with or without header (`Statistics for …f.csv`, `…f_3Dresults.csv`, the header-less `.txt`), with trailing `;;`, a
+truncated header or a leading row-number column; anything else (e.g. Excel sum rows with decimal commas in
+`Statistics for 030826 N4 -clodro n3 Bf.csv`) is skipped and listed in `fiji_note` — never guessed. All 48 real files
+parse; that one has 3 skipped rows. Cache: `_work/tumour/<slug>.fiji.json`.
+
+**Re-implementation** (`tumour/fiji.py`), written from the ImageJ / 3D Objects Counter sources, not textbook versions:
+rolling ball 50 px per layer exactly as ImageJ does it (3 × 3 mean pre-smoothing, 4× min-shrink, trimmed 19 × 19 ball
+patch, grey opening with that non-flat element, ImageJ's linear re-enlargement; scipy, no
+skimage `rolling_ball`), median radius 1 (= 3 × 3), Triangle (ImageJ's variant), mask, 2D fill holes, 3 × 3 open per
+layer, 26-connected objects ≥ 200 000 voxels. Two findings from matching the lab's masks:
+- **The masks were thresholded per layer**: Convert to Mask re-computed Triangle on every layer ("Calculate threshold
+  for each image" ticked), keeping values ≥ the layer's level — not one stack threshold as the macro text suggests.
+  With the stack threshold the agreement is only Dice 0.80 / volume 0.69 (cntrl +clodro n1 B). Per-layer
+  thresholds are why Fiji's largest object starts in layer 1 and spans every layer in **all 48 tumours**: even a
+  nearly empty top or bottom layer gets its own threshold near its background, so Fiji's volume is close to
+  area × acquired stack depth.
+- 3D Objects Counter's surface is the sum of exposed faces of the surface voxels, accumulated in float32 (≈1 % below
+  the exact face sum at 10⁶ µm²); reproduced bit-exactly.
+
+Measured agreement (slow test `tests/test_tumour_fiji.py`, 2026-11-19): cntrl +clodro n1 B and N4 −clodro n3 B
+(the malformed-statistics one) — re-implementation vs lab mask **Dice 1.00000, volume ratio 1.00000** (voxel
+identical); objects on the lab masks reproduce Fiji's voxels, surface voxels, surface and B-depth exactly. Runtime
+10 s / 33 s per stack; peak ~2 × the stack plus the int32 labels.
+
+**Concordance** (confirmatory readouts only; readout-generic: the Fiji counterpart is `legacy = "<column>"` on a
+`[[tumour.readouts]]` entry, else the default map volume → `fiji_main_volume_mm3`, surface → `fiji_main_surface_mm2`):
+- `plots/<name>_vs_fiji.png|pdf` — per tumour, primary (y) vs Fiji (x), log axes, identity line, median ratio and
+  Spearman ρ in the title.
+- `concordance.csv` / sheets **Concordance** and **Concordance summary** — the same families, contrasts and Holm
+  correction re-run on the Fiji column; per contrast `direction_agree` (same side of 1) and `significance_agree`
+  (Holm p < 0.05 in both or neither, same direction); per readout × family counts and `conclusion_differs`.
+  `stats_report.md` gets a `## Method concordance` section that names every contrast whose conclusion differs.
+
+**Threshold sweep** (`[tumour] threshold_sweep = true`, `sweep_scales = [0.8, 0.9, 1.1, 1.2]`): every stack is read and
+smoothed once and thresholded at the primary threshold × each scale (`segment.sweep`, identical to
+`segment(..., threshold_scale=s)`); only readouts are kept (`_work/tumour/<slug>.sweep.json`), the per-scale tables
+go through `table.build`. Outputs: `threshold_sweep.csv` / sheet **Threshold sweep** (every contrast at every scale),
+`plots/<name>_threshold_sweep.png|pdf` (one panel per family, fold-change vs scale, 95 % CI band, filled = Holm
+p < 0.05) and a `## Threshold sweep` report table (fold-change range, whether significance changes). Off by default
+because the first run re-segments every stack (~20–60 s each, 1 stack in memory). Only readouts produced by
+`segment.segment` / `table.build` are sweepable; others are listed as not available.
+
 ## Memory
 One stack at a time: uint8 stack + float32 smoothed copy, then mask + int32 labels; peak ≈ 10 × the stack size
 (2.8 GB for the largest, 280 MB stack). Hole filling labels the background instead of iterative dilation.

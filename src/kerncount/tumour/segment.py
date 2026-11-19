@@ -126,23 +126,22 @@ def _fill_holes_3d(mask: np.ndarray) -> None:
     mask |= ~border[bg]
 
 
-def segment(stack: np.ndarray, voxel_um: tuple[float, float, float], smooth_sigma_um: float = 2.0,
-            threshold: str = "intermedians", min_object_um3: float = 1000.0) -> Segmentation:
-    vz, vy, vx = voxel_um
-    voxel_um3 = vz * vy * vx
+def _smoothed(stack: np.ndarray, voxel_um: tuple[float, float, float], smooth_sigma_um: float
+              ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """(smoothed float32 stack, histogram counts, bin centres, top grey value)."""
     top = np.iinfo(stack.dtype).max if np.issubdtype(stack.dtype, np.integer) else float(stack.max())
-    saturated = stack >= top
-    n_sat = int(np.count_nonzero(saturated))
-    del saturated
-
     sm = ndi.gaussian_filter(stack, [smooth_sigma_um / v for v in voxel_um], output=np.float32)
     counts, edges = np.histogram(sm, bins=_HIST_BINS, range=(0.0, float(top) + 1.0))
-    centres = (edges[:-1] + edges[1:]) / 2
-    t, bg_level, fg_level = threshold_from_histogram(counts, centres, threshold)
-    mask = sm > np.float32(t)
-    del sm
-    _fill_holes_3d(mask)
+    return sm, counts, (edges[:-1] + edges[1:]) / 2, float(top)
 
+
+def _segment_at(stack: np.ndarray, sm: np.ndarray, voxel_um: tuple[float, float, float], t: float,
+                min_object_um3: float, top: float) -> tuple[np.ndarray, dict]:
+    """Threshold the smoothed stack at `t` -> 3D fill -> 26-connected objects: (labels, size readouts)."""
+    vz, vy, vx = voxel_um
+    voxel_um3 = vz * vy * vx
+    mask = sm > np.float32(t)
+    _fill_holes_3d(mask)
     lab, n = ndi.label(mask, structure=np.ones((3, 3, 3), bool))
     del mask
     sizes = np.bincount(lab.ravel(), minlength=n + 1)
@@ -157,27 +156,70 @@ def segment(stack: np.ndarray, voxel_um: tuple[float, float, float], smooth_sigm
     del lab
 
     main_vox = int(sizes[order[0]]) if order else 0
-    main = labels == 1
-    sat_main = int(np.count_nonzero(main & (stack >= top))) if main_vox else 0
-    del main
+    sat_main = int(np.count_nonzero((labels == 1) & (stack >= top))) if main_vox else 0
+    return labels, {
+        "main_mass_voxels": main_vox, "main_mass_volume_um3": round(main_vox * voxel_um3, 3),
+        "n_satellites": max(len(order) - 1, 0),
+        "saturated_frac_main_mass": sat_main / main_vox if main_vox else float("nan"),
+    }
+
+
+def segment(stack: np.ndarray, voxel_um: tuple[float, float, float], smooth_sigma_um: float = 2.0,
+            threshold: str = "intermedians", min_object_um3: float = 1000.0, threshold_scale: float = 1.0
+            ) -> Segmentation:
+    """`threshold_scale` multiplies the automatic threshold (1 = the primary method; the threshold sweep uses
+    0.8-1.2); `threshold` in the readouts is the applied value, `threshold_auto` the automatic one."""
+    vz, vy, vx = voxel_um
+    sm, counts, centres, top = _smoothed(stack, voxel_um, smooth_sigma_um)
+    n_sat = int(np.count_nonzero(stack >= top))
+    t, bg_level, fg_level = threshold_from_histogram(counts, centres, threshold)
+    labels, size = _segment_at(stack, sm, voxel_um, t * threshold_scale, min_object_um3, top)
+    del sm
     readouts = {
         "voxel_z_um": vz, "voxel_y_um": vy, "voxel_x_um": vx,
         "n_layers": int(stack.shape[0]), "rows": int(stack.shape[1]), "columns": int(stack.shape[2]),
-        "threshold_method": threshold, "threshold": round(t, 3),
+        "threshold_method": threshold, "threshold": round(t * threshold_scale, 3),
         "background_level": round(bg_level, 3), "tumour_level": round(fg_level, 3),
         "smooth_sigma_um": smooth_sigma_um, "min_object_um3": min_object_um3,
-        "main_mass_voxels": main_vox, "main_mass_volume_um3": round(main_vox * voxel_um3, 3),
-        "n_satellites": max(len(order) - 1, 0),
+        "main_mass_voxels": size["main_mass_voxels"], "main_mass_volume_um3": size["main_mass_volume_um3"],
+        "n_satellites": size["n_satellites"],
         "saturated_frac": n_sat / stack.size,
-        "saturated_frac_main_mass": sat_main / main_vox if main_vox else float("nan"),
+        "saturated_frac_main_mass": size["saturated_frac_main_mass"],
     }
+    if threshold_scale != 1.0:
+        readouts.update(threshold_auto=round(t, 3), threshold_scale=threshold_scale)
     return Segmentation(labels, readouts)
 
 
-def measure_file(path: Path, tumour_settings: dict) -> Segmentation:
+def sweep(stack: np.ndarray, voxel_um: tuple[float, float, float], scales: list[float],
+          smooth_sigma_um: float = 2.0, threshold: str = "intermedians", min_object_um3: float = 1000.0
+          ) -> dict[float, dict]:
+    """Readouts of `segment` at threshold x each scale, smoothing once (one stack in memory at a time; the
+    labels are not kept). Identical to calling `segment(..., threshold_scale=s)` per scale."""
+    sm, counts, centres, top = _smoothed(stack, voxel_um, smooth_sigma_um)
+    t, _, _ = threshold_from_histogram(counts, centres, threshold)
+    vz, vy, vx = voxel_um
+    out = {}
+    for s in scales:
+        _, size = _segment_at(stack, sm, voxel_um, t * float(s), min_object_um3, top)
+        out[float(s)] = {"voxel_z_um": vz, "voxel_y_um": vy, "voxel_x_um": vx, "n_layers": int(stack.shape[0]),
+                         "threshold": round(t * float(s), 3), "threshold_auto": round(t, 3),
+                         "threshold_scale": float(s), **size}
+    return out
+
+
+def measure_file(path: Path, tumour_settings: dict, threshold_scale: float = 1.0) -> Segmentation:
     """Read one original stack, check its calibration, segment it with the [tumour] settings."""
     vox = voxel_size_um(path)  # before reading the pixels: an uncalibrated file fails fast
     stack = read_stack(path)
     return segment(stack, vox, smooth_sigma_um=float(tumour_settings["smooth_sigma_um"]),
                    threshold=str(tumour_settings["threshold"]),
-                   min_object_um3=float(tumour_settings["min_object_um3"]))
+                   min_object_um3=float(tumour_settings["min_object_um3"]), threshold_scale=threshold_scale)
+
+
+def sweep_file(path: Path, tumour_settings: dict, scales: list[float]) -> dict[float, dict]:
+    """`sweep` on one original stack with the [tumour] settings."""
+    vox = voxel_size_um(path)
+    return sweep(read_stack(path), vox, scales, smooth_sigma_um=float(tumour_settings["smooth_sigma_um"]),
+                 threshold=str(tumour_settings["threshold"]),
+                 min_object_um3=float(tumour_settings["min_object_um3"]))
