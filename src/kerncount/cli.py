@@ -112,7 +112,8 @@ def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False, ety
     etype.report_layout(layout, s, raw)
     ws = workspace_root()
     target = prj.name if ws and prj.resolve().parent == (ws / ANALYSIS).resolve() else str(prj)
-    print(f"\nWrote {lp}\nCheck the n / treatment names (edit the CSV if needed), then run:  kerncount run \"{target}\"")
+    hint = getattr(etype, "layout_hint", "Check the n / treatment names (edit the CSV if needed)")
+    print(f"\nWrote {lp}\n{hint}, then run:  kerncount run \"{target}\"")
 
 
 def cmd_init(a):
