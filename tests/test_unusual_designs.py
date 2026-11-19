@@ -137,7 +137,7 @@ def test_d_empty_folder_is_a_missing_condition():
 def test_d_all_zero_counts_and_all_or_nothing_fractions_are_explained():
     d = pd.DataFrame(dict(treatment=["A"] * 3 + ["B"] * 3 + ["C"] * 3, value=[0, 0, 0, 5, 6, 7, 0, 0, 0]))
     cnt = models.boundary_notes(d, metrics.COUNT)
-    assert len(cnt) == 2 and cnt[0].startswith("A: 0 nuclei in every field") and "offset" in cnt[0]
+    assert len(cnt) == 1 and cnt[0].startswith("A, C: 0 nuclei in every field") and "offset" in cnt[0]
     frac = metrics.registry(["readout_frac_positive_Ki67"], S)["readout_frac_positive_Ki67"]
     f = pd.DataFrame(dict(treatment=["A"] * 2 + ["B"] * 2, value=[1.0, 1.0, 0.2, 0.3]))
     assert models.boundary_notes(f, frac) == [

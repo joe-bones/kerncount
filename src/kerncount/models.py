@@ -1570,18 +1570,25 @@ def boundary_notes(df: pd.DataFrame, metric: Metric) -> list[str]:
     if metric.kind not in ("count", "fraction") or "value" not in df:
         return []
     v = pd.to_numeric(df["value"], errors="coerce")
-    out = []
+    zero, edge = [], {"0%": [], "100%": []}   # treatments sharing a message are listed together (one note each)
     for t, g in v.groupby(df["treatment"], sort=True):
         g = g.dropna()
         if g.empty:
             continue
         if metric.kind == "count" and (g == 0).all():
-            out.append(f"{t}: 0 nuclei in every field; its ratios rest on the +{COUNT_OFFSET:g} offset (read them as "
-                       "'close to 0', an upper bound)")
+            zero.append(str(t))
         elif metric.kind == "fraction" and ((g == 0).all() or (g == 1).all()):
-            pct = "0%" if (g == 0).all() else "100%"
-            out.append(f"{t}: {pct} in every field; the empirical logit keeps it finite, so its odds ratios are "
-                       "arbitrary: read the percentage-point difference")
+            edge["0%" if (g == 0).all() else "100%"].append(str(t))
+    out = []
+    if zero:
+        its = "its" if len(zero) == 1 else "their"
+        out.append(f"{', '.join(zero)}: 0 nuclei in every field; {its} ratios rest on the +{COUNT_OFFSET:g} offset "
+                   "(read them as 'close to 0', an upper bound)")
+    for pct, ts in edge.items():
+        if ts:
+            it, its = ("it", "its") if len(ts) == 1 else ("them", "their")
+            out.append(f"{', '.join(ts)}: {pct} in every field; the empirical logit keeps {it} finite, so {its} odds "
+                       "ratios are arbitrary: read the percentage-point difference")
     return out
 
 
