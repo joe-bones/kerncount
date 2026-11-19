@@ -186,5 +186,15 @@ is used. Pairs: Tukey-Kramer on the mean of matched cell-mean differences (B lev
 SE from the model MSE, p from the studentized range with k treatments. One B level = one-way ANOVA + Tukey,
 matching `scipy.stats.tukey_hsd` (tested). Toggle with `[analysis] two_way_anova`.
 
+## Experiment types (`experiment_types`, ADR 0004)
+`[experiment] type` in `settings.toml` selects how an experiment is handled; omitted = `cell_count` (everything
+above). A type is an `ExperimentType` subclass registered with `@register` and implements four seams:
+`scan_layout(raw, settings)` (raw folder → `layout.csv` rows; `init`), `measure(...)` (raw measurements per unit),
+`readout_table(...)` (one row per datapoint with its layout metadata, written to the project) and `analyse(...)`
+(the type's statistical design). `kerncount init` calls `scan_layout` + `report_layout`; `kerncount run` calls
+`run()`, which chains measure → readout table → analyse. `cell_count` overrides `run()` to call `pipeline.run`
+unchanged (its stages are interleaved there). An unknown type stops with the list of valid types. Data system,
+backups and GUI are shared; other commands (`regen`, `sampling`, `platemap`, …) are cell-count only.
+
 ## Tests
 `pip install -e .[test]` then `pytest`.

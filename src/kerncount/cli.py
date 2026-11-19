@@ -64,6 +64,16 @@ def resolve_project(arg: str, must_exist: bool = True) -> Path:
              + " - create it with `kerncount init`")
 
 
+def _experiment_type(s: dict):
+    """The project's [experiment] type (ADR 0004); an unknown name stops with the list of valid ones."""
+    from . import experiment_types
+
+    try:
+        return experiment_types.of(s)
+    except experiment_types.UnknownExperimentType as e:
+        sys.exit(str(e))
+
+
 def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False):
     from . import discover, settings
 
@@ -76,9 +86,8 @@ def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False):
         if had:
             print(f"settings.toml reset to the defaults; the previous version is kept in {settings.BACKUPS}/")
     s = settings.load(prj)
-    inter = settings.interleaved(s)
-    layout = discover.scan(raw, s["project"]["date_order"], files=s["channels"]["files"],
-                           n_channels=settings.n_channels_expected(s) or 1)
+    etype = _experiment_type(s)
+    layout = etype.scan_layout(raw, s)
     lp = prj / "layout.csv"
     if lp.exists() and not (force or force_layout):
         lp = prj / "layout.new.csv"
@@ -87,22 +96,7 @@ def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False):
         bk = settings.backup(prj, "layout.csv")
         print(f"layout.csv overwritten; the previous version is kept in {bk.relative_to(prj).as_posix()}")
     discover.write_layout(layout, lp, s["project"]["csv_delimiter"])
-    with __import__("pandas").option_context("display.width", 200, "display.max_colwidth", 60, "display.max_rows", 500):
-        print(layout[["n", "treatment", "treatment_folder", "images", "note"]].to_string(index=False))
-    if inter:
-        print(f"\nChannels are separate files ({', '.join(s['channels']['file_order'])} in file order): "
-              "'images' counts fields (file groups).")
-    else:
-        try:
-            det = discover.detect_interleaved(raw)
-        except Exception:  # detection is only a hint
-            det = {"interleaved": False}
-        if det["interleaved"]:
-            first, second = ("marker", "DAPI") if det["bright_position"] == 1 else ("DAPI", "marker")
-            print("\nHint: the files look like ONE channel each, alternating dim / bright (e.g. marker, DAPI, marker, "
-                  "DAPI, ...).\nIf so, set in settings.toml and run `kerncount init` again with --force-layout:\n"
-                  f"  [channels]\n  files = \"interleaved\"\n  file_order = [\"{first}\", \"{second}\"]   "
-                  "# your channel names, in file order\n  segment = \"DAPI\"")
+    etype.report_layout(layout, s, raw)
     ws = workspace_root()
     target = prj.name if ws and prj.resolve().parent == (ws / ANALYSIS).resolve() else str(prj)
     print(f"\nWrote {lp}\nCheck the n / treatment names (edit the CSV if needed), then run:  kerncount run \"{target}\"")
@@ -142,11 +136,12 @@ def _projects(a) -> list[Path]:
 
 
 def cmd_run(a):
-    from . import pipeline
+    from . import experiment_types, settings
 
+    opts = experiment_types.RunOptions(rebuild=a.rebuild, resegment=a.resegment, no_review=a.no_review)
     for prj in _projects(a):
         print(f"\n=== {prj.name}")
-        pipeline.run(prj, rebuild=a.rebuild, resegment=a.resegment, no_review=a.no_review)
+        _experiment_type(settings.load(prj)).run(prj, opts)
 
 
 def cmd_regen(a):

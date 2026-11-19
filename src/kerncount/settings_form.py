@@ -8,6 +8,7 @@ import json
 import re
 import tomllib
 
+from . import experiment_types
 from .settings import DEFAULTS
 
 # short names of classify.READOUTS (without "readout_"); kept here because this module must not import numpy/pandas
@@ -27,6 +28,9 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
                               help='Use ";" if Excel (German/European locale) shows CSVs in one column.'),
     },
     "experiment": {
+        "type": dict(kind="choice", options=sorted(experiment_types.TYPES), label="Experiment type",
+                     help="How the raw data are found, measured and analysed. cell_count = nuclei and marker intensity "
+                          "on plates. After changing it, scan the raw folder again (init with a fresh layout)."),
         "cell_line": dict(kind="text", label="Cell line",
                           help="e.g. LN229. Experiments (n's) of different cell lines are never pooled. Override per n "
                                "or condition with a cell_line column in layout.csv."),

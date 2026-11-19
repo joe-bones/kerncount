@@ -14,6 +14,7 @@ DEFAULTS: dict = {
         "csv_delimiter": ",",  # use ";" if your Excel is set to German/European locale
     },
     "experiment": {
+        "type": "cell_count",  # experiment type (ADR 0004): how the raw data are scanned, measured and analysed
         # descriptive metadata (docs/intensity.md); per-n / per-condition overrides: same-named columns in layout.csv
         "cell_line": "",  # e.g. "LN229"; n's of different cell lines are never pooled
         "magnification": "",  # objective, e.g. 20 (for 20x)
@@ -149,6 +150,7 @@ date_order = "DMY"        # n-folder dates: 05.06.26 = 5 June 2026
 csv_delimiter = ","       # set to ";" if Excel (German/European locale) shows everything in one column
 
 [experiment]              # what was imaged; per-n / per-condition overrides: same-named columns in layout.csv
+type = "cell_count"       # experiment type: "cell_count" = nuclei / intensity on plates (the default)
 cell_line = ""            # e.g. "LN229"; different cell lines are never pooled
 magnification = ""        # objective, e.g. 20
 camera_pixel_um = ""      # camera pixel size (µm); pixel size = camera_pixel_um / magnification
