@@ -157,6 +157,11 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
     from . import concordance  # ticket 07: primary vs Fiji legacy, threshold sweep
 
     written += concordance.analyse(out, table, settings, facs, fams, report)
+    from . import acquisition, shared  # ticket 11: acquisition settings; shared-threshold robustness check
+
+    acq_written, consistency = acquisition.analyse(out, table, settings, facs, report)
+    written += acq_written
+    written += shared.analyse(out, table, settings, facs, fams, report, consistency)
     from . import qc  # ticket 06: flow table, sensitivity without flagged tumours, A-B hemisphere check
 
     written += qc.analyse(out, table, settings, facs, fams, report, h)

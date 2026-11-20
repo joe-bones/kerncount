@@ -212,6 +212,8 @@ the new columns (likewise the sweep and Fiji caches).
   `<id> (Welch-type)` / `<id> (permutation)` (never starred), and a `## Sensitivity` section in `stats_report.md`.
 - Planning aid (ticket 09; confirmatory readouts only, never in stats_long): sheets **Planning aid** (one row per
   readout and family) and **Planning aid (contrasts)** in `results.xlsx`, section `## Planning aid` in the report.
+- `acquisition.csv` (+ report section) and, with `shared_threshold_check = true`, `shared_threshold.csv` — see
+  **Fiji legacy readout and method concordance** below.
 - `_work/tumour/<slug>.json` + `<slug>.labels.tif` — cache per tumour (zlib uint8/uint16 labels, ~1 MB for the
   largest stack). Re-runs reuse it unless the file or the segmentation settings changed; `--resegment` forces it.
 
@@ -347,6 +349,23 @@ go through `table.build`. Outputs: `threshold_sweep.csv` / sheet **Threshold swe
 p < 0.05) and a `## Threshold sweep` report table (fold-change range, whether significance changes). Off by default
 because the first run re-segments every stack (~20–60 s each, 1 stack in memory). Only readouts produced by
 `segment.segment` / `table.build` are sweepable; others are listed as not available.
+
+**Acquisition settings** (ticket 11, always): `acquisition.csv` — one row per tumour from the original's OME metadata
+(no pixels read): microscope, objective, detector, **detector gain = PMT voltage** (`detector_voltage`), offset, zoom,
+laser line / power / attenuation, pinhole, channel / fluor / ex / em, pixel type, voxel size, frame size, layers,
+acquisition day and time. `stats_report.md` § Acquisition settings gives the verdict (every brightness-relevant
+setting identical, or which differ; settings never recorded are named as unchecked), what varies harmlessly
+(z-step, frame size), and a **group × acquisition-day table** with the groups imaged on a single day. Note:
+`imaging_session` in layout.csv is the data folder, not the acquisition day; a folder can span several days.
+
+**Shared-threshold robustness check** (ADR 0002; `[tumour] shared_threshold_check = true`, off by default): only when
+no checked acquisition setting differs. One experiment-wide grey value = **median of the per-tumour automatic
+thresholds** (fixed rule); every stack is re-segmented at it (`segment.sweep` with scale = shared / own threshold, so
+everything else is the primary method; cache `_work/tumour/<slug>.shared.json`), and the same statistics run on the
+result. Outputs: `shared_threshold.csv` / sheet **Shared threshold** (per contrast primary vs shared estimate, CI,
+Holm p, direction / significance agreement), `plots/<name>_vs_shared_threshold.png|pdf` (per tumour) and a report
+section. An effect present only at the shared threshold is a brightness difference (a dimmer tumour shrinks at a
+fixed grey value), not a size difference; never starred.
 
 ## QC, problem tumours and blinded review (ticket 06, ADR 0002 + amendment 2026-11-20)
 **Rules, set before results are seen — never per-tumour judgement.** Computed per tumour from its (possibly

@@ -100,9 +100,10 @@ def sweep_results(tables: dict[float, pd.DataFrame], facs: list[Factor], fams: l
 # ---------------------------------------------------------------- plots
 
 
-def scatter_plot(table: pd.DataFrame, facs: list[Factor], new_col: str, fiji_col: str, label: str, out: Path
-                 ) -> Path:
-    """Per tumour: primary (y) vs Fiji legacy (x), log axes, identity line, coloured by the x-role factor."""
+def scatter_plot(table: pd.DataFrame, facs: list[Factor], new_col: str, fiji_col: str, label: str, out: Path,
+                 x_label: str | None = None, x_name: str = "Fiji") -> Path:
+    """Per tumour: primary (y) vs Fiji legacy (x; or another method: `x_label` axis label, `x_name` in the title),
+    log axes, identity line, coloured by the x-role factor."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -133,12 +134,12 @@ def scatter_plot(table: pd.DataFrame, facs: list[Factor], new_col: str, fiji_col
         r = float(np.exp(np.median(np.log(y[ok] / x[ok]))))
         rho = float(pd.Series(np.log(x[ok])).corr(pd.Series(np.log(y[ok])), method="spearman")) if ok.sum() > 2 \
             else float("nan")
-        ax.set_title(f"median new / Fiji = {r:.2f}; Spearman ρ = {rho:.2f}; n = {int(ok.sum())}", fontsize=9,
+        ax.set_title(f"median new / {x_name} = {r:.2f}; Spearman ρ = {rho:.2f}; n = {int(ok.sum())}", fontsize=9,
                      color=INK)
         ax.legend(fontsize=8, frameon=False, loc="upper left")
     else:
         ax.text(0.5, 0.5, "no tumour with both values", ha="center", va="center", transform=ax.transAxes)
-    ax.set_xlabel(f"{LEGACY}: {fiji_col}")
+    ax.set_xlabel(x_label or f"{LEGACY}: {fiji_col}")
     ax.set_ylabel(f"primary method: {label}")
     fig.tight_layout()
     return _save(fig, out)

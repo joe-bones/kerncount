@@ -42,6 +42,10 @@ DEFAULTS: dict = {
     # Off by default: re-segments every stack once (cached in _work/tumour/<slug>.sweep.json).
     "threshold_sweep": False,
     "sweep_scales": [0.8, 0.9, 1.1, 1.2],
+    # Shared-threshold robustness check (ADR 0002, ticket 11): every tumour re-segmented at one experiment-wide threshold
+    # (median of the per-tumour automatic thresholds); only run when the acquisition settings are identical.
+    # Off by default: re-segments every stack once (cached in _work/tumour/<slug>.shared.json).
+    "shared_threshold_check": False,
     # QC and blinded review (ticket 06): saturation warning threshold (share of the mid-section main mass at 255;
     # the intermedians threshold is protected up to ~50 %), review image size (px, longest side per panel), JPEG quality.
     "qc_saturation_warn": 0.40,
@@ -133,6 +137,7 @@ fiji_fallback = true      # no Fiji statistics/mask for a tumour: re-run the mac
 fiji_min_voxels = 200000  # 3D Objects Counter minimum object size of the macro (voxels)
 threshold_sweep = false   # true: recompute every confirmatory effect at the threshold x sweep_scales (slow first run)
 sweep_scales = [0.8, 0.9, 1.1, 1.2]
+shared_threshold_check = false   # true: robustness check at ONE threshold for every tumour (needs identical acquisition settings)
 qc_saturation_warn = 0.40 # QC warning when more of the mid-section main mass is saturated (255) than this
 review_px = 640           # blinded review images (review/<code>.jpg): longest side per panel in pixels
 review_jpeg_quality = 80
