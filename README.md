@@ -11,6 +11,7 @@ Python tool. It does the following:
 4. Produces tables, Prism-ready CSVs, plots and statistics for each treatment, each n, and all n's together.
 5. Measures intensity per cell (any channel), as the Mean-intensity macros did.
 6. Estimates how many images per condition you actually need.
+7. Measures mCherry tumours in brain-section z-stacks (tumour experiments, section 9), with blinded review and pre-registered statistics.
 
 ```
 kerncount/                 (this repository)
@@ -117,6 +118,9 @@ Everything below can be done in the browser, without editing files:
 | **Results** | All plots, tables and statistics per generation; download `results.xlsx` |
 | **Sampling** | Run and read the "how many images?" analysis |
 | **All files** | Browse and preview everything in the project folder |
+
+Tumour experiments (section 9) use the same pages: Layout shows the tumours and what blocks a run, Settings the
+analysis plan with its lock, Review images and Corrections show blinded codes only, Results the plots per readout.
 
 Keep the black (Windows) or Terminal (Mac) window open while you work; close it or press **Quit** to stop.
 The page only works on this computer, and nothing is sent anywhere else.
@@ -517,7 +521,92 @@ the `all_n/` plots, and the Prism CSVs.
 - QC levels are heuristics until calibrated against hand counts.
 - Technical details (algorithms, tests): `docs/technical.md`.
 
-## 9. Development
+## 9. Tumour experiments (mCherry tumours in brain sections)
+
+The same tool also analyses **tumour experiments**: mCherry-labelled tumours in brain sections, imaged as z-stacks
+(`[experiment] type = "tumour_volume"`). One **tumour** (hemisphere A or B of a section) is one n; A and B are
+never averaged. Words: `CONTEXT.md` (Tumour experiments); technical details: `docs/tumour.md`.
+
+### 9.1 Input
+One folder per experiment in `data/`, with **one sub-folder per imaging session** (one day at the microscope),
+files flat and as delivered:
+```
+data/tumour_TLR7/
+├── 030826 KO7/                                 ← session folder: its name gives the genotype (KO7 = TLR7 KO)
+│   ├── 030826 HERV -clodro n3 A.ome.tiff        ← one original z-stack = one tumour
+│   ├── 030826 HERV -clodro n3 Af.tif            ← Fiji mask (legacy, optional; read for comparison only)
+│   └── Statistics for 030826 HERV -clodro n3 Af.csv   ← Fiji 3D Objects Counter table (legacy, optional)
+└── 100926 WT/
+    └── 100926 cntrl +clodro n1 B.ome.tif
+```
+- **Genotype comes from the session-folder name**: it must contain `WT` or `KO7` / `KO` / `TLR7 KO` (other spellings
+  can be added as aliases in the settings). WT and KO imaged on different days = genotype confounded with the
+  imaging session: ratios within a session are compared across genotypes, a direct WT-vs-KO difference is shown
+  but never tested.
+- **File names** give date, tumour line, clodronate, section and hemisphere. For **new acquisitions** use
+  `DDMMYY <line> <±clodro> n<section> <A|B>.ome.tif`, e.g. `100926 HERV +clodro n3 A.ome.tif`: date as 6 digits,
+  the tumour line and clodronate level exactly as in the settings (`cntrl`, `HERV`, `N4`; `-clodro`, `+clodro`),
+  the section label `n<k>` (restarts per group; `s3` is not read as a section), hemisphere `A` (upper) or `B` (lower).
+  Underscores instead of spaces (`100926_HERV_+clodro_n3_A.ome.tif`), `.ome.tiff` and known typos (`-clodron`) are
+  read too and noted in `layout.csv`.
+- Voxel size is read from each file's OME metadata (never typed in); z-steps may differ between files.
+
+### 9.2 Set up, check the layout, run
+In the web interface pick the experiment, choose **experiment type: Tumour volume (z-stacks)** under *Set up* and
+press **Set up** (command line: `kerncount init tumour_TLR7 --type tumour_volume`). Then:
+- **Layout**: one row per tumour with its factor values (genotype, tumour line, clodronate), section, hemisphere,
+  tumour ID (`TLR7 KO / HERV / -clodro / n3A`), include and note. Problems that would make a file a wrong datapoint
+  (an unreadable name, a duplicate tumour ID, a session without a genotype, a missing file) are listed at the top
+  and **block the run** until you fix the cell or untick *include* and give the reason in *note*.
+- **Settings** → *Analysis plan*: the factors (levels, reference level, where they go in the plots), which readouts
+  are confirmatory, and the contrast families (below). *Tumour measurement*: smoothing, threshold rule,
+  mid-section thickness, outline smoothing, threshold sweep, QC and review settings, each with an explanation.
+- **Run** (`kerncount run tumour_TLR7`): options *skip review images*, *segment every stack again*, *threshold
+  sweep*. The first run takes about 20–60 s per stack; segmentations are cached, so later runs are quick.
+
+### 9.3 Readouts, and why area rather than volume
+Only ~80–150 µm of each ~0.5–1 mm tumour is imaged, so a 3D volume mostly measures how deep the stack was acquired.
+The **confirmatory readouts** are therefore 2D, on a fixed-thickness **mid-section** (20 µm around the layer where
+the tumour's main mass is largest — the same physical slab for every tumour): the **cross-sectional area** (mm²) and
+the **perimeter** (mm) of the main mass (the largest connected object). Everything else is **exploratory**
+(effect sizes with CIs, labelled, no stars): footprint area, slab volume, main-mass volume and surface, tumour
+burden (main mass + satellites), invasion fraction, elongation, solidity, edge roughness, circularity, and the Fiji
+legacy values. One automatic threshold rule for every tumour, never adjusted by hand per tumour.
+
+**Analysis plan lock.** Factors, readout roles and contrast families are fixed before results are viewed (ADR 0003).
+Once results exist the plan is **locked** in the web interface; changing it needs **Unlock** with a reason. The
+unlock and every change are written to `lock_log.csv`, and the next run prints the history (old → new plan lock) in
+the report and the About sheet of `results.xlsx`. Every statistics row carries the lock it was built with.
+
+### 9.4 Output (`analysis/<experiment>/`)
+| file / folder | content |
+|---|---|
+| `results.xlsx` | everything in one workbook: tumours, statistics, estimated means, families, QC, flow, sensitivity analyses, concordance with Fiji, planning aid (download it on the **Results** page) |
+| `stats_report.md` | the report: analysis plan and its lock (and lock history), results per readout and family, QC, sensitivity, Fiji concordance, planning aid |
+| `tumours.csv` | one row per analysed tumour: factor values, every readout, QC flags |
+| `excluded_tumours.csv`, `flow.csv` | excluded tumours with their reason (layout or review); files → tumours → analysed |
+| `stats_long.csv` | every estimate in one long table (the **Statistics** page; sensitivity rows hidden unless asked for) |
+| `plots/` | per readout: absolute, normalised (% of cntrl in the same genotype and clodronate), effects (forest), interaction, A vs B, diagnostics, and with Fiji data / the sweep: vs Fiji, threshold sweep; `shape_panel` |
+| `prism/` | Prism-ready tables, one column per group (absolute and normalised) |
+| `review/` | the **blinded** review images and `corrections.csv` (below) |
+
+Statistics: one linear model on log(readout) over all factors; effects are fold-changes with 95 % CIs, Holm within
+each family. Only confirmatory families of confirmatory readouts carry stars. Sensitivity analyses (Welch-type,
+permutation, without QC-flagged tumours) are reported alongside, never instead.
+
+### 9.5 Review and corrections (blinded)
+`review/` holds one image per tumour, named by a random **code** (no group, session, date or file name anywhere;
+the key `review_key.csv` lies outside `review/`): left the maximum projection, right the mid-section layer; the main
+mass orange, satellites cyan, objects numbered. The **Review images** and **Corrections** pages show only the codes.
+In a round (`manual_1` → g2, `manual_2` → g3, …) type:
+- an **object number** from the image to make that object the main mass (`1` = back to automatic);
+- **`x: reason`** to exclude the tumour (the reason goes to `excluded_tumours.csv`);
+- nothing = no change.
+
+Then run the analysis again: nothing is re-segmented; the picked object's readouts are recomputed. You can also edit
+`review/corrections.csv` in Excel and hand only the `review/` folder to a colleague for a blinded check.
+
+## 10. Development
 ```
 pip install -e ".[test]"
 pytest

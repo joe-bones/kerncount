@@ -56,6 +56,51 @@ another change in project / experiment / channels / segmentation / counting / qc
 readouts / design / review → a run (detections reused) with `--rebuild all`; analysis / acceptance → `regen
 --rebuild all` (statistics only); planner → the sampling analysis. The page shows these steps with Start buttons.
 
+## Tumour experiments (`[experiment] type = "tumour_volume"`)
+
+The type comes from `settings.toml` (`gui.experiment_type`; `/api/state` lists it per experiment with `results` =
+`stats_long.csv` exists, and the registered `types` for the set-up form). `web/tumour.js` draws the tumour views and
+wraps `RENDER.home / layout / review / corrections / results / stats` (a tumour project gets its own view, every other
+project the unchanged cell-count one) and `RENDER.settings` (the analysis-plan card is added on top). Planner and
+plate maps are hidden for tumour projects. Server side: `src/kerncount/gui_tumour.py` (standard library at import;
+the tumour modules that need pandas are imported on first use).
+
+| section | tumour view |
+|---|---|
+| **Experiment home** | factors and levels (with where they are read from), attention items (layout problems that block the run, layout notes, an unreadable or unlocked plan, a plan changed after the results, settings changed after the run, QC-flagged and saturation-warning tumours, a fresh scan), included tumours per group, results summary (tumours analysed / flagged / excluded, review generation, `results.xlsx`, report), the plan lock, and the **Run** steps: re-scan (start over / layout only), run (*skip review images* = `--no-review`, *segment every stack again* = `--resegment`, *threshold sweep* = `[tumour] threshold_sweep`, saved before the run starts), review and corrections. A project that is not set up yet shows the generic set-up step with an **experiment type** select (`init --type <name>`). |
+| **Layout** | `layout.csv` with the validation of `tumour.layout.validate`: problems (block the run) and warnings above the table; per row file, imaging session, one select per factor (its levels; a value that is not a level is kept and marked "?"), section, hemisphere, the rebuilt tumour ID, include, note; other files in the raw folder. Saving writes the edited cells by `file` and answers with the new validation. |
+| **Settings** | the form sections `project`, `experiment` (type, notes) and `tumour` (`settings_form.schema("tumour_volume")`; items marked `reseg` = the next run measures every stack again, shown as *re-measures*), plus the **analysis plan** card: factors (levels, reference level, display role), readouts (confirmatory / exploratory), families (confirmatory / exploratory / descriptive), the lock and its history. Adding or removing factors, readouts or families: the settings.toml text editor. Re-run advice: one step, a run (`gui_tumour.rerun_advice`; slow when a `reseg` item changed). Reset to defaults uses the type's own template. |
+| **Review images** | **blinded**: the review sheets by code (`review/<code>.jpg`), QC flags, object count, overview sheets; a lightbox per code takes a correction (object number or `x: reason`) and a note for the chosen round. Filter: QC-flagged only (`q=flagged`). |
+| **Corrections** | **blinded**: `review/corrections.csv` as a table by code: earlier rounds, the round being edited (revise an earlier round or start the next), note, and what the next run applies (`auto` / `object k` / `excluded: reason`); Save, or Save & run. A new `manual_k` is added when the last one is used; values are checked like the run does (`tumour.corrections` rules; an object number must exist on the image). |
+| **Results explorer** | one pill per readout (confirmatory first): its plots from `plots/<readout>_<kind>.png` (absolute, normalised, effects, interaction, A vs B, vs Fiji, threshold sweep, diagnostics; PDF/PNG), its headline statistics, the shape panel, tables (`tumours.csv`, `excluded_tumours.csv`, `flow.csv`, `concordance.csv`, `threshold_sweep.csv`, `corrections_used.csv`, `lock_log.csv`), Prism CSVs, **`results.xlsx` download** and the report. |
+| **Statistics table** | `stats_long.csv`: readout, family, significance and text filters. **Headline view without the sensitivity rows**: families ending in ` (Welch-type)`, ` (permutation)` or ` (without flagged)` (`gui_tumour.is_sensitivity`) are hidden (the count is shown) unless *show sensitivity rows* is ticked (`sens=1`). |
+
+Hash parameters: results `ro` (readout); stats `metric, fam, sig, sens, q`; review / corrections `q`.
+
+### Blinding of the tumour review
+
+`/api/tumour/review` and `/api/tumour/corrections` read and write only the `review/` folder: never
+`review_key.csv` (code → tumour ID), `corrections_used.csv`, `layout.csv` or any result. Their answers carry the code,
+object count, QC flags, the `manual_*` values, the note and the image path — no factor level, session, date, section
+label or file name (codes are checked against `[A-Za-z0-9_-]` before an image path is built). The Review and
+Corrections views call no other endpoint (`tests/test_tumour_gui.py` checks both the answers and the script). The key
+and `corrections_used.csv` stay reachable through **All files** and the results tables: unblinding is a deliberate
+step, not something these two pages do.
+
+### Analysis-plan lock (ADR 0003)
+
+`tumour/lock_log.py`. The plan = factors (levels, reference), readouts (column, role), families and the focus factor
+of normalised values; `tumour.results.lock` hashes it and every `stats_long.csv` row carries `lock <hash>`. Results
+exist = `stats_long.csv` in the project folder; its hash is the **results lock**. Every settings write of a tumour
+project (form, text editor, plan editor, reset) goes through `gui_tumour.guard`: when results exist and the plan
+hash would change, it is refused (`PlanLocked`) unless the plan is **unlocked**. **Unlock** needs a reason; it is
+appended to `lock_log.csv` (`at, action, results_lock, settings_lock, reason`), as is every saved plan change
+(`plan changed`, old → new) and **Lock again** (`lock`). The run (`results.analyse` → `lock_log.record_run`) appends a
+`run` entry when it rebuilds the results with a different plan — noting the unlock, or "without a logged unlock" when
+settings.toml was edited outside the web interface — and ends a pending unlock; then it prints the whole log in the
+About lines of `stats_report.md` and `results.xlsx`. Display roles, QC, sweep, sensitivity and planner settings are
+not part of the plan and can change at any time.
+
 ## Endpoints
 
 All answers come from `127.0.0.1` only. Every request must be addressed to `127.0.0.1:<port>` or
@@ -118,6 +163,10 @@ so a name can never be read as an option; experiment names and `negative_control
 | GET | `/api/plans?exp` | earlier plate maps (plates, files, README, edge use) and form defaults |
 | POST | `/api/platemap` | `platemap.plan_project(...)` in-process (validated options); returns the new folder |
 | POST | `/api/start` `{action: init / run / regen / sampling / wells-template / platemap, options}`, `/api/stop`, `/api/quit` | jobs (`python -m kerncount.cli ...` subprocess, one at a time) |
+| GET | `/api/tumour/overview?exp`, `/api/tumour/layout?exp`, `/api/tumour/plan?exp` | tumour home; layout + validation (`problems`, `warnings`, `ids`, `groups`, `unmatched`); analysis plan + `lock` status and log |
+| GET | `/api/tumour/review?exp` | **blinded** review: `rows` (code, objects, qc_flags, manual, note, image), `manual` columns, `overviews`, `mtime` |
+| GET | `/api/tumour/results?exp`, `/api/tumour/stats?exp&sensitivity` | plots per readout, tables, Prism files, `results.xlsx`, report, lock; `stats_long.csv` headline rows (`hidden` = sensitivity rows left out) |
+| POST | `/api/tumour/layout` `{rows}`, `/api/tumour/plan` `{factors, readouts, families}`, `/api/tumour/unlock` `{reason}`, `/api/tumour/relock`, `/api/tumour/corrections` `{changes: [{code, col, value}], mtime}` | layout edits (by `file`); plan edits (lock checked); unlock / lock again (logged); blinded corrections |
 | POST | `/api/settings`, `/api/settings_reset`, `/api/layout`, `/api/layout_use_new`, `/api/counts`, `/api/open`, `/api/workspace`, `/api/browse`, `/api/new_experiment` | small edits, with the command line's validation; `/api/settings` also returns `{changed, steps}` (what to re-run) |
 
 The scientific modules (`planner`, `tuning`, `platemap`) are imported on first use and warmed up in a background
@@ -158,6 +207,13 @@ that the value must be fixed before looking at the statistics and that a run app
 the run.
 
 ## Tests
+
+`tests/test_tumour_gui.py` (tumour projects, synthetic, nothing segmented): the plan lock (no results → free; locked
+→ refused through the plan editor, the form, the text editor; unlock needs a reason; change and run are logged; a
+rebuild with a changed plan shows old → new lock in the report and About sheet), headline statistics without
+sensitivity rows, blinded review / corrections answers and script, corrections validation and rounds, layout
+validation and edits, settings form sections and re-run advice, `init --type`, results / overview endpoints.
+
 
 `tests/test_gui.py` (default suite): token, Host and Origin checks on every kind of endpoint; the CSP / frame
 headers and that no inline script or handler is left; active project files served as attachments and RFC 5987

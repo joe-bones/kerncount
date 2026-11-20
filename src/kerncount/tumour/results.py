@@ -91,6 +91,9 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
     facs = factors(settings)
     focus = normalise_by(settings, facs)
     h, spec = lock(settings)
+    from . import lock_log  # ticket 10: a rebuild with another plan (and any unlock) is logged and reported
+
+    lock_log.record_run(out, h)
     names = {f.name for f in facs}
     fams: list[Family] = []
     notes: list[str] = []
@@ -146,7 +149,7 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
                                                      sep=delim)
         written += _plots(out, table, tum, facs, focus, ro, model, res, means, fams)
     write_stats_long(out, stats_rows)
-    lines = _about(settings, h, spec, fams, notes, table, facs)
+    lines = _about(settings, h, spec, fams, notes, table, facs) + lock_log.report_lines(out)
     _excel(out, lines, tum, stats_rows, all_means, fams)
     report = _report(out, lines, all_res)
     _sensitivity_outputs(out, report, all_sens, n_perm, seed)

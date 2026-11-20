@@ -204,6 +204,8 @@ the new columns (likewise the sweep and Fiji caches).
 - `results.xlsx` — sheets About (analysis plan, lock hash, levels without data), Tumours (tumours.csv + `<name>_pct`
   columns), Statistics (= stats_long), Estimated means (absolute and % of reference with CIs), Families.
 - `stats_report.md` — the locked plan (readout split, families) and one table per readout and family.
+- `lock_log.csv` — unlocks and changes of the analysis plan after results existed, and runs with a changed plan
+  (copied into the About lines of the report and `results.xlsx`; see "Web interface and the analysis-plan lock").
 - Sensitivity (ticket 08): `plots/<name>_residuals.png|pdf` (residuals by group with each group's SD + normal QQ
   of the studentised residuals), sheet **Sensitivity** in `results.xlsx` (one row per contrast: Welch CI/df/p/Holm p,
   permutation p/Holm p, permutations, seed, `concordant`, `concordance`), stats_long rows with family
@@ -412,6 +414,26 @@ QC settings; the stack is only read again when one of them, the code or the revi
 
 Known limitation: the threshold sweep (ticket 07) keeps no labels, so for a re-picked tumour its swept values still
 follow the automatic main mass.
+
+## Web interface and the analysis-plan lock (ticket 10)
+Everything above is available in `kerncount gui` (details: `docs/ui.md`, "Tumour experiments"): set up with
+**experiment type = Tumour volume** (`init --type tumour_volume`); **Layout** shows `layout.csv` with the validation of
+`layout.validate` (problems block the run) and edits factor values, section, hemisphere, include and note;
+**Settings** shows the `[tumour]` settings with explanations and the **analysis plan** (factors with levels,
+reference and display role; readouts confirmatory / exploratory; families) with its lock; **Review images** and
+**Corrections** are blinded (codes only; they read nothing outside `review/`) and edit the `manual_k` rounds of
+`review/corrections.csv`; **Results** shows the plots per readout, the headline statistics (sensitivity families
+` (Welch-type)`, ` (permutation)`, ` (without flagged)` hidden unless asked for), tables and the `results.xlsx`
+download; the home page runs the analysis (*skip review images*, *segment every stack again*, *threshold sweep*).
+
+**Lock (`tumour/lock_log.py`, ADR 0003).** Once `stats_long.csv` exists its `lock <hash>` is the results' plan. The
+web interface refuses any settings write that changes the plan hash unless the plan was unlocked with a reason.
+`lock_log.csv` (project folder) records `unlock`, `plan changed` (old → new), `lock` (locked again) and `run` (a
+rebuild with a different plan, noting the unlock — or "without a logged unlock" when settings.toml was edited
+outside the web interface; a run also ends a pending unlock). `results.analyse` calls `lock_log.record_run` before
+writing and appends `lock_log.report_lines` to the About lines, so the history (old → new lock, reasons) is printed in
+`stats_report.md` and the About sheet of `results.xlsx`. Not part of the plan (free to change): display roles,
+measurement, QC, sweep, sensitivity and planner settings.
 
 ## Memory
 One stack at a time: uint8 stack + float32 smoothed copy, then mask + int32 labels; peak ≈ 10 × the stack size
