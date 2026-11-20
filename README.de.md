@@ -543,8 +543,17 @@ data/tumour_TLR7/
   es zu beheben ist. WT und KO wurden an verschiedenen Tagen aufgenommen, d. h. Genotyp und Aufnahmesitzung sind
   vermengt: Verhältnisse innerhalb einer Sitzung werden zwischen den Genotypen verglichen; ein direkter
   WT-gegen-KO-Unterschied wird gezeigt, aber nie getestet. Ob ein *Sitzungsordner* oder ein *Aufnahmetag* (aus den
-  Mikroskop-Metadaten) als eine Charge gilt, legt `[tumour] batch` fest (Standard `session_folder`); der Bericht
+  Mikroskop-Metadaten) als eine Charge gilt, legt `[tumour] batch` fest. Standard ist die **Kultur-Charge**
+  (`culture_batch`: das Datum am Anfang der Dateinamen = Ansatz der Kultur; die Schnitte wurden vor der Aufnahme
+  fixiert, der Aufnahmetag ist daher keine Charge). Mehrere Kultur-Chargen eines Genotyps (WT: `190626`, `100726`)
+  gehen als fester Blockeffekt ins Modell ein, WT-Vergleiche sind also Vergleiche innerhalb der Charge; der Bericht
   nennt, welche Definition verwendet wurde.
+- **Unterordner spielen keine Rolle**: Unterhalb eines Sitzungsordners dürfen die Dateien in beliebigen Ordnern
+  liegen (`5d WT/190626 OBS/190626 HERV +clodro n1/…`); außer dem Genotyp wird alles aus dem Dateinamen gelesen.
+  Endungen `_s1`, `1n` statt `n1` und ein fehlendes Datum werden erkannt; eine `.czi` neben der `.ome.tiff` desselben
+  Tumors wird vermerkt, ein Tumor, der nur als `.czi` vorliegt, wird gemeldet (als OME-TIFF exportieren). Ein
+  Sitzungsordner darf ein Link auf eine externe Festplatte sein; ist sie nicht angeschlossen, sagt der Lauf das, und
+  vorhandene Ergebnisse bleiben einsehbar.
 - **Umbenennen eines Sitzungsordners** verliert nichts: `kerncount run` findet die Dateien über ihren Namen, behält
   Ihre Änderungen in layout.csv und nutzt alle gespeicherten Messungen weiter; `kerncount init` aktualisiert danach
   layout.csv (die alte Fassung wird gesichert).

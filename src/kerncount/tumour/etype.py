@@ -48,6 +48,10 @@ class TumourVolume(ExperimentType):
         v = layout_mod.validate(layout, raw, settings)
         with pd.option_context("display.width", 200, "display.max_colwidth", 90, "display.max_rows", 500):
             print(layout[["tumour_id", "imaging_session", "include", "note"]].to_string(index=False))
+            if "culture_batch" in layout.columns and len(layout):  # ticket 13: culture batches per session folder
+                cb = layout.assign(batch=layout["culture_batch"].replace("", "(not recorded)"))
+                print("\nTumours per imaging session and culture batch (file-name date = culture preparation):")
+                print(pd.crosstab(cb["imaging_session"], cb["batch"]).to_string())
             if "acquisition_day" in layout.columns and len(layout):  # ticket 12: imaging days per session folder
                 days = layout.assign(day=layout["acquisition_day"].replace("", "(not recorded)"))
                 print("\nTumours per imaging session and acquisition day (OME metadata):")
@@ -59,6 +63,8 @@ class TumourVolume(ExperimentType):
         legacy = int((layout["legacy_mask"] != "").sum())
         stats = int((layout["legacy_stats"] != "").sum())
         print(f"Fiji legacy outputs (not tumours): masks for {legacy}, statistics for {stats} tumours.")
+        if "czi" in layout.columns:
+            print(f"Zeiss .czi twins recorded as provenance: {int((layout['czi'] != '').sum())}.")
         other = layout_mod.unmatched_files(raw, layout)
         if other:
             print(f"Other files, neither tumour nor matched legacy output (ignored): {'; '.join(other)}")

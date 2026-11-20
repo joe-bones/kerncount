@@ -392,7 +392,7 @@ async function tumourPlanCard(b) {
     <tbody>${P.families.map(f => `<tr data-name="${esc(f.id)}"><td><b>${esc(f.id)}</b></td><td class="small">${esc(f.effect)}</td><td class="small">${esc(f.factors.join(" × "))}</td>
       <td class="small">${esc(f.label)}</td><td><select data-k="role" ${dis}>${opts(P.roles.family, f.role)}</select></td></tr>`).join("")}</tbody></table>
     <p class="small muted">confirmatory = stars (confirmatory readouts only); exploratory = p-values, no stars; descriptive = estimate and CI only, never tested.
-      Contrasts across imaging batches (setting <code>batch</code>: session folder, e.g. WT vs KO when genotype = session, or acquisition day) are marked confounded and never tested. Add or remove factors, readouts or
+      Batches (setting <code>batch</code>: culture batch = file-name date by default, or session folder, or acquisition day) that share a group enter the model as a fixed block effect; contrasts across unconnected batches (e.g. WT vs KO, prepared in different culture batches) are marked confounded and never tested. Add or remove factors, readouts or
       families in the settings.toml text below.</p>
     <div class="row" style="margin-top:8px"><button class="primary" ${on("click", function () { savePlan() })}>Save analysis plan</button><span class="muted small" id="planState"></span></div>
     ${L.entries.length ? `<h4>Lock history (lock_log.csv)</h4><table class="grid"><thead><tr><th>when</th><th>what</th><th>results plan</th><th>settings plan</th><th>reason</th></tr></thead>

@@ -214,11 +214,12 @@ def _long_rows(side: pd.DataFrame, readout, lock_hash: str) -> list[dict]:
 
 
 def hemisphere_pairs(table: pd.DataFrame, facs, column: str) -> pd.DataFrame:
-    """One row per section with both an A and a B tumour (same group, imaging session and section label)."""
+    """One row per section with both an A and a B tumour (same group, imaging session, culture batch and section
+    label: section labels restart per culture batch)."""
     need = {"section", "hemisphere", column}
     if not need <= set(table.columns):
         return pd.DataFrame(columns=["group", "section", "A", "B", "flagged"])
-    keys = [f.name for f in facs] + [c for c in ("imaging_session",) if c in table.columns] + ["section"]
+    keys = [f.name for f in facs] + [c for c in ("imaging_session", "culture_batch") if c in table.columns] + ["section"]
     t = table.assign(_v=pd.to_numeric(table[column], errors="coerce"), _f=flagged_mask(table))
     rows = []
     for k, g in t.groupby(keys, sort=False, dropna=False):

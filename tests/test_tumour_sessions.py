@@ -424,15 +424,19 @@ def test_batch_setting_decides_which_contrasts_are_confounded(tmp_path, batch, f
     assert any(plan["comparison"].str.startswith("HERV vs cntrl | TLR7 KO")) == f1_tested
 
 
-def test_batch_setting_is_validated_and_outside_the_lock_hash_only_at_its_default():
+def test_batch_setting_is_validated_and_outside_the_lock_hash_only_for_session_folder():
+    """Ticket 13 (user decision 2026-11-20) changed the default to culture_batch; session_folder stays outside the
+    hash so that locks made before ticket 12 remain valid when it is chosen explicitly."""
     from test_tumour_stats import _settings as stats_settings
 
     from kerncount.tumour import config, results
 
-    assert config.batch(stats_settings()) == "session_folder"
+    assert config.batch(stats_settings()) == "culture_batch"
     with pytest.raises(ValueError, match="batch"):
         config.batch(stats_settings(batch="weekday"))
-    assert results.lock(stats_settings())[0] == results.lock(stats_settings(batch="session_folder"))[0]
+    session = results.lock(stats_settings(batch="session_folder"))
+    assert "batch" not in session[1]
+    assert results.lock(stats_settings())[0] != session[0]
     assert results.lock(stats_settings())[0] != results.lock(stats_settings(batch="acquisition_day"))[0]
 
 

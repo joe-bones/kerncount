@@ -18,9 +18,18 @@ Ticket 12: any number of session folders (hidden / system folders ignored); sess
 word through levels and aliases (`read_session`; the other words are the `session_label`); `file_date` (optional) and
 `acquisition_day` (OME metadata) per tumour; IDs clashing between session folders get the folder appended
 (`disambiguate`); `migrate` carries a layout.csv over a renamed / reorganised raw folder (rows matched by file name).
+
+Ticket 13: the structure below a session folder is irrelevant. Factors come from the session-folder name and the
+file name only; stacks are found at any depth (intermediate folders are provenance: they appear in `file`). A Zeiss
+`.czi` of the same tumour (matched by parsed identity, not by base name) is recorded in `czi`; a tumour present only as
+`.czi` is reported (`czi_only`), never silently dropped. `_s<k>` scene suffixes and `1n` section labels are read. The
+file-name date is the `culture_batch` (culture preparation, the biological batch); section labels repeat per culture
+batch, so IDs clashing between batches get the batch appended. A session folder may be a symbolic link (data on an
+external drive); a dangling link (drive not mounted) blocks the run with one clear message per folder.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +41,7 @@ from .config import Factor, factors as declared_factors
 
 ORIGINAL_SUFFIXES = (".ome.tiff.tif", ".ome.tiff", ".ome.tif")  # longest first; .ome.tiff.tif = re-saved by Fiji
 STANDARD_SUFFIXES = (".ome.tiff", ".ome.tif")
+CZI_SUFFIX = ".czi"  # Zeiss raw file: provenance only (no CZI reader installed)
 LEGACY_STATS_PREFIX = "Statistics for "
 YES = ("yes", "y", "true", "1", "ja", "j")
 NO = ("no", "n", "false", "0", "nein")
@@ -50,6 +60,14 @@ def _split_original(name: str) -> tuple[str, str] | None:
 
 def is_original(name: str) -> bool:
     return _split_original(name) is not None
+
+
+def _split_czi(name: str) -> tuple[str, str] | None:
+    return (name[: -len(CZI_SUFFIX)], name[-len(CZI_SUFFIX):]) if name.lower().endswith(CZI_SUFFIX) else None
+
+
+def is_czi(name: str) -> bool:
+    return _split_czi(name) is not None
 
 
 def legacy_candidates(stem: str) -> tuple[list[str], list[str]]:
@@ -82,6 +100,10 @@ def _normalise_stem(stem: str) -> tuple[list[str], list[str]]:
     text = stem.translate(DASHES)
     if text != stem:
         notes.append("typographic dash read as '-'")
+    scene = re.search(r"[\s_]+[sS]\d+$", text)  # "n1 A_s1": Zeiss scene suffix of an exported tile / position
+    if scene:
+        notes.append(f"scene suffix '{scene.group(0).strip()}' ignored")
+        text = text[: scene.start()]
     if "_" in text or re.search(r"\s{2,}", text) or text != text.strip():
         notes.append("spacing normalised")
     text = re.sub(r"[\s_]+", " ", text).strip()
@@ -91,9 +113,14 @@ def _normalise_stem(stem: str) -> tuple[list[str], list[str]]:
     tokens = []
     for t in _tokens(joined):
         m = re.fullmatch(r"([nN])(\d+)([ABab])", t)  # "n3A" -> section n3 + hemisphere A
+        r = re.fullmatch(r"(\d+)([nN])([ABab]?)", t)  # "1n" (ticket 13) -> section n1
         if m:
             tokens += [m.group(1) + m.group(2), m.group(3)]
             notes.append(f"'{t}' read as section {m.group(1).lower()}{m.group(2)} + hemisphere {m.group(3).upper()}")
+        elif r:
+            tokens += ["n" + r.group(1)] + ([r.group(3)] if r.group(3) else [])
+            notes.append(f"section label '{r.group(1)}{r.group(2)}' read as 'n{r.group(1)}'"
+                         + (f" + hemisphere {r.group(3).upper()}" if r.group(3) else ""))
         else:
             tokens.append(t)
     return tokens, notes
@@ -164,6 +191,36 @@ def _is_session_folder(d: Path) -> bool:
     return d.is_dir() and not d.name.startswith(SYSTEM_PREFIXES) and d.name.lower() not in SYSTEM_FOLDERS
 
 
+def unavailable_sessions(raw: Path) -> dict[str, str]:
+    """Session folders that are symbolic links to a place that is not there (external drive not mounted):
+    {folder name: link target}."""
+    raw = Path(raw)
+    if not raw.is_dir():
+        return {}
+    return {d.name: os.readlink(d) for d in sorted(raw.iterdir())
+            if d.is_symlink() and not d.exists() and not d.name.startswith(SYSTEM_PREFIXES)}
+
+
+def _walk(folder: Path, recursive: bool = True) -> list[tuple[str, str]]:
+    """(relative directory with trailing '/' or '', file name) of every visible file below `folder`, at any depth;
+    symbolic links are followed (each real folder visited once), hidden / system folders skipped."""
+    out: list[tuple[str, str]] = []
+    if not recursive:
+        return [("", p.name) for p in sorted(folder.iterdir()) if p.is_file() and not p.name.startswith(".")]
+    seen: set[str] = set()
+    for here, dirs, files in os.walk(folder, followlinks=True):
+        real = os.path.realpath(here)
+        if real in seen:
+            dirs[:] = []
+            continue
+        seen.add(real)
+        dirs[:] = sorted(d for d in dirs if not d.startswith(SYSTEM_PREFIXES) and d.lower() not in SYSTEM_FOLDERS)
+        rel = Path(here).relative_to(folder).as_posix()
+        rel = "" if rel == "." else rel + "/"
+        out += [(rel, f) for f in sorted(files) if not f.startswith(".")]
+    return sorted(out)
+
+
 def _sessions(raw: Path) -> list[tuple[str, Path]]:
     """Every sub-folder of the experiment folder is one imaging session (hidden / system folders ignored)."""
     subs = sorted(d for d in raw.iterdir() if _is_session_folder(d))
@@ -174,20 +231,24 @@ def _sessions(raw: Path) -> list[tuple[str, Path]]:
 
 
 def _columns(facs: list[Factor]) -> list[str]:
-    return ["tumour_id", "imaging_session", "session_label", "file_date", "acquisition_day", *[f.name for f in facs],
-            "section", "hemisphere", "tumour", "file", "legacy_mask", "legacy_stats", "include", "note"]
+    return ["tumour_id", "imaging_session", "session_label", "file_date", "culture_batch", "acquisition_day",
+            *[f.name for f in facs], "section", "hemisphere", "tumour", "file", "legacy_mask", "legacy_stats", "czi",
+            "include", "note"]
 
 
-AUTO = ("session_label", "file_date", "acquisition_day")  # read from the folder / file, filled into older layouts
+# read from the folder / file, filled into older layouts
+AUTO = ("session_label", "file_date", "culture_batch", "acquisition_day", "czi")
 
 
 def _row(name: str, session: str, session_tokens: list[str], names: set[str], rel: str, facs: list[Factor],
-         order: str, session_label: str = "") -> dict:
-    split = _split_original(name)
+         order: str, session_label: str = "", inner: str = "") -> dict:
+    """One layout row for the stack `rel + name`; `inner` = the folders between the session folder and the file
+    (provenance; only read for a culture-batch date when the file name has none)."""
+    split = _split_original(name) or _split_czi(name)
     assert split is not None
     stem, suffix = split
     tokens, notes = _normalise_stem(stem)
-    if suffix not in STANDARD_SUFFIXES:
+    if suffix not in STANDARD_SUFFIXES and suffix != CZI_SUFFIX:
         notes.insert(0, f"file ending '{suffix}' read as an original stack")
     values, missing, used = [], [], set()
     for f in facs:
@@ -215,6 +276,14 @@ def _row(name: str, session: str, session_tokens: list[str], names: set[str], re
     if not hemisphere:
         missing.append("hemisphere (A/B)" + (f" ambiguous ({', '.join(hemis)})" if hemis else ""))
     d = discover.parse_date(stem, order)
+    batch = d.isoformat() if d else ""
+    if not d:  # culture batch: the nearest folder carrying a date (the file name has none)
+        for folder in reversed([x for x in inner.split("/") if x]):
+            fd = discover.parse_date(folder, order)
+            if fd:
+                batch = fd.isoformat()
+                notes.append(f"no date in the file name: culture batch {batch} read from folder '{folder}'")
+                break
     masks, stats = legacy_candidates(stem)
     lower = {n.lower(): n for n in names}
     legacy_mask = next((lower[m.lower()] for m in masks if m.lower() in lower), "")
@@ -226,6 +295,7 @@ def _row(name: str, session: str, session_tokens: list[str], names: set[str], re
         "imaging_session": session,
         "session_label": session_label,
         "file_date": d.isoformat() if d else "",  # optional; not the imaging date (acquisition_day is)
+        "culture_batch": batch,  # ticket 13: culture preparation (file-name date) = the biological batch
         "acquisition_day": "",
         **{f.name: v for f, v in zip(facs, values)},
         "section": section, "hemisphere": hemisphere, "tumour": f"{section}{hemisphere}" if section and hemisphere
@@ -233,6 +303,7 @@ def _row(name: str, session: str, session_tokens: list[str], names: set[str], re
         "file": rel + name,
         "legacy_mask": rel + legacy_mask if legacy_mask else "",
         "legacy_stats": rel + legacy_stats if legacy_stats else "",
+        "czi": "",
         "include": "yes",  # unreadable rows stay included: the run blocks until they are filled in or excluded
         "note": "; ".join(notes),
     }
@@ -248,17 +319,53 @@ def acquisition_day(path: Path) -> str:
         return ""
 
 
+NO_BATCH = "no culture batch"
+
+
 def disambiguate(lay: pd.DataFrame, rows: pd.Series | None = None) -> None:
     """In place: a tumour ID given by tumours of several imaging sessions (repeat sessions of one genotype) gets the
-    session appended ("WT / HERV / -clodro / n1A / 5d WT repeat"); IDs that are unique stay as they are, so adding
-    a session only changes the IDs of tumours that now clash. Duplicates within one session stay duplicates."""
-    sel = lay["tumour_id"] != ""
-    if rows is not None:
-        sel &= rows
-    for tid, grp in lay[sel].groupby("tumour_id", sort=False):
-        if grp["imaging_session"].nunique() > 1:
-            for i in grp.index:
-                lay.at[i, "tumour_id"] = f"{tid} / {lay.at[i, 'imaging_session']}"
+    session appended ("WT / HERV / -clodro / n1A / 5d WT repeat"); then an ID still given by tumours of several
+    culture batches (section labels restart per batch, ticket 13) gets the batch appended
+    ("WT / cntrl / -clodro / n1B / 2026-07-10"). IDs that are unique stay as they are, so adding a session or batch
+    only changes the IDs of tumours that now clash. Duplicates within one session and batch stay duplicates."""
+    for col in ("imaging_session", "culture_batch"):
+        if col not in lay.columns:
+            continue
+        sel = lay["tumour_id"] != ""
+        if rows is not None:
+            sel &= rows
+        for tid, grp in lay[sel].groupby("tumour_id", sort=False):
+            if grp[col].nunique() > 1:
+                for i in grp.index:
+                    lay.at[i, "tumour_id"] = f"{tid} / {lay.at[i, col] or NO_BATCH}"
+
+
+def base_id(tid: str, n_factors: int) -> str:
+    """A tumour ID without the session / culture-batch suffixes `disambiguate` added."""
+    return " / ".join(str(tid).split(" / ")[: n_factors + 1])
+
+
+def _identity(row: dict, facs: list[Factor]) -> tuple[str, ...] | None:
+    """What makes a tumour within its session folder: file-name factor levels + section + hemisphere."""
+    key = (*[row[f.name] for f in facs if f.source == "filename"], row["section"], row["hemisphere"])
+    return key if all(key) else None
+
+
+def _pair_czi(originals: list[dict], czis: list[dict], facs: list[Factor]) -> None:
+    """In place: each .czi row of one session folder is recorded on the original (.ome.tiff) row of the same tumour:
+    same identity, compatible culture batch (equal, or one side without a date); among several, the one in the same
+    folder. A .czi without exactly one free match stays unpaired (`czi_only` reports it)."""
+    for c in czis:
+        key = _identity(c, facs)
+        if key is None:
+            continue
+        cands = [o for o in originals if not o["czi"] and _identity(o, facs) == key
+                 and (not c["culture_batch"] or not o["culture_batch"] or c["culture_batch"] == o["culture_batch"])]
+        if len(cands) > 1:
+            here = c["file"].rsplit("/", 1)[0]
+            cands = [o for o in cands if o["file"].rsplit("/", 1)[0] == here]
+        if len(cands) == 1:
+            cands[0]["czi"] = c["file"]
 
 
 def scan(raw: Path, settings: dict) -> pd.DataFrame:
@@ -267,30 +374,50 @@ def scan(raw: Path, settings: dict) -> pd.DataFrame:
     order = settings.get("project", {}).get("date_order", "DMY")
     rows = []
     for session, folder in _sessions(raw):
-        names = sorted(p.name for p in folder.iterdir() if p.is_file() and not p.name.startswith("."))
-        rel = "" if folder == raw else f"{session}/"
+        files = _walk(folder, recursive=folder != raw)  # flat files in the experiment folder: that folder only
+        names: dict[str, set[str]] = {}
+        for d, n in files:
+            names.setdefault(d, set()).add(n)
+        top = "" if folder == raw else f"{session}/"
         session_tokens, _ = _normalise_stem(session)
         _, label, _ = read_session(session, facs)
-        for n in names:
-            if is_original(n):
-                row = _row(n, session, session_tokens, set(names), rel, facs, order, label)
-                row["acquisition_day"] = acquisition_day(folder / n)
-                rows.append(row)
+        originals, czis = [], []
+        for d, n in files:
+            if is_original(n) or is_czi(n):
+                row = _row(n, session, session_tokens, names[d], top + d, facs, order, label, inner=d)
+                if is_original(n):
+                    row["acquisition_day"] = acquisition_day(folder / d / n)
+                    originals.append(row)
+                else:
+                    czis.append(row)
+        _pair_czi(originals, czis, facs)
+        rows += originals
     out = pd.DataFrame(rows, columns=_columns(facs))
     disambiguate(out)
     return out
 
 
-def unmatched_files(raw: Path, layout: pd.DataFrame) -> list[str]:
-    """Files in the raw folder that are neither a tumour nor a legacy output matched to one (shown, never used)."""
+def _all_files(raw: Path) -> list[str]:
     raw = Path(raw)
-    known = set(layout["file"]) | set(layout["legacy_mask"]) | set(layout["legacy_stats"])
     out = []
     for session, folder in _sessions(raw):
-        rel = "" if folder == raw else f"{session}/"
-        out += [rel + p.name for p in sorted(folder.iterdir())
-                if p.is_file() and not p.name.startswith(".") and rel + p.name not in known]
+        top = "" if folder == raw else f"{session}/"
+        out += [top + d + n for d, n in _walk(folder, recursive=folder != raw)]
     return out
+
+
+def unmatched_files(raw: Path, layout: pd.DataFrame) -> list[str]:
+    """Files in the raw folder that are neither a tumour nor a legacy output matched to one (shown, never used).
+    .czi files are either a tumour's twin (`czi` column) or reported by `czi_only`."""
+    known = {str(x) for c in ("file", "legacy_mask", "legacy_stats", "czi") if c in layout.columns
+             for x in layout[c]}
+    return [f for f in _all_files(raw) if f not in known and not is_czi(f)]
+
+
+def czi_only(raw: Path, layout: pd.DataFrame) -> list[str]:
+    """.czi files that are no tumour's twin: tumours present only as .czi (no CZI reader installed: not measured)."""
+    known = set(layout["czi"].astype(str)) if "czi" in layout.columns else set()
+    return [f for f in _all_files(raw) if is_czi(f) and f not in known]
 
 
 # ------------------------------------------------------------------------------------------------ migration
@@ -411,8 +538,7 @@ def migrate(old: pd.DataFrame, fresh: pd.DataFrame, settings: dict, add_new: boo
     extra = [c for c in lay.columns if c not in cols]
     out = pd.DataFrame(rows, columns=cols + extra).fillna("")
     if m.moved or m.added:  # moved / added rows may create or resolve clashes between sessions: re-derive suffixes
-        suffixed = out["tumour_id"].str.count(" / ") > len(facs)
-        out.loc[suffixed, "tumour_id"] = out.loc[suffixed, "tumour_id"].str.rsplit(" / ", n=1).str[0]
+        out["tumour_id"] = [base_id(t, len(facs)) if t else "" for t in out["tumour_id"]]
         disambiguate(out)
     m.layout = out
     return m
@@ -479,6 +605,11 @@ def validate(layout: pd.DataFrame, raw: Path | None, settings: dict) -> Validati
     lay = layout.copy().fillna("").astype(str).reset_index(drop=True)
     problems: list[str] = []
     warnings: list[str] = []
+    if raw is not None and not Path(raw).is_dir():  # ticket 13: data on an external drive that is not mounted
+        problems.append(f"the raw folder {str(raw)!r} is not available (external drive not mounted?): connect it and "
+                        "run again; existing results stay viewable")
+        raw = None
+    gone_sessions = unavailable_sessions(raw) if raw is not None else {}
     fresh = scan(raw, settings) if raw is not None else None
     if fresh is not None:  # ticket 12: a renamed / reorganised session folder; older layout.csv columns
         mig = migrate(lay, fresh, settings)
@@ -497,6 +628,7 @@ def validate(layout: pd.DataFrame, raw: Path | None, settings: dict) -> Validati
     lay["exclusion_reason"] = ""
     scanned = fresh.set_index("file") if fresh is not None else None
     session_missing: dict[tuple[str, str], list[str]] = {}
+    unavailable: dict[str, list[str]] = {}
 
     for i, row in lay.iterrows():
         file = _cell(row, "file") or f"row {int(str(i)) + 2}"
@@ -512,7 +644,10 @@ def validate(layout: pd.DataFrame, raw: Path | None, settings: dict) -> Validati
         lay.at[i, "include"] = "yes"
         note = _cell(row, "note")
         if scanned is not None and parsed is None:
-            problems.append(f"{file}: not found in the raw folder")
+            if _cell(row, "imaging_session") in gone_sessions:
+                unavailable.setdefault(_cell(row, "imaging_session"), []).append(file)
+            else:
+                problems.append(f"{file}: not found in the raw folder")
         bad = []
         values = []
         for f in facs:
@@ -561,6 +696,12 @@ def validate(layout: pd.DataFrame, raw: Path | None, settings: dict) -> Validati
                         f"{{ \"<word>\" = \"<level>\" }}; a new {fname} = a new level), or fill the {fname} column "
                         f"for its rows in layout.csv")
 
+    for session, files in unavailable.items():
+        problems.append(f"session folder {session!r} is not available: it links to {gone_sessions[session]!r}, which "
+                        f"is not there (external drive not mounted?); {len(files)} tumour{'s' if len(files) != 1 else ''}"
+                        " cannot be measured. Connect the drive and run again, or set include = no for its rows; "
+                        "existing results stay viewable")
+
     disambiguate(lay, lay["include"] == "yes")
     inc = lay[(lay["include"] == "yes") & (lay["tumour_id"] != "")]
     for tid, grp in inc.groupby("tumour_id", sort=True):
@@ -574,6 +715,12 @@ def validate(layout: pd.DataFrame, raw: Path | None, settings: dict) -> Validati
             warnings.append(f"{len(new)} tumour file(s) in the raw folder are not in layout.csv and are not measured: "
                             + "; ".join(new) + " (run `kerncount init` again: your layout.csv is kept, the fresh scan "
                             "goes to layout.new.csv)")
+    if raw is not None:
+        only = czi_only(raw, lay)
+        if only:
+            warnings.append(f"{len(only)} .czi file(s) without an OME-TIFF of the same tumour (tumours present only as "
+                            "CZI; no CZI reader is installed, so they are not measured - export them as OME-TIFF next "
+                            "to the .czi and run `kerncount init` again): " + "; ".join(only))
     no_reason = [_cell(r, "file") for _, r in lay.iterrows()
                  if r["include"] == "no" and r["exclusion_reason"] == NO_REASON]
     if no_reason:

@@ -8,8 +8,12 @@ import pandas as pd
 from .config import batch, factors
 
 FILENAME = "tumours.csv"
-LEADING = ["tumour_id", "imaging_session", "session_label", "file_date", "acquisition_day", "batch"]
+LEADING = ["tumour_id", "imaging_session", "session_label", "file_date", "culture_batch", "acquisition_day", "batch"]
 NO_DAY = "(day not recorded)"
+NO_BATCH = "(culture batch not recorded)"
+# [tumour] batch -> (layout column, placeholder for an empty cell)
+SOURCES = {"culture_batch": ("culture_batch", NO_BATCH), "session_folder": ("imaging_session", ""),
+           "acquisition_day": ("acquisition_day", NO_DAY)}
 IDENTITY = ["section", "hemisphere", "tumour", "file"]
 READOUTS = ["cross_sectional_area_mm2", "perimeter_mm", "mid_section_centre_layer", "mid_section_layers",
             "mid_section_fits", "footprint_area_mm2", "slab_volume_mm3", "main_mass_volume_um3",
@@ -29,11 +33,11 @@ def build(layout: pd.DataFrame, measurements: pd.DataFrame, settings: dict) -> p
     inc = layout[layout["include"].astype(str).str.strip().str.lower().isin(("yes", "y", "true", "1"))]
     keep = [c for c in [*LEADING, *facs, *IDENTITY, "legacy_mask", "legacy_stats", "note"] if c in inc.columns]
     table = inc[keep].merge(measurements, on="tumour_id", how="left", validate="one_to_one")
-    # ticket 12: the imaging batch of every tumour ([tumour] batch), used by the confounding rule (stats.batch_of)
-    src = "acquisition_day" if batch(settings) == "acquisition_day" else "imaging_session"
+    # tickets 12, 13: the batch of every tumour ([tumour] batch): block effect + confounding rule (stats.batch_of)
+    src, empty = SOURCES[batch(settings)]
     if src in table.columns:
         b = table[src].fillna("").astype(str)
-        table["batch"] = b.where(b != "", NO_DAY) if src == "acquisition_day" else b
+        table["batch"] = b.where(b != "", empty) if empty else b
     for new_col, col, div in UNITS:
         if col in table.columns:
             table[new_col] = pd.to_numeric(table[col], errors="coerce") / div

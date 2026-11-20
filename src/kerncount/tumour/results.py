@@ -18,6 +18,12 @@ from . import planner, plots, sensitivity, stats
 from .config import Factor, Family, Readout, batch, factors, families, normalise_by, readouts
 
 MODEL = "N-way linear model on log(readout), full interaction, pooled variance"
+BLOCK = "; batch as fixed block effect"  # ticket 13: appended when the model estimates block effects
+
+
+def model_text(model: stats.CellModel) -> str:
+    return MODEL + (BLOCK + f" ({model.n_blocks} parameter{'s' if model.n_blocks != 1 else ''})"
+                    if model.n_blocks else "")
 NAN = float("nan")
 
 
@@ -31,7 +37,8 @@ def lock(settings: dict) -> tuple[str, dict]:
         "normalise_by": (normalise_by(settings, factors(settings)) or Factor("", ("",), "")).name,
     }
     if batch(settings) != "session_folder":  # ticket 12: decides which contrasts are tested; in the hash only when
-        spec["batch"] = batch(settings)  # changed from the default, so existing locks stay valid
+        spec["batch"] = batch(settings)  # not the session folder, so locks made before ticket 13 stay valid
+        spec["batch_effect"] = "fixed block"  # ticket 13 (ADR 0003 amendment 2026-11-20)
     return hashlib.sha1(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:12], spec
 
 
@@ -48,14 +55,15 @@ def _key(facs: list[Factor], cell: tuple) -> tuple:
     return role("row"), role("panel"), role("x")
 
 
-def _stats_rows(res: pd.DataFrame, means: pd.DataFrame, facs: list[Factor], readout: Readout, h: str) -> list[dict]:
+def _stats_rows(res: pd.DataFrame, means: pd.DataFrame, facs: list[Factor], readout: Readout, h: str,
+                model_text: str = MODEL) -> list[dict]:
     rows = []
     for _, m in means.iterrows():
         cell = tuple(str(m[f.name]) for f in facs)
         rows.append(dict(level="all_n", n=None, metric=readout.name, family="estimated means",
                          test="model cell mean (geometric mean, back-transformed)", comparison=_group_label(cell),
                          estimate=m["mean"], estimate_type="mean", ci_low=m["ci_low"], ci_high=m["ci_high"], p=NAN,
-                         p_adj=NAN, significance="", N=m["n"], model=MODEL, note=f"{readout.role}; lock {h}",
+                         p_adj=NAN, significance="", N=m["n"], model=model_text, note=f"{readout.role}; lock {h}",
                          estimand=f"geometric mean {readout.label}", cell_line=""))
     for _, r in res.iterrows():
         tested = np.isfinite(r["p"])
@@ -64,7 +72,7 @@ def _stats_rows(res: pd.DataFrame, means: pd.DataFrame, facs: list[Factor], read
         rows.append(dict(level="all_n", n=None, metric=readout.name, family=r["family"], test=test,
                          comparison=r["comparison"], estimate=r["estimate"], estimate_type="ratio",
                          ci_low=r["ci_low"], ci_high=r["ci_high"], p=r["p"], p_adj=r["p_adj"],
-                         significance=r["significance"], N=r["N"], model=MODEL,
+                         significance=r["significance"], N=r["N"], model=model_text,
                          note="; ".join(x for x in (f"{r['family_role']} family", r["note"], f"lock {h}") if x),
                          estimand=("fold-change of geometric means" if " vs " in r["comparison"] and
                                    not r["comparison"].startswith("(") else "ratio of fold-changes")
@@ -113,6 +121,7 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
     all_sens: list[pd.DataFrame] = []
     plans: list[pd.DataFrame] = []
     pooled_sd: dict[str, float] = {}
+    blocks_seen: list[stats.CellModel] = []
     for ro in readouts(settings):
         if ro.column not in table.columns:
             notes.append(f"readout {ro.name}: column {ro.column} not in tumours.csv (not analysed)")
@@ -130,15 +139,18 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
             means = means.merge(norm[[f.name for f in facs] + ["pct", "ci_low", "ci_high"]].rename(
                 columns={"pct": "pct_of_reference", "ci_low": "pct_ci_low", "ci_high": "pct_ci_high"}),
                 on=[f.name for f in facs], how="left")
-        stats_rows += _stats_rows(res, means, facs, ro, h)
-        sens = sensitivity.readout_sensitivity(table, facs, fams, ro, res, n_perm, seed)
+        stats_rows += _stats_rows(res, means, facs, ro, h, model_text(model))
+        if model.n_blocks:
+            blocks_seen.append(model)
+        adjusted = stats.batch_adjusted(table, model)  # ticket 13: sensitivity on within-batch (adjusted) values
+        sens = sensitivity.readout_sensitivity(adjusted, facs, fams, ro, res, n_perm, seed)
         stats_rows += sensitivity.long_rows(sens, ro, h)
         all_sens.append(sens)
         if ro.role == "confirmatory":
             fc, pw, alpha = planner.options(settings)
             plans.append(planner.plan_readout(model, facs, fams, ro, fc, pw, alpha))
             pooled_sd[ro.name] = float(np.sqrt(model.s2))
-        written.append(str(sensitivity.residual_plot(sensitivity.groups(table, facs, ro.column), facs, ro.label,
+        written.append(str(sensitivity.residual_plot(sensitivity.groups(adjusted, facs, ro.column), facs, ro.label,
                                                      out / "plots" / f"{ro.name}_residuals")))
         all_res.append(res)
         all_means.append(means.assign(readout=ro.name))
@@ -151,7 +163,8 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
                                                      sep=delim)
         written += _plots(out, table, tum, facs, focus, ro, model, res, means, fams)
     write_stats_long(out, stats_rows)
-    lines = _about(settings, h, spec, fams, notes, table, facs) + lock_log.report_lines(out)
+    lines = _about(settings, h, spec, fams, notes, table, facs, blocks_seen[0] if blocks_seen else None)
+    lines += lock_log.report_lines(out)
     _excel(out, lines, tum, stats_rows, all_means, fams)
     report = _report(out, lines, all_res)
     _sensitivity_outputs(out, report, all_sens, n_perm, seed)
@@ -229,17 +242,24 @@ def _plots(out: Path, table: pd.DataFrame, tum: pd.DataFrame, facs: list[Factor]
     return [str(p) for p in w]
 
 
+BATCH_TEXT = {
+    "culture_batch": "one batch = one culture preparation (the date at the start of the file names); slices were "
+                     "fixed after incubation, so the imaging day is recorded but not a batch",
+    "session_folder": "one batch = one session folder",
+    "acquisition_day": "one batch = one acquisition day from the OME metadata",
+}
+
+
 def _about(settings: dict, h: str, spec: dict, fams: list[Family], notes: list[str], table: pd.DataFrame,
-           facs: list[Factor]) -> list[str]:
+           facs: list[Factor], blocked: stats.CellModel | None = None) -> list[str]:
     lines = [f"Tumour statistics — analysis plan lock {h}", f"Built {datetime.now():%Y-%m-%d %H:%M}",
              f"Model: {MODEL}; one tumour = one n; effects are fold-changes (ratios of geometric means) with 95 % CI.",
              "Holm within each family and readout. Stars only for confirmatory families of confirmatory readouts; "
              "exploratory results carry p-values but no stars; descriptive families are never tested.",
-             f"Batch definition: {batch(settings)} ([tumour] batch; "
-             + ("one imaging batch = one session folder" if batch(settings) == "session_folder" else
-                "one imaging batch = one acquisition day from the OME metadata") + "). Contrasts whose compared "
-             f"groups come from different batches (not a within-batch ratio) are labelled "
-             f"'{stats.batch_of(table)[1]}' and never tested.",
+             f"Batch definition: {batch(settings)} ([tumour] batch; {BATCH_TEXT[batch(settings)]}). Batches that "
+             "share a group are connected and enter the model as a fixed block effect (contrasts inside a connected "
+             "set are within-batch estimates); contrasts whose compared groups come from different connected sets "
+             f"(not a ratio of within-set ratios) are labelled '{stats.batch_of(table)[1]}' and never tested.",
              "Factors: " + "; ".join(f"{f['name']} ({', '.join(f['levels'])}; reference {f['reference']})"
                                      for f in spec["factors"]),
              "Readouts: " + "; ".join(f"{r['name']} ({r['role']})" for r in spec["readouts"]),
@@ -256,6 +276,10 @@ def _about(settings: dict, h: str, spec: dict, fams: list[Family], notes: list[s
     col = stats.batch_of(table)[0]
     if col in table.columns:
         lines.append("Batches: " + ", ".join(sorted(set(table[col].astype(str)))))
+    if blocked is not None:  # ticket 13: which batches were connected, block effects of the first such readout
+        multi = [bs for bs in blocked.batch_sets if len(bs) > 1]
+        lines.append("Block effect: connected batches " + "; ".join(" + ".join(bs) for bs in multi)
+                     + " (estimated per readout; sensitivity models and residual plots use the batch-adjusted values)")
     lines += [f"NOTE: {n}" for n in notes]
     return lines
 

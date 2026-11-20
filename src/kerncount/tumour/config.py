@@ -9,7 +9,7 @@ import copy
 from dataclasses import dataclass, field
 
 ROLES = ("row", "panel", "x", "colour")
-BATCHES = ("session_folder", "acquisition_day")
+BATCHES = ("culture_batch", "session_folder", "acquisition_day")
 SOURCES = ("filename", "session")
 EFFECTS = ("simple", "interaction")  # simple effect of one factor / interaction of several, within cells of the rest
 FAMILY_ROLES = ("confirmatory", "exploratory", "descriptive")
@@ -50,9 +50,10 @@ DEFAULTS: dict = {
     # QC and blinded review (ticket 06): saturation warning threshold (share of the mid-section main mass at 255;
     # the intermedians threshold is protected up to ~50 %), review image size (px, longest side per panel), JPEG quality.
     "qc_saturation_warn": 0.40,
-    # Batch (ticket 12): what counts as one imaging batch for the confounding rule of the statistics and the planner
-    # ("session_folder" = the imaging-session folder, "acquisition_day" = the day in each original's OME metadata).
-    "batch": "session_folder",
+    # Batch (tickets 12, 13): the batch of the statistics (fixed block effect + confounding rule) and the planner.
+    # "culture_batch" (default; user decision 2026-11-20: slices were fixed after 5 d, so the culture preparation =
+    # the file-name date is the biological batch), "session_folder", or "acquisition_day" (OME imaging day).
+    "batch": "culture_batch",
     "review_px": 640,
     "review_jpeg_quality": 80,
     "factors": [
@@ -142,7 +143,7 @@ fiji_min_voxels = 200000  # 3D Objects Counter minimum object size of the macro 
 threshold_sweep = false   # true: recompute every confirmatory effect at the threshold x sweep_scales (slow first run)
 sweep_scales = [0.8, 0.9, 1.1, 1.2]
 shared_threshold_check = false   # true: robustness check at ONE threshold for every tumour (needs identical acquisition settings)
-batch = "session_folder"  # imaging batch for the confounding rule: "session_folder" or "acquisition_day" (OME day)
+batch = "culture_batch"   # batch (fixed block effect + confounding rule): "culture_batch" (file-name date = culture preparation), "session_folder" or "acquisition_day" (OME day)
 qc_saturation_warn = 0.40 # QC warning when more of the mid-section main mass is saturated (255) than this
 review_px = 640           # blinded review images (review/<code>.jpg): longest side per panel in pixels
 review_jpeg_quality = 80
@@ -428,8 +429,8 @@ def families(settings: dict) -> list[Family]:
 
 
 def batch(settings: dict) -> str:
-    """`[tumour] batch`: "session_folder" (default) or "acquisition_day" (ticket 12)."""
-    b = str(tumour_settings(settings).get("batch") or "session_folder")
+    """`[tumour] batch`: "culture_batch" (default, ticket 13), "session_folder" or "acquisition_day" (ticket 12)."""
+    b = str(tumour_settings(settings).get("batch") or "culture_batch")
     if b not in BATCHES:
         raise ValueError(f"[tumour] batch = {b!r} must be one of {', '.join(BATCHES)}")
     return b

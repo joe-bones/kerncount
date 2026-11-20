@@ -12,7 +12,8 @@ kerncount run tumour_TLR7
 ```
 
 ## Raw data and layout.csv
-`data/<experiment>/` holds one sub-folder per **imaging session**, each with flat files as delivered (never modified):
+`data/<experiment>/` holds one sub-folder per **session folder** (`5d K07`, `5d WT`), with the files as delivered
+(never modified), flat or in any sub-folder structure (ticket 13, below):
 
 | file | meaning |
 |---|---|
@@ -22,9 +23,11 @@ kerncount run tumour_TLR7
 
 `layout.csv` gets one row per original: `tumour_id`, `imaging_session` (the folder), `session_label` (the folder's
 words that are no factor level, e.g. `5d`), `file_date` (6-digit token of the file name, `[project] date_order`;
-optional, may differ between folders and files, **not** the imaging date), `acquisition_day` (from the original's OME
-metadata; header only), one column per declared factor, `section` (`n3`), `hemisphere` (`A`), `tumour` (`n3A`),
-`file` (relative to the raw folder), `legacy_mask`, `legacy_stats`, `include`, `note`.
+optional, may differ between folders and files, **not** the imaging date), `culture_batch` (= the file-name date: the
+culture preparation, the biological batch; ticket 13), `acquisition_day` (from the original's OME metadata; header
+only), one column per declared factor, `section` (`n3`), `hemisphere` (`A`), `tumour` (`n3A`), `file` (relative to the
+raw folder, with any sub-folders), `legacy_mask`, `legacy_stats`, `czi` (the Zeiss `.czi` of the same tumour,
+provenance), `include`, `note`.
 `tumour_id` = every factor level + section + hemisphere (`TLR7 KO / HERV / -clodro / n3A`), unique across the
 experiment because `n3A` exists in several groups and both genotypes. A name the parser cannot read is set
 `include = no` with a note (full validation: ticket 03).
@@ -51,6 +54,22 @@ experiment because `n3A` exists in several groups and both genotypes. A name the
   file); `kerncount init` writes the updated layout.csv after backing the old one up to `_work/backups/` and lists
   every moved / added file. When nothing moved and no file or column was added, init keeps layout.csv and writes the
   fresh scan to `layout.new.csv` as before. Older layouts get the new columns (`date` becomes `file_date`).
+- **Structure below a session folder is irrelevant** (ticket 13). Factors come from the **session-folder name**
+  (genotype) and the **file name** only; stacks are found at any depth (`5d WT/190626 OBS/190626 HERV +clodro n1/…`),
+  the intermediate folders are never read for factors (they stay visible in `file`). Name variants read and noted:
+  `_s1` scene suffix (`… n1 A_s1.ome.tiff`), section written `1n` / `2n`, optional date prefix. A Zeiss `.czi` next
+  to an `.ome.tiff` of the same tumour (matched by parsed identity — line, clodronate, section, hemisphere, compatible
+  date — not by base name, so `cntrl +clodro n1 A.czi` pairs with `190626 cntrl +clodro 1n A.ome.tiff`) is recorded in
+  `czi`; a tumour present **only** as `.czi` is reported at init and run (no CZI reader is installed: export it as
+  OME-TIFF), never silently dropped. Legacy Fiji outputs are looked up next to their original.
+- **Culture batch.** The date at the start of the file names (`190626`, `100726`, KO `030826`) is the culture
+  preparation = `culture_batch` (a file without one takes the nearest folder date, noted). Section labels restart per
+  culture batch, so a tumour ID given by tumours of several batches gets the batch appended
+  (`WT / cntrl / -clodro / n1B / 2026-07-10`); unique IDs stay plain (so the KO IDs and caches are unchanged).
+- **Data on an external drive.** A session folder may be a symbolic link (`data/tumour_TLR7/5d WT` →
+  `/Volumes/…/5d WT`); nothing is copied. When the drive is not mounted, the run stops with one message per folder
+  ("session folder '5d WT' is not available: it links to …"), init and the web interface keep working, and existing
+  results stay viewable.
 - **Caches survive a rename**: every cache key (segmentation, QC, Fiji, sweep, shared threshold) uses the file
   name, size and modification time (not the folder) and the cache file is named after the tumour ID, which does not
   contain the folder; review codes are keyed by tumour ID. A renamed folder therefore re-segments nothing.
@@ -275,15 +294,21 @@ statistics knows readout names. Declared readouts missing from the table are rep
 
 **Rules.** Holm within each family and readout, over the contrasts that are tested. Stars only for confirmatory
 families of confirmatory readouts; exploratory families/readouts get p and Holm p but no stars and are labelled;
-descriptive families show estimate + CI only. **Imaging batch:** a contrast whose weights do not cancel within every
-imaging batch (a multiplicative day shift would move it) is labelled "confounded with imaging session" (or "…with
-acquisition day") and never tested — with genotype read from the session folder, direct WT vs KO (F6) is; within-
-session ratios and ratios of them (F1–F5, F7) are not. What a batch is, is `[tumour] batch`: `"session_folder"`
-(default: one folder = one batch) or `"acquisition_day"` (one OME acquisition day = one batch; groups imaged on
-different days are then not compared by a test, e.g. HERV vs cntrl when HERV was imaged on another day). tumours.csv
-has the per-tumour `batch` column; the report's About lines state the definition and the batches, and § Acquisition
-settings always shows the group × acquisition-day table. The setting enters the analysis-plan lock only when changed
-from the default. With ≥ 3 genotype levels every family compares each non-reference level with the reference (F4 =
+descriptive families show estimate + CI only. **Batch** (`[tumour] batch`; ADR 0003 amendment 2026-11-20): default
+`"culture_batch"` — the culture preparation (file-name date). The slices were fixed after 5 d, so the imaging day is
+recorded (acquisition report) but is not a batch. Alternatives: `"session_folder"`, `"acquisition_day"`. Batches that
+share a group are **connected** and enter the model as a **fixed block effect** (a multiplicative shift per batch,
+estimated; centred so that a cell mean is the mean at the set's average batch): the WT batches 190626 (all six groups)
+and 100726 (cntrl and HERV −clodro) are connected through cntrl and HERV −clodro, so WT contrasts (F1/F2/F3) are
+within-batch estimates. A contrast whose weights do not cancel within every connected set is labelled "confounded
+with culture batch" (or "…imaging session" / "…acquisition day") and never tested: KO (030826) and WT share no batch,
+so direct WT vs KO (F6) is confounded, while ratios of within-genotype ratios (F4, F5, F7) are not. The sensitivity
+models (Welch, permutation), residual plots and normalised values use the batch-adjusted values (each tumour divided
+by its batch's estimated shift; the uncertainty of the shift is not propagated there). With one batch per connected
+set the model is the plain cell-means model. tumours.csv has `culture_batch` and the per-tumour `batch`; the About
+lines state the definition, the batches and the connected batches; § Acquisition settings shows group × culture batch
+and group × acquisition day. The batch setting is part of the analysis-plan lock (only `session_folder` is left out of
+the hash, so locks made before ticket 12 stay valid). With ≥ 3 genotype levels every family compares each non-reference level with the reference (F4 =
 each KO line's ratio of line effects vs WT), group plots get one row per present level, and declared levels without
 data are listed as `needs <level> data`. **Missing levels:**
 contrasts needing cells without tumours stay in every table, labelled `needs WT data` (whole level absent) or
@@ -393,7 +418,10 @@ acquisition day and time. `stats_report.md` § Acquisition settings gives the ve
 setting identical, or which differ; settings never recorded are named as unchecked), what varies harmlessly
 (z-step, frame size), and a **group × acquisition-day table** with the groups imaged on a single day. Note:
 `imaging_session` in layout.csv is the data folder, not the acquisition day; a folder can span several days (the
-`acquisition_day` column has the day; `[tumour] batch` decides which of the two the confounding rule uses).
+`acquisition_day` column has the day). A brightness-relevant setting that differs is listed per value with its
+tumours, groups and culture batches (WT: detector voltage 554 V for 11 of the 12 `100726` stacks vs 597 V elsewhere;
+one stack binned to 1.248 µm/px — sizes use each file's own calibration). § Acquisition also shows group × culture
+batch next to group × acquisition day.
 
 **Shared-threshold robustness check** (ADR 0002; `[tumour] shared_threshold_check = true`, off by default): only when
 no checked acquisition setting differs. One experiment-wide grey value = **median of the per-tumour automatic

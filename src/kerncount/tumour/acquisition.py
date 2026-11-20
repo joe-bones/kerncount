@@ -7,9 +7,11 @@ Read from each file's OME-XML (no pixels are read). Two groups of settings:
   be identical across tumours for grey values to be comparable between tumours; only then is one experiment-wide
   threshold (the shared-threshold robustness check, `shared.py`) meaningful.
 - `REPORTED` — settings that may legitimately differ (z-step, frame size, number of layers, acquisition day). They are
-  listed, not judged. The acquisition day matters for the design: groups imaged on different days can differ by a
-  day effect even with identical settings (laser ageing, alignment). Whether the statistics treat a session folder
-  or an acquisition day as one imaging batch is the `[tumour] batch` setting (ticket 12).
+  listed, not judged. The acquisition day is recorded; for fixed tissue (the TLR7 slices were fixed after 5 d) it
+  is not a batch. What the statistics treat as a batch is the `[tumour] batch` setting (default: the culture batch,
+  ticket 13); the report tabulates groups per culture batch and per acquisition day.
+
+A CHECKED setting that differs is listed per value with its tumours, groups and culture batches (ticket 13).
 
 Outputs: `acquisition.csv` (one row per tumour) and a report section `## Acquisition settings`.
 """
@@ -116,11 +118,55 @@ def consistency(acq: pd.DataFrame) -> Consistency:
     return Consistency(not differs, differs, missing, partly, values)
 
 
-def report_lines(acq: pd.DataFrame, tumours: pd.DataFrame, facs: list, batch: str = "session_folder") -> list[str]:
-    """Markdown: checked settings (shared values or what differs), settings that vary, groups x acquisition day."""
+RULES = {
+    "culture_batch": "`[tumour] batch = \"culture_batch\"`: the statistics treat each culture batch (file-name date) "
+                     "as a batch; the tissue was fixed before imaging, so the imaging day is recorded, never a batch",
+    "session_folder": "`[tumour] batch = \"session_folder\"`: the statistics treat each session folder as one batch, "
+                      "not each day",
+    "acquisition_day": "`[tumour] batch = \"acquisition_day\"`: the statistics treat each day as one batch",
+}
+
+
+def _groups(tumours: pd.DataFrame, facs: list) -> pd.Series:
+    """Group label per tumour, as a categorical in factor-level order (tables list groups in design order)."""
+    import itertools
+
+    use = [f for f in facs if f.name in tumours.columns]
+    if not use:
+        return pd.Series("all", index=tumours.index)
+    lab = tumours[[f.name for f in use]].astype(str).agg(" / ".join, axis=1)
+    order = [" / ".join(c) for c in itertools.product(*(f.levels for f in use))]
+    cats = [g for g in order if g in set(lab)] + sorted(set(lab) - set(order))
+    return pd.Series(pd.Categorical(lab, categories=cats, ordered=True), index=tumours.index)
+
+
+def _table(md: list[str], ct: pd.DataFrame) -> None:
+    md += ["| group | " + " | ".join(str(c) for c in ct.columns) + " |", "|---|" + "---|" * ct.shape[1]]
+    for g, r in ct.iterrows():
+        md.append(f"| {g} | " + " | ".join(str(int(x)) if x else "" for x in r) + " |")
+
+
+def report_lines(acq: pd.DataFrame, tumours: pd.DataFrame, facs: list, batch: str = "culture_batch") -> list[str]:
+    """Markdown: checked settings (shared values or what differs, per value with its groups), settings that vary,
+    groups x culture batch, groups x acquisition day."""
     c = consistency(acq)
     md = ["## Acquisition settings (from each original's OME metadata)", "",
           f"- Verdict: **{c.describe()}**."]
+    if c.differs:
+        t = acq.merge(tumours.drop(columns=[x for x in ("file", "acquisition_day") if x in tumours.columns]),
+                      on="tumour_id", how="left")
+        t["_group"] = _groups(t, facs)
+        for k in c.differs:
+            for val, g in t.groupby(t[k].fillna("").astype(str), sort=True):
+                if not val:
+                    continue
+                per = ", ".join(f"{grp} {n}" for grp, n in g["_group"].value_counts(sort=False).items() if n)
+                bt = (f"; culture batch {', '.join(sorted(set(g['culture_batch'].astype(str)) - {''}))}"
+                      if "culture_batch" in g.columns else "")
+                md.append(f"- {k} = {val}: {len(g)} tumour{'s' if len(g) != 1 else ''} ({per}{bt}).")
+        if any(k in c.differs for k in ("voxel_x_um", "voxel_y_um")):
+            md.append("- Pixel size differs: every readout uses each file's own calibration (µm), so sizes stay "
+                      "comparable; grey values of a binned stack are not.")
     if c.values:
         md.append("- Shared values: " + "; ".join(f"{k} = {v}" for k, v in c.values.items()) + ".")
     if "detector_voltage" in c.values:
@@ -131,21 +177,22 @@ def report_lines(acq: pd.DataFrame, tumours: pd.DataFrame, facs: list, batch: st
             md.append(f"- {k} varies (expected; not a brightness setting): {', '.join(vals)}"
                       + (" — counts: " + ", ".join(f"{v} × {n}" for v, n in acq[k].astype(str).value_counts()
                                                     .sort_index().items()) if k == "voxel_z_um" else "") + ".")
+    if "culture_batch" in tumours.columns:  # ticket 13: the biological batch
+        t = tumours.assign(group=_groups(tumours, facs),
+                           cb=tumours["culture_batch"].fillna("").astype(str).replace("", "(not recorded)"))
+        ct = pd.crosstab(t["group"], t["cb"])
+        md += ["", f"Tumours per group and culture batch ({ct.shape[1]} batch(es); the date at the start of the file "
+               "names = culture preparation). Within a genotype, batches sharing a group enter the statistics as a "
+               "fixed block effect.", ""]
+        _table(md, ct)
     days = acq["acquisition_day"].astype(str)
+    rule = RULES.get(batch, RULES["culture_batch"])
     if (days != "").any():
-        names = [f.name for f in facs if f.name in tumours.columns]
-        t = tumours[["tumour_id", *names]].merge(acq[["tumour_id", "acquisition_day"]], on="tumour_id")
-        t["group"] = t[names].astype(str).agg(" / ".join, axis=1) if names else "all"
-        ct = pd.crosstab(t["group"], t["acquisition_day"])
-        rule = ("`[tumour] batch = \"session_folder\"`: the confounding rule of the statistics treats each session "
-                "folder as one batch, not each day" if batch == "session_folder" else
-                "`[tumour] batch = \"acquisition_day\"`: the confounding rule of the statistics treats each day as "
-                "one batch")
-        md += ["", f"Tumours per group and acquisition day ({ct.shape[1]} day(s)); {rule}. Groups imaged on "
-               "different days can differ by a day effect even with identical settings.", "",
-               "| group | " + " | ".join(ct.columns) + " |", "|---|" + "---|" * ct.shape[1]]
-        for g, r in ct.iterrows():
-            md.append(f"| {g} | " + " | ".join(str(int(x)) if x else "" for x in r) + " |")
+        t = tumours[["tumour_id"]].assign(group=_groups(tumours, facs)).merge(
+            acq[["tumour_id", "acquisition_day"]], on="tumour_id")
+        ct = pd.crosstab(t["group"], t["acquisition_day"], dropna=False).loc[lambda x: x.sum(axis=1) > 0]
+        md += ["", f"Tumours per group and acquisition day ({ct.shape[1]} day(s)); {rule}.", ""]
+        _table(md, ct)
         single = [f"{g} ({ct.columns[r.to_numpy().nonzero()[0][0]]})" for g, r in ct.iterrows()
                   if (r > 0).sum() == 1]
         if ct.shape[1] > 1 and single:

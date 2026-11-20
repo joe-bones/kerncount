@@ -114,7 +114,9 @@ def plan_readout(model: CellModel, facs: list[Factor], fams: list, readout, fold
             if not np.isfinite(s):
                 notes.append("no residual df in the current data (every group n = 1): cannot plan")
             v = {cell: c.weights[cell] ** 2 for cell in c.weights}  # w² per cell
-            se = s * float(np.sqrt(sum(v[cell] / n[cell] for cell in n))) if not missing else float("nan")
+            # current data: the model's covariance of the cell means (block effects included, ticket 13)
+            se = (s * float(np.sqrt(sum(c.weights[a] * c.weights[b] * model.v(a, b) for a in n for b in n)))
+                  if not missing else float("nan"))
             mdfc = float(np.exp(detectable(se, model.df, a, target))) if not missing else float("nan")
             pw = power(delta, se, model.df, a) if not missing else float("nan")
             # balanced: every group of the design at k tumours (df = cells × (k − 1))

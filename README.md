@@ -545,8 +545,16 @@ data/tumour_TLR7/
   is a new level in the settings plus its folder spelling as an alias. A folder whose genotype cannot be read stops
   the run with a message saying how to fix it. WT and KO imaged on different days = genotype confounded with the
   imaging session: ratios within a session are compared across genotypes, a direct WT-vs-KO difference is shown
-  but never tested. Whether one *session folder* or one *acquisition day* (from the microscope metadata) counts as a
-  batch is the setting `[tumour] batch` (default `session_folder`); the report says which was used.
+  but never tested. What counts as a batch is the setting `[tumour] batch`: by default the **culture batch** (the
+  date at the start of the file names = culture preparation; the slices were fixed before imaging, so the imaging
+  day is not a batch), or the *session folder*, or the *acquisition day*. Several culture batches of one genotype
+  (WT: `190626`, `100726`) are a fixed block effect in the model, so WT comparisons are within-batch; the report
+  says which definition was used.
+- **Sub-folders do not matter**: below a session folder the files may sit in any folder structure
+  (`5d WT/190626 OBS/190626 HERV +clodro n1/…`); everything except the genotype is read from the file name. `_s1`
+  endings, `1n` for `n1` and a missing date are handled; a `.czi` next to the `.ome.tiff` of the same tumour is
+  recorded, a tumour that exists only as `.czi` is reported (export it as OME-TIFF). A session folder may be a link
+  to an external drive; if the drive is not connected, the run says so and existing results stay viewable.
 - **Renaming a session folder** loses nothing: `kerncount run` finds the files by name, keeps your edits in
   layout.csv and re-uses every cached measurement; `kerncount init` then updates layout.csv (old copy backed up).
 - The 6-digit date at the start of a file name is optional and is **not** the imaging date; the imaging day is read
