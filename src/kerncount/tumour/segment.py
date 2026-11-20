@@ -139,10 +139,12 @@ def _smoothed(stack: np.ndarray, voxel_um: tuple[float, float, float], smooth_si
 
 
 def _segment_at(stack: np.ndarray, sm: np.ndarray, voxel_um: tuple[float, float, float], t: float,
-                min_object_um3: float, top: float, shape_opts: ShapeOptions | None = None
-                ) -> tuple[np.ndarray, dict]:
+                min_object_um3: float, top: float, shape_opts: ShapeOptions | None = None,
+                main_ref: np.ndarray | None = None) -> tuple[np.ndarray, dict]:
     """Threshold the smoothed stack at `t` -> 3D fill -> 26-connected objects: (labels, size readouts incl. the
-    mid-section / confirmatory readouts of `shape.readouts`, so the threshold sweep covers them)."""
+    mid-section / confirmatory readouts of `shape.readouts`, so the threshold sweep covers them).
+    `main_ref` (bool, stack shape): the main mass is the object overlapping it most instead of the largest one
+    (the threshold sweep of a tumour whose main mass was re-picked at review)."""
     vz, vy, vx = voxel_um
     voxel_um3 = vz * vy * vx
     mask = sm > np.float32(t)
@@ -159,6 +161,15 @@ def _segment_at(stack: np.ndarray, sm: np.ndarray, voxel_um: tuple[float, float,
     lut[order] = np.arange(1, len(order) + 1, dtype=dtype)
     labels = lut[lab]
     del lab
+    if main_ref is not None and order:
+        overlap = np.bincount(labels[main_ref].ravel(), minlength=len(order) + 1)
+        overlap[0] = 0
+        pick = int(np.argmax(overlap))
+        if pick > 1 and overlap[pick] > 0:  # swap object `pick` and object 1
+            first = labels == 1
+            labels[labels == pick] = 1
+            labels[first] = pick
+            order[0], order[pick - 1] = order[pick - 1], order[0]
 
     main_vox = int(sizes[order[0]]) if order else 0
     sat_main = int(np.count_nonzero((labels == 1) & (stack >= top))) if main_vox else 0
@@ -204,15 +215,16 @@ def segment(stack: np.ndarray, voxel_um: tuple[float, float, float], smooth_sigm
 
 def sweep(stack: np.ndarray, voxel_um: tuple[float, float, float], scales: list[float],
           smooth_sigma_um: float = 2.0, threshold: str = "intermedians", min_object_um3: float = 1000.0,
-          shape_opts: ShapeOptions | None = None) -> dict[float, dict]:
+          shape_opts: ShapeOptions | None = None, main_ref: np.ndarray | None = None) -> dict[float, dict]:
     """Readouts of `segment` at threshold x each scale, smoothing once (one stack in memory at a time; the
-    labels are not kept). Identical to calling `segment(..., threshold_scale=s)` per scale."""
+    labels are not kept). Identical to calling `segment(..., threshold_scale=s)` per scale. `main_ref`: the
+    corrected x1 main mass of a re-picked tumour; at each scale the object overlapping it most is the main mass."""
     sm, counts, centres, top = _smoothed(stack, voxel_um, smooth_sigma_um)
     t, _, _ = threshold_from_histogram(counts, centres, threshold)
     vz, vy, vx = voxel_um
     out = {}
     for s in scales:
-        _, size = _segment_at(stack, sm, voxel_um, t * float(s), min_object_um3, top, shape_opts)
+        _, size = _segment_at(stack, sm, voxel_um, t * float(s), min_object_um3, top, shape_opts, main_ref)
         out[float(s)] = {"voxel_z_um": vz, "voxel_y_um": vy, "voxel_x_um": vx, "n_layers": int(stack.shape[0]),
                          "threshold": round(t * float(s), 3), "threshold_auto": round(t, 3),
                          "threshold_scale": float(s), **size}
@@ -229,10 +241,11 @@ def measure_file(path: Path, tumour_settings: dict, threshold_scale: float = 1.0
                    shape_opts=ShapeOptions.from_settings(tumour_settings))
 
 
-def sweep_file(path: Path, tumour_settings: dict, scales: list[float]) -> dict[float, dict]:
+def sweep_file(path: Path, tumour_settings: dict, scales: list[float], main_ref: np.ndarray | None = None
+               ) -> dict[float, dict]:
     """`sweep` on one original stack with the [tumour] settings."""
     vox = voxel_size_um(path)
     return sweep(read_stack(path), vox, scales, smooth_sigma_um=float(tumour_settings["smooth_sigma_um"]),
                  threshold=str(tumour_settings["threshold"]),
                  min_object_um3=float(tumour_settings["min_object_um3"]),
-                 shape_opts=ShapeOptions.from_settings(tumour_settings))
+                 shape_opts=ShapeOptions.from_settings(tumour_settings), main_ref=main_ref)

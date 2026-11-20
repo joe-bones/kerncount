@@ -370,6 +370,36 @@ def test_corrections_re_pick_the_main_mass_or_exclude_and_rebuild_without_re_seg
         cli.main(["run", "tumour_exp"])
 
 
+def test_the_threshold_sweep_follows_review_corrections(tmp_path, monkeypatch):
+    """Review fix: a re-picked main mass is followed at every sweep scale (the object overlapping the corrected x1
+    main mass most), and a tumour excluded at review stays out of the sweep."""
+    import pandas as pd
+
+    from kerncount import cli, settings as settings_mod
+    from kerncount.tumour import sweep
+
+    tumours, prj = _run_experiment(tmp_path, monkeypatch)
+    p = prj / "settings.toml"
+    p.write_text(p.read_text().replace("threshold_sweep = false", "threshold_sweep = true"))
+    key = _read(prj / "review_key.csv").merge(pd.read_csv(prj / "tumours.csv")[["tumour_id", "file"]])
+    code = dict(zip(key["file"], key["code"]))
+    sat_file = f"{KO_SESSION}/030826 HERV -clodro n1 A.ome.tiff"
+    bad_file = f"{WT_SESSION}/120926 N4 -clodro n2 B.ome.tiff"
+    corr = _read(prj / "review" / "corrections.csv")
+    corr.loc[corr.code == code[sat_file], "manual_1"] = "2"
+    corr.loc[corr.code == code[bad_file], "manual_1"] = "x: air bubble over the tumour"
+    corr.to_csv(prj / "review" / "corrections.csv", index=False)
+    cli.main(["run", "tumour_exp"])
+
+    table = pd.read_csv(prj / "tumours.csv")
+    tabs = sweep.tables(prj, table, settings_mod.load(prj))  # cached by the run: read back, nothing recomputed
+    sat_vol = tumours[sat_file].satellites[0].volume_um3
+    for scale, t in tabs.items():
+        t = t.set_index("file")
+        assert bad_file not in t.index, scale
+        assert t.loc[sat_file, "main_mass_volume_um3"] == pytest.approx(sat_vol, rel=0.35), scale
+
+
 # ---------------------------------------------------------------- real data (slow): QC + review image of real stacks
 
 REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7" / "5d K07"  # renamed from KO_SESSION 2026-11-20
