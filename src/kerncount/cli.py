@@ -74,6 +74,10 @@ def _experiment_type(s: dict):
         sys.exit(str(e))
 
 
+class TypeMismatch(Exception):
+    """`init --type X` on a project whose settings.toml has another type (without --force)."""
+
+
 def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False, etype_name: str | None = None):
     from . import discover, experiment_types, settings
 
@@ -87,8 +91,8 @@ def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False, ety
     if (prj / "settings.toml").exists() and not force:
         current = _experiment_type(settings.load(prj))
         if new_type is not None and new_type.name != current.name:
-            sys.exit(f"settings.toml in {prj} is for type {current.name!r}; use --force to reset it to "
-                     f"--type {new_type.name}")
+            raise TypeMismatch(f"settings.toml in {prj} is for type {current.name!r}; use --force to reset it to "
+                               f"--type {new_type.name}")
         print(f"settings.toml already exists in {prj} (kept). Use --force to reset it.")
     else:
         had = (prj / "settings.toml").exists()
@@ -127,9 +131,16 @@ def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False, ety
 def cmd_init(a):
     if a.all:
         ws = workspace_root() or sys.exit("--all needs a workspace: run from a folder that contains data/")
+        skipped = []
         for exp in _experiments(ws):
             print(f"\n=== {exp}")
-            _init_one(ws / DATA / exp, ws / ANALYSIS / exp, a.force, a.force_layout, a.type)
+            try:
+                _init_one(ws / DATA / exp, ws / ANALYSIS / exp, a.force, a.force_layout, a.type)
+            except TypeMismatch as e:  # report it and go on with the other experiments
+                print(f"skipped: {e}")
+                skipped.append(exp)
+        if skipped:
+            print(f"\nNot initialised as --type {a.type} (settings.toml has another type): {', '.join(skipped)}")
         return
     if not a.raw_dir:
         sys.exit("give an experiment name (from data/), a raw folder, or --all")
@@ -141,7 +152,10 @@ def cmd_init(a):
         # data/<name> may be a symlink to a folder elsewhere: the project still belongs in this workspace
         in_ws = ws and (raw.parent == (ws / DATA).resolve() or (ws / DATA / raw.name).resolve() == raw)
         prj = (ws / ANALYSIS / raw.name) if in_ws else raw.parent.parent / ANALYSIS / raw.name
-    _init_one(raw, prj, a.force, a.force_layout, a.type)
+    try:
+        _init_one(raw, prj, a.force, a.force_layout, a.type)
+    except TypeMismatch as e:
+        sys.exit(str(e))
 
 
 def _projects(a) -> list[Path]:
