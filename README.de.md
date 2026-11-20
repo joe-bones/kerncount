@@ -524,8 +524,8 @@ z-Stapel (`[experiment] type = "tumour_volume"`). Ein **Tumor** (Hemisphäre A o
 B werden nie gemittelt. Begriffe: `CONTEXT.md` (Tumour experiments); technische Details: `docs/tumour.md`.
 
 ### 9.1 Eingabe
-Ein Ordner pro Experiment in `data/`, darin **ein Unterordner pro Aufnahmesitzung** (ein Tag am Mikroskop), die
-Dateien flach und wie geliefert:
+Ein Ordner pro Experiment in `data/`, darin **die Sitzungsordner wie geliefert** (z. B. `5d K07`, `5d WT`), die
+Dateien wie geliefert:
 ```
 data/tumour_TLR7/
 ├── 5d K07/                                     ← Sitzungsordner: sein Name gibt den Genotyp (K07 = TLR7 KO)
@@ -540,8 +540,8 @@ data/tumour_TLR7/
   Sitzungsbezeichnung (`session_label`) festgehalten. Beliebig viele Sitzungsordner sind möglich, auch mehrere mit
   demselben Genotyp (Wiederholungssitzungen). Ein neuer Genotyp ist eine neue Stufe in den Einstellungen plus seine
   Ordner-Schreibweise als Alias. Ist der Genotyp eines Ordners nicht lesbar, stoppt der Lauf mit einer Meldung, wie
-  es zu beheben ist. WT und KO wurden an verschiedenen Tagen aufgenommen, d. h. Genotyp und Aufnahmesitzung sind
-  vermengt: Verhältnisse innerhalb einer Sitzung werden zwischen den Genotypen verglichen; ein direkter
+  es zu beheben ist. WT und KO stammen aus verschiedenen Kultur-Chargen, d. h. Genotyp und Charge sind vermengt:
+  Verhältnisse innerhalb eines Genotyps werden zwischen den Genotypen verglichen; ein direkter
   WT-gegen-KO-Unterschied wird gezeigt, aber nie getestet. Ob ein *Sitzungsordner* oder ein *Aufnahmetag* (aus den
   Mikroskop-Metadaten) als eine Charge gilt, legt `[tumour] batch` fest. Standard ist die **Kultur-Charge**
   (`culture_batch`: das Datum am Anfang der Dateinamen = Ansatz der Kultur; die Schnitte wurden vor der Aufnahme
@@ -573,28 +573,36 @@ In der Weboberfläche das Experiment wählen, unter *Set up* **experiment type: 
 und **Set up** drücken (Befehlszeile: `kerncount init tumour_TLR7 --type tumour_volume`). Dann:
 - **Layout**: eine Zeile pro Tumor mit den Faktorwerten (Genotyp, Tumorlinie, Clodronat), Schnitt, Hemisphäre,
   Tumor-ID (`TLR7 KO / HERV / -clodro / n3A`), include und note. Probleme, die eine Datei zu einem falschen
-  Datenpunkt machen würden (unlesbarer Name, doppelte Tumor-ID, Sitzung ohne Genotyp, fehlende Datei), stehen oben
-  und **blockieren die Analyse**, bis die Zelle korrigiert oder *include* abgewählt und in *note* begründet ist.
+  Datenpunkt machen würden (unlesbarer Name, doppelte Tumor-ID, Sitzung ohne Genotyp, fehlende Datei, ein Stapel im
+  Rohordner, der noch nicht in layout.csv steht, ein Ausschluss ohne Begründung), stehen oben und **blockieren die
+  Analyse**, bis die Zelle korrigiert oder *include* abgewählt und in *note* begründet ist. Später hinzugekommene
+  Stapel: **Set up** erneut ausführen (`kerncount init tumour_TLR7`); es nimmt sie auf und behält Ihre Änderungen.
 - **Settings** → *Analysis plan*: die Faktoren (Stufen, Referenzstufe, Platz in den Diagrammen), welche Messgrößen
   konfirmatorisch sind, und die Kontrastfamilien (unten). *Tumour measurement*: Glättung, Schwellenregel,
   Dicke des Mittelschnitts, Konturglättung, Schwellen-Sweep, QC- und Review-Einstellungen, jeweils mit Erklärung.
 - **Run** (`kerncount run tumour_TLR7`): Optionen *skip review images*, *segment every stack again*, *threshold
-  sweep*. Der erste Lauf braucht etwa 20–60 s pro Stapel; Segmentierungen werden zwischengespeichert, spätere Läufe
-  sind schnell.
+  sweep*. Der erste Lauf braucht etwa 20–60 s pro Stapel, dazu etwa noch einmal so viel für den **Schwellen-Sweep**
+  (standardmäßig an: jeder konfirmatorische Effekt wird bei Schwelle ×0,8–1,2 neu berechnet, wie ADR 0002 verlangt;
+  Häkchen entfernen oder `threshold_sweep = false` setzen, um die Zeit zu sparen). Segmentierungen werden
+  zwischengespeichert, spätere Läufe sind schnell.
 
 ### 9.3 Messgrößen, und warum Fläche statt Volumen
 Von jedem ~0,5–1 mm großen Tumor sind nur ~80–150 µm aufgenommen; ein 3D-Volumen misst daher vor allem, wie tief der
 Stapel aufgenommen wurde. Die **konfirmatorischen Messgrößen** sind deshalb zweidimensional, auf einem
-**Mittelschnitt** fester Dicke (20 µm um die Ebene, in der die Hauptmasse am größten ist – für jeden Tumor dieselbe
-physikalische Schicht): die **Querschnittsfläche** (mm²) und der **Umfang** (mm) der Hauptmasse (des größten
+**Mittelschnitt** fester Dicke (20 µm um die Ebene, in der die Hauptmasse am größten ist – für jeden Tumor genau
+dieselbe physikalische Dicke, unabhängig vom z-Abstand: die beiden äußersten Ebenen zählen anteilig; die verwendete
+Dicke steht in `tumours.csv`, `mid_section_um`): die **Querschnittsfläche** (mm²) und der **Umfang** (mm) der Hauptmasse (des größten
 zusammenhängenden Objekts). Alles andere ist **explorativ** (Effektgrößen mit KI, gekennzeichnet, ohne Sterne):
 Grundfläche (Projektion), Schichtvolumen, Volumen und Oberfläche der Hauptmasse, Tumorlast (Hauptmasse + Satelliten),
 Invasionsanteil, Elongation, Solidität, Randrauigkeit, Zirkularität und die Fiji-Altwerte. Eine automatische
 Schwellenregel für jeden Tumor, nie pro Tumor von Hand angepasst.
 
-**Sperre des Analyseplans.** Faktoren, Rollen der Messgrößen und Kontrastfamilien werden festgelegt, bevor
-Ergebnisse angesehen werden (ADR 0003). Sobald Ergebnisse existieren, ist der Plan in der Weboberfläche **gesperrt**;
-eine Änderung braucht **Unlock** mit einer Begründung. Das Entsperren und jede Änderung werden in `lock_log.csv`
+**Sperre des Analyseplans.** Faktoren, Rollen der Messgrößen, Kontrastfamilien und die Messeinstellungen hinter den
+konfirmatorischen Messgrößen (Glättung, Schwellenregel, minimale Objektgröße, Dicke des Mittelschnitts,
+Konturglättung) werden festgelegt, bevor Ergebnisse angesehen werden (ADR 0003). Sobald Ergebnisse existieren, ist der
+Plan **gesperrt**; eine Änderung braucht **Unlock** mit einer Begründung – in der Weboberfläche oder auf der
+Befehlszeile mit `kerncount run tumour_TLR7 --unlock "Begründung"` (ohne das verweigert `kerncount run` einen
+geänderten Plan). Das Entsperren und jede Änderung werden in `lock_log.csv`
 geschrieben, und der nächste Lauf druckt den Verlauf (alter → neuer Plan-Hash) in den Bericht und das About-Blatt von
 `results.xlsx`. Jede Statistikzeile trägt den Hash, mit dem sie berechnet wurde.
 
@@ -612,7 +620,10 @@ geschrieben, und der nächste Lauf druckt den Verlauf (alter → neuer Plan-Hash
 
 Statistik: ein lineares Modell auf log(Messgröße) über alle Faktoren; Effekte als Faktor-Änderungen (fold-change)
 mit 95-%-KI, Holm innerhalb jeder Familie. Nur konfirmatorische Familien konfirmatorischer Messgrößen tragen Sterne.
-Sensitivitätsanalysen (Welch-artig, Permutation, ohne QC-markierte Tumoren) stehen daneben, nie stattdessen.
+Sensitivitätsanalysen (Welch-artig, Permutation, ohne QC-markierte Tumoren) stehen daneben, nie stattdessen. Der
+Bericht sagt außerdem, dass das Fiji-Volumen vor allem die aufgenommene Stapeltiefe widerspiegelt, und nennt die
+Schnittdicke und wie der z-Bereich am Mikroskop gewählt wurde (Einstellungen `section_thickness_um`, `z_range_rule`;
+„not recorded“, solange leer).
 
 ### 9.5 Review und Korrekturen (verblindet)
 `review/` enthält ein Bild pro Tumor, benannt nach einem zufälligen **Code** (nirgends Gruppe, Sitzung, Datum oder
@@ -624,7 +635,7 @@ Ebene des Mittelschnitts; Hauptmasse orange, Satelliten cyan, Objekte nummeriert
 - nichts = keine Änderung.
 
 Danach die Analyse erneut starten: Es wird nichts neu segmentiert; die Messgrößen des gewählten Objekts werden neu
-berechnet. `review/corrections.csv` lässt sich auch in Excel bearbeiten, und für eine verblindete Kontrolle geben Sie
+berechnet (auch der Schwellen-Sweep folgt dem gewählten Objekt). `review/corrections.csv` lässt sich auch in Excel bearbeiten, und für eine verblindete Kontrolle geben Sie
 einer Kollegin nur den Ordner `review/`.
 
 ## 10. Entwicklung

@@ -528,8 +528,8 @@ The same tool also analyses **tumour experiments**: mCherry-labelled tumours in 
 never averaged. Words: `CONTEXT.md` (Tumour experiments); technical details: `docs/tumour.md`.
 
 ### 9.1 Input
-One folder per experiment in `data/`, with **one sub-folder per imaging session** (one day at the microscope),
-files flat and as delivered:
+One folder per experiment in `data/`, with **one sub-folder per session folder as delivered** (e.g. `5d K07`,
+`5d WT`), files as delivered:
 ```
 data/tumour_TLR7/
 ├── 5d K07/                                     ← session folder: its name gives the genotype (K07 = TLR7 KO)
@@ -543,8 +543,8 @@ data/tumour_TLR7/
   contain `WT` or `K07` / `KO7` / `KO` / `TLR7 KO` / `TLR7-KO` / `TLR7KO`; other words (`5d`) are kept as the
   session label. Any number of session folders is fine, also several of one genotype (repeat sessions). A new genotype
   is a new level in the settings plus its folder spelling as an alias. A folder whose genotype cannot be read stops
-  the run with a message saying how to fix it. WT and KO imaged on different days = genotype confounded with the
-  imaging session: ratios within a session are compared across genotypes, a direct WT-vs-KO difference is shown
+  the run with a message saying how to fix it. WT and KO come from different culture batches = genotype confounded
+  with the batch: ratios within a genotype are compared across genotypes, a direct WT-vs-KO difference is shown
   but never tested. What counts as a batch is the setting `[tumour] batch`: by default the **culture batch** (the
   date at the start of the file names = culture preparation; the slices were fixed before imaging, so the imaging
   day is not a batch), or the *session folder*, or the *acquisition day*. Several culture batches of one genotype
@@ -572,25 +572,34 @@ In the web interface pick the experiment, choose **experiment type: Tumour volum
 press **Set up** (command line: `kerncount init tumour_TLR7 --type tumour_volume`). Then:
 - **Layout**: one row per tumour with its factor values (genotype, tumour line, clodronate), section, hemisphere,
   tumour ID (`TLR7 KO / HERV / -clodro / n3A`), include and note. Problems that would make a file a wrong datapoint
-  (an unreadable name, a duplicate tumour ID, a session without a genotype, a missing file) are listed at the top
-  and **block the run** until you fix the cell or untick *include* and give the reason in *note*.
+  (an unreadable name, a duplicate tumour ID, a session without a genotype, a missing file, a stack in the raw
+  folder that layout.csv does not list yet, an exclusion without a reason) are listed at the top and **block the
+  run** until you fix the cell or untick *include* and give the reason in *note*. Stacks added to the raw folder
+  later: run **Set up** again (`kerncount init tumour_TLR7`); it adds them and keeps your edits.
 - **Settings** → *Analysis plan*: the factors (levels, reference level, where they go in the plots), which readouts
   are confirmatory, and the contrast families (below). *Tumour measurement*: smoothing, threshold rule,
   mid-section thickness, outline smoothing, threshold sweep, QC and review settings, each with an explanation.
 - **Run** (`kerncount run tumour_TLR7`): options *skip review images*, *segment every stack again*, *threshold
-  sweep*. The first run takes about 20–60 s per stack; segmentations are cached, so later runs are quick.
+  sweep*. The first run takes about 20–60 s per stack, plus about as much again for the **threshold sweep** (on by
+  default: every confirmatory effect re-computed at the threshold ×0.8–1.2, as ADR 0002 requires; untick it, or set
+  `threshold_sweep = false`, to save that time). Segmentations are cached, so later runs are quick.
 
 ### 9.3 Readouts, and why area rather than volume
 Only ~80–150 µm of each ~0.5–1 mm tumour is imaged, so a 3D volume mostly measures how deep the stack was acquired.
 The **confirmatory readouts** are therefore 2D, on a fixed-thickness **mid-section** (20 µm around the layer where
-the tumour's main mass is largest — the same physical slab for every tumour): the **cross-sectional area** (mm²) and
+the tumour's main mass is largest — exactly the same physical thickness for every tumour, whatever the z-step: the
+two outermost layers count in part; the thickness used is in `tumours.csv`, `mid_section_um`): the
+**cross-sectional area** (mm²) and
 the **perimeter** (mm) of the main mass (the largest connected object). Everything else is **exploratory**
 (effect sizes with CIs, labelled, no stars): footprint area, slab volume, main-mass volume and surface, tumour
 burden (main mass + satellites), invasion fraction, elongation, solidity, edge roughness, circularity, and the Fiji
 legacy values. One automatic threshold rule for every tumour, never adjusted by hand per tumour.
 
-**Analysis plan lock.** Factors, readout roles and contrast families are fixed before results are viewed (ADR 0003).
-Once results exist the plan is **locked** in the web interface; changing it needs **Unlock** with a reason. The
+**Analysis plan lock.** Factors, readout roles, contrast families and the measurement settings behind the
+confirmatory readouts (smoothing, threshold rule, minimum object size, mid-section thickness, outline smoothing) are
+fixed before results are viewed (ADR 0003). Once results exist the plan is **locked**; changing it needs **Unlock**
+with a reason — in the web interface, or on the command line `kerncount run tumour_TLR7 --unlock "reason"`
+(`kerncount run` refuses a changed plan without it). The
 unlock and every change are written to `lock_log.csv`, and the next run prints the history (old → new plan lock) in
 the report and the About sheet of `results.xlsx`. Every statistics row carries the lock it was built with.
 
@@ -608,7 +617,9 @@ the report and the About sheet of `results.xlsx`. Every statistics row carries t
 
 Statistics: one linear model on log(readout) over all factors; effects are fold-changes with 95 % CIs, Holm within
 each family. Only confirmatory families of confirmatory readouts carry stars. Sensitivity analyses (Welch-type,
-permutation, without QC-flagged tumours) are reported alongside, never instead.
+permutation, without QC-flagged tumours) are reported alongside, never instead. The report also says that the Fiji
+legacy volume mostly reflects the acquired stack depth, and prints the section thickness and how the z-range was
+chosen at the microscope (settings `section_thickness_um`, `z_range_rule`; "not recorded" while empty).
 
 ### 9.5 Review and corrections (blinded)
 `review/` holds one image per tumour, named by a random **code** (no group, session, date or file name anywhere;
@@ -619,7 +630,8 @@ In a round (`manual_1` → g2, `manual_2` → g3, …) type:
 - **`x: reason`** to exclude the tumour (the reason goes to `excluded_tumours.csv`);
 - nothing = no change.
 
-Then run the analysis again: nothing is re-segmented; the picked object's readouts are recomputed. You can also edit
+Then run the analysis again: nothing is re-segmented; the picked object's readouts are recomputed (the threshold
+sweep follows the picked object too). You can also edit
 `review/corrections.csv` in Excel and hand only the `review/` folder to a colleague for a blinded check.
 
 ## 10. Development

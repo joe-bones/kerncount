@@ -32,8 +32,14 @@ provenance), `include`, `note`.
 experiment because `n3A` exists in several groups and both genotypes. A name the parser cannot read is set
 `include = no` with a note (full validation: ticket 03).
 
+**The run is blocked** (every problem listed at once) until every included file maps to one unique tumour ID. Since
+the review fixes of 2026-11-20 this also covers (ADR 0004): **stacks in the raw folder that layout.csv does not list**
+(e.g. delivered later; they would otherwise go unmeasured) — run `kerncount init <experiment>`, which adds them and
+keeps your edits — and **exclusions without a reason** (`include = no` with an empty `note`): write the reason in
+`note`; it goes to `excluded_tumours.csv` and the flow table. Both were warnings before.
+
 ### Session folders (ticket 12)
-- **Any number of session folders.** Every sub-folder of the experiment folder is an imaging session; hidden / system
+- **Any number of session folders.** Every sub-folder of the experiment folder is a session folder; hidden / system
   folders (`.…`, `_…`, `@…`, `$…`, `#…`, `~…`, `System Volume Information`) are ignored; flat files directly in the
   experiment folder are one session named after it.
 - **Factor levels from the folder name**, word by word and case-insensitive, through levels and `aliases` (multi-word
@@ -156,10 +162,17 @@ in the layers where it is fully in focus, so the **confirmatory readouts are 2D*
 | `invasion_fraction`, `n_satellites` | satellites' share of the burden; number of satellites | columns + shape panel only (zeros: no log model) |
 
 **Mid-section.** Per tumour, the per-layer main-mass area (2D holes filled) is computed; the centre is the layer with
-the largest area (middle one on ties); the mid-section is every layer whose centre lies within ± `mid_section_um`/2
-of it — **20 µm by default = 9 layers at 2.36 µm, 11 at 2.0 or 1.75 µm**. Columns `mid_section_centre_layer`,
-`mid_section_first_layer`, `mid_section_last_layer` (1-based, as in Fiji), `mid_section_layers`, `mid_section_fits`
-(`no` = it runs off the stack and was clipped; ticket 06 flags these as truncated). Why 20 µm (2026-11-20, 4 real
+the largest area (middle one on ties). The mid-section is **exactly `mid_section_um` of depth** (20 µm by default)
+centred on that layer, **for every z-step** (review fix 2026-11-20; ADR 0002 amendment). Each layer stands for the
+slab from its centre − z/2 to its centre + z/2 and counts with the fraction of that slab inside the mid-section: the
+inner layers fully, the two outermost ones in part. Every mid-section readout (area, perimeter, shape, QC saturation
+and edge share) is the **weighted mean** over these layers. At 20 µm: 2.36 µm z-step → 9 layers, outer two at 74 %;
+2.0 µm → 11 layers, outer two at 50 %; 1.75 µm → 13 layers, outer two at 21 %. (Before the fix the layer count was
+rounded down, so the mid-section was 21.2 µm thick at 2.36 µm — most KO stacks — but 19.25 µm at 1.75 µm — every WT
+stack.) Columns `mid_section_centre_layer`, `mid_section_first_layer`, `mid_section_last_layer` (1-based, as in
+Fiji; first/last layer with a weight > 0), `mid_section_layers`, **`mid_section_um`** (the thickness actually averaged
+over: the set value, less only when clipped), `mid_section_fits` (`no` = the set thickness runs off the stack and was
+clipped; ticket 06 flags these as truncated). The slab volume uses the same rule with `slab_um`. Why 20 µm (2026-11-20, 4 real
 stacks, main-mass area per layer): the main mass is within 10 % of its largest cross-section over 9–19 µm of depth and
 within 50 % over 28–40 µm; the brightest layer sits ~20–80 µm below the first layer in all 48 stacks (data survey).
 20 µm therefore averages ≥ 9 layers (noise) while staying on the near-flat top of the area profile and fitting into
@@ -198,12 +211,14 @@ At 8 µm the confirmatory perimeter is as threshold-stable as the area and descr
 texture is kept as the exploratory edge roughness (outline length at `roughness_fine_um` = 2 µm ÷ at
 `roughness_smooth_um` = 20 µm). Tests: synthetic ellipsoid tumours at the default scale — mid-section area −0.6 % and
 perimeter −0.5 % vs the analytic mid-section mean (tolerance 2 %); ×0.4 / ×2.5 brightness (clipped) +0.005 / +0.2 %
-(tolerance 3 %); z-step 1.75 vs 2.36 µm +0.4 % / +0.2 % (tolerance 1 %); the threshold sweep recomputes both (they
-are computed in `segment._segment_at`, not from saved labels).
+(tolerance 3 %); z-step 1.75 vs 2.36 µm +0.4 % / +0.2 % (tolerance 1 %); an object whose cross-section changes with
+depth (paraboloid) gives the same area at 1.75, 2.0 and 2.36 µm within 0.4 % and matches the exact 20 µm mean
+(`test_mid_section_readouts_are_the_same_for_every_z_step`); the threshold sweep recomputes both (they are computed in
+`segment._segment_at`, not from saved labels).
 
 **Fiji counterparts** (`legacy` on the readout entries; concordance plots and side-by-side effects, ticket 07):
 `fiji_cross_sectional_area_um2|mm2`, `fiji_perimeter_um|mm`, `fiji_mid_section_centre_layer`,
-`fiji_mid_section_layers`, `fiji_mid_section_fits`, `fiji_section_source` — the same mid-section rule and estimator
+`fiji_mid_section_layers`, `fiji_mid_section_um`, `fiji_mid_section_fits`, `fiji_section_source` — the same mid-section rule and estimator
 applied to Fiji's largest 3D object on the lab's mask (or the re-implementation's mask when there is none and
 `fiji_fallback = true`). Volume → `fiji_main_volume_mm3`, surface → `fiji_main_surface_mm2`, burden →
 `fiji_total_volume_mm3` (exploratory).
@@ -226,12 +241,19 @@ circularity, invasion fraction and satellites by group (dots, group median). Col
 clodronate.
 
 **Settings** (`[tumour]`, all in the measurement cache key): `mid_section_um = 20`, `outline_smooth_um = 8`, `roughness_fine_um = 2`,
-`roughness_smooth_um = 20`, `slab_um = 40`, `surface_grid_um = 2`. The per-tumour cache (`_work/tumour/<slug>.json`)
-also carries a readout version: caches written before these readouts existed are re-measured, never reused without
-the new columns (likewise the sweep and Fiji caches).
+`roughness_smooth_um = 20`, `slab_um = 40`, `surface_grid_um = 2`. The per-tumour cache key has two parts: the
+**labels key** (segmentation settings + the original file) and the **readouts key** (these scales + a readout
+version). When only the readouts key changes (a new mid-section rule or scale), the readouts are **re-derived from
+the cached label image** in seconds instead of re-segmenting (also for caches written before the split); the Fiji
+cache keeps Fiji's main object as `<slug>.fiji.labels.tif` for the same purpose. The threshold-sweep cache keeps
+readouts only, so it is recomputed (one more segmentation per stack).
+
+**Experiment metadata** (ADR 0002 amendment; printed in the report's About section, "not recorded" while empty):
+`section_thickness_um` (thickness of the cut sections) and `z_range_rule` (free text: how the imaged z-range was chosen
+at the microscope).
 
 ## Outputs
-- `layout.csv` (init), `tumours.csv` — one row per included tumour: factor columns, imaging session, IDs, voxel
+- `layout.csv` (init), `tumours.csv` — one row per included tumour: factor columns, session folder, IDs, voxel
   size, `n_layers`, the readouts above (confirmatory first), threshold method / value / levels, saturation fractions.
 - `plots/shape_panel.png|pdf` — see Readouts.
 - Statistics outputs (see **Statistics** below), per readout `<name>` (e.g. `cross_sectional_area`):
@@ -301,7 +323,7 @@ share a group are **connected** and enter the model as a **fixed block effect** 
 estimated; centred so that a cell mean is the mean at the set's average batch): the WT batches 190626 (all six groups)
 and 100726 (cntrl and HERV −clodro) are connected through cntrl and HERV −clodro, so WT contrasts (F1/F2/F3) are
 within-batch estimates. A contrast whose weights do not cancel within every connected set is labelled "confounded
-with culture batch" (or "…imaging session" / "…acquisition day") and never tested: KO (030826) and WT share no batch,
+with culture batch" (or "…session folder" / "…acquisition day") and never tested: KO (030826) and WT share no batch,
 so direct WT vs KO (F6) is confounded, while ratios of within-genotype ratios (F4, F5, F7) are not. The sensitivity
 models (Welch, permutation), residual plots and normalised values use the batch-adjusted values (each tumour divided
 by its batch's estimated shift; the uncertainty of the shift is not propagated there). With one batch per connected
@@ -319,7 +341,7 @@ contrasts needing cells without tumours stay in every table, labelled `needs WT 
 100 %); a group's normalised estimate and CI equal its F1 fold-change × 100.
 
 **Sensitivity models** (ADR 0003; `tumour/sensitivity.py`). Every contrast the primary model tests is re-tested
-twice; contrasts it does not test (confounded with imaging session, descriptive, needing absent groups) stay untested.
+twice; contrasts it does not test (confounded with the batch, descriptive, needing absent groups) stay untested.
 - *Welch-type*: same point estimate, SE² = Σ w²·s²ᵢ/nᵢ with each group's own variance, Satterthwaite df. Needs ≥ 2
   tumours in every group the contrast uses.
 - *Permutation*, simple effects (two groups in one cell of the other factors): the focus-factor labels of the two
@@ -340,7 +362,10 @@ twice; contrasts it does not test (confounded with imaging session, descriptive,
 
 **Planning aid** (power planner; ADR 0003: never feeds confirmatory results; `tumour/planner.py`). From the pooled
 residual SD of the current data (log scale), per confirmatory readout and every family that is tested (descriptive
-families and contrasts confounded with imaging session are not planned):
+families and contrasts confounded with the batch are not planned; the planner takes the batch kind from
+`[tumour] batch`, and a contrast needing absent groups is judged by the design-level rule under every batch kind —
+genotype, read from the session folder, is assumed to come from its own batches, so a direct genotype contrast is not
+planned while ratios of within-genotype ratios are):
 - **MDFC** — minimum detectable fold-change (up or down) of each contrast at the current group sizes with 80 % power
   (`planner_power`), two-sided α = 0.05 per family (`planner_alpha`): SE = s·√(Σ w²/n), noncentral t on the current
   residual df. The family row shows best – worst over its contrasts.
@@ -358,9 +383,11 @@ families and contrasts confounded with imaging session are not planned):
   in each genotype. Validated in `tests/test_tumour_planner.py` by simulation (power at the MDFC and at the planned
   n ≈ 80 %, Bonferroni within family) and against the normal approximation at large df.
 
-**Lock.** The analysis plan (factors + levels + references, readouts + roles, families, normalise_by) is hashed
-(`lock <12 hex>`); the hash is in every stats_long note, the workbook's About sheet and `stats_report.md`. Change the
-plan only before results are viewed; a different hash means a different plan.
+**Lock.** The analysis plan (factors + levels + references, readouts + roles, families, normalise_by, the batch rule
+and — since the review fixes of 2026-11-20 — the **measurement settings that define the confirmatory values**:
+`smooth_sigma_um`, `threshold`, `min_object_um3`, `mid_section_um`, `outline_smooth_um`) is hashed (`lock <12 hex>`);
+the hash is in every stats_long note, the workbook's About sheet and `stats_report.md`. Change the plan only before
+results are viewed; a different hash means a different plan.
 
 ## Fiji legacy readout and method concordance (ticket 07, ADR 0002)
 **Legacy readout** (`fiji_*` columns of `tumours.csv`; exploratory, labelled legacy, never starred):
@@ -372,7 +399,9 @@ Source per tumour, in order: the lab's 3D Objects Counter table (`legacy_stats`)
 with or without header (`Statistics for …f.csv`, `…f_3Dresults.csv`, the header-less `.txt`), with trailing `;;`, a
 truncated header or a leading row-number column; anything else (e.g. Excel sum rows with decimal commas in
 `Statistics for 030826 N4 -clodro n3 Bf.csv`) is skipped and listed in `fiji_note` — never guessed. All 48 real files
-parse; that one has 3 skipped rows. Cache: `_work/tumour/<slug>.fiji.json`.
+parse; that one has 3 skipped rows. Cache: `_work/tumour/<slug>.fiji.json` (+ `<slug>.fiji.labels.tif`, Fiji's main
+object). **Fiji volume mostly reflects the acquired stack depth** (see the per-layer threshold finding below; ADR 0002
+amendment): the report says so next to the concordance section; compare mid-section areas, not volumes.
 
 **Re-implementation** (`tumour/fiji.py`), written from the ImageJ / 3D Objects Counter sources, not textbook versions:
 rolling ball 50 px per layer exactly as ImageJ does it (3 × 3 mean pre-smoothing, 4× min-shrink, trimmed 19 × 19 ball
@@ -407,9 +436,13 @@ smoothed once and thresholded at the primary threshold × each scale (`segment.s
 `segment(..., threshold_scale=s)`); only readouts are kept (`_work/tumour/<slug>.sweep.json`), the per-scale tables
 go through `table.build`. Outputs: `threshold_sweep.csv` / sheet **Threshold sweep** (every contrast at every scale),
 `plots/<name>_threshold_sweep.png|pdf` (one panel per family, fold-change vs scale, 95 % CI band, filled = Holm
-p < 0.05) and a `## Threshold sweep` report table (fold-change range, whether significance changes). Off by default
-because the first run re-segments every stack (~20–60 s each, 1 stack in memory). Only readouts produced by
-`segment.segment` / `table.build` are sweepable; others are listed as not available.
+p < 0.05) and a `## Threshold sweep` report table (fold-change range, whether significance changes). **On by default**
+(ADR 0002 reports it for every confirmatory effect). It costs runtime: the first run segments every stack once more
+(~20–60 s each, 1 stack in memory; cached afterwards). Switch it off with `threshold_sweep = false` (settings, or the
+*threshold sweep* box on the home page). Only readouts produced by `segment.segment` / `table.build` are sweepable;
+others are listed as not available. **Review corrections are respected**: tumours excluded at review stay out, and for
+a tumour whose main mass was re-picked, the main mass at every scale is the object that overlaps the corrected ×1 main
+mass (cached labels) most.
 
 **Acquisition settings** (ticket 11, always): `acquisition.csv` — one row per tumour from the original's OME metadata
 (no pixels read): microscope, objective, detector, **detector gain = PMT voltage** (`detector_voltage`), offset, zoom,
@@ -460,7 +493,7 @@ sheet **QC flow**, report section `## QC and problem tumours` (also lists flagge
 the review-corrections generation). Sheet **QC** has the QC columns per tumour.
 
 **A–B hemisphere check** (exploratory, not a test): `plots/<name>_hemispheres_AB.png|pdf` per confirmatory readout —
-hemisphere A vs B of the same section (same group, imaging session and section label), log-log with the identity line,
+hemisphere A vs B of the same section (same group, session folder and section label), log-log with the identity line,
 one colour per group, r of the logs. Each hemisphere stays its own n; this only shows whether sections share an effect.
 
 ### Blinded review sheets (`review/`)
@@ -471,7 +504,7 @@ one colour per group, r of the logs. Each hemisphere stays its own n; this only 
 - `review/corrections.csv` — one row per tumour in code order: `code`, `objects`, `qc_flags`, `manual_1..3`, `note`.
 - **Blinding:** codes are random (5 characters without vowels) and fixed across runs; the key `review_key.csv` (code
   → tumour ID) is written in the project folder, **outside** `review/`. Nothing in `review/` — file names, image
-  titles, the corrections file — carries a factor level, imaging session, date, section label or file name; order is
+  titles, the corrections file — carries a factor level, session folder, date, section label or file name; order is
   by code, not by group; each image is contrast-stretched on its own (brightness differences between lines are not
   displayed as such). Hand the reviewer only the `review/` folder. (The tests search every file name and byte in
   `review/` for level, session and file-name strings.)
@@ -496,8 +529,8 @@ rebuilt for the current generation. Caches: `_work/tumour/<slug>.qc.json` (key =
 QC settings; the stack is only read again when one of them, the code or the review settings change).
 `--no-review` skips drawing (QC is still computed).
 
-Known limitation: the threshold sweep (ticket 07) keeps no labels, so for a re-picked tumour its swept values still
-follow the automatic main mass.
+The threshold sweep follows a re-picked main mass (object overlapping the corrected ×1 main mass most at each scale;
+review fix 2026-11-20).
 
 ## Web interface and the analysis-plan lock (ticket 10)
 Everything above is available in `kerncount gui` (details: `docs/ui.md`, "Tumour experiments"): set up with
@@ -511,13 +544,16 @@ reference and display role; readouts confirmatory / exploratory; families) with 
 download; the home page runs the analysis (*skip review images*, *segment every stack again*, *threshold sweep*).
 
 **Lock (`tumour/lock_log.py`, ADR 0003).** Once `stats_long.csv` exists its `lock <hash>` is the results' plan. The
-web interface refuses any settings write that changes the plan hash unless the plan was unlocked with a reason.
+web interface refuses any settings write that changes the plan hash unless the plan was unlocked with a reason, and
+**`kerncount run` refuses** to run when settings.toml (e.g. edited in a text editor) has a plan other than the
+results' and no unlock is in force, naming both hashes. Unlock on the command line with
+`kerncount run <experiment> --unlock "why the plan changed"` (logged like an unlock in the web interface).
 `lock_log.csv` (project folder) records `unlock`, `plan changed` (old → new), `lock` (locked again) and `run` (a
 rebuild with a different plan, noting the unlock — or "without a logged unlock" when settings.toml was edited
 outside the web interface; a run also ends a pending unlock). `results.analyse` calls `lock_log.record_run` before
 writing and appends `lock_log.report_lines` to the About lines, so the history (old → new lock, reasons) is printed in
 `stats_report.md` and the About sheet of `results.xlsx`. Not part of the plan (free to change): display roles,
-measurement, QC, sweep, sensitivity and planner settings.
+exploratory-only measurement scales (roughness, slab, surface grid), QC, sweep, sensitivity and planner settings.
 
 ## Memory
 One stack at a time: uint8 stack + float32 smoothed copy, then mask + int32 labels; peak ≈ 10 × the stack size
