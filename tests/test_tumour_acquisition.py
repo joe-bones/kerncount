@@ -157,6 +157,29 @@ def test_shared_check_is_not_run_when_switched_off_or_acquisition_settings_diffe
     assert not (tmp_path / shared.FILENAME).exists()
 
 
+def test_a_check_that_is_not_run_removes_the_outputs_of_an_earlier_run(tmp_path):
+    """Ticket 11 acceptance: the KO-only run wrote shared_threshold.csv + plots; after the WT set arrived the check
+    was ruled out (settings differ) but the stale 48-tumour table stayed in the results (and the GUI lists it)."""
+    from kerncount.tumour import acquisition, shared
+    from kerncount.tumour.config import factors, families
+
+    s, files = _project(tmp_path)
+    s["tumour"]["shared_threshold_check"] = True
+    table = pd.DataFrame({"tumour_id": ["a", "b"], "file": files, "threshold": [50.0, 25.0],
+                          "cross_sectional_area_mm2": [0.1, 0.1]})
+    stale = [tmp_path / shared.FILENAME, tmp_path / "plots" / "cross_sectional_area_vs_shared_threshold.png",
+             tmp_path / "plots" / "perimeter_vs_shared_threshold.pdf"]
+    (tmp_path / "plots").mkdir(exist_ok=True)
+    for p in stale:
+        p.write_text("from an earlier run")
+    keep = tmp_path / "plots" / "cross_sectional_area_vs_fiji.png"
+    keep.write_text("not ours")
+    differ = acquisition.consistency(_acq({2: 650.0}))
+    assert shared.analyse(tmp_path, table, s, factors(s), families(s), None, differ) == []
+    assert [p for p in stale if p.exists()] == []
+    assert keep.exists()
+
+
 def test_run_writes_acquisition_table_and_the_shared_threshold_check(tmp_path, monkeypatch):
     from kerncount import cli
     from test_tumour import _experiment

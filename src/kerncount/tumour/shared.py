@@ -87,6 +87,9 @@ def analyse(out: Path, table: pd.DataFrame, settings: dict, facs: list[Factor], 
     md = ["## Shared-threshold robustness check (ADR 0002)", ""]
     written: list[str] = []
     cmp = pd.DataFrame(columns=COLUMNS)
+    # outputs of an earlier run (e.g. before a batch with other settings arrived) must not outlive this one
+    for p in [out / FILENAME, *(out / "plots").glob("*_vs_shared_threshold.*")]:
+        p.unlink(missing_ok=True)
     if not ts["shared_threshold_check"]:
         md.append("- not run (`[tumour] shared_threshold_check = false`).")
     elif consistency is not None and not consistency.identical:
