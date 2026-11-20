@@ -256,11 +256,15 @@ def test_acquisition_report_names_the_groups_of_a_differing_setting_and_tabulate
     for i, (line, batch, volt) in enumerate([("cntrl", "2026-06-19", 597.0), ("cntrl", "2026-07-10", 554.0),
                                              ("HERV", "2026-07-10", 554.0), ("HERV", "2026-06-19", 597.0)]):
         rows.append({"tumour_id": f"t{i}", "file": f"f{i}", **acquisition.parse(_xml(volt=volt))})
-        tum.append({"tumour_id": f"t{i}", "tumour_line": line, "culture_batch": batch})
+        tum.append({"tumour_id": f"t{i}", "tumour_line": line, "culture_batch": batch, "voxel_x_um": 0.62})
+        # (the readout table also carries measured columns named like acquisition settings, e.g. voxel_x_um)
+    rows[1]["voxel_x_um"] = "1.2478516"  # one binned stack
     line = Factor("tumour_line", ("cntrl", "HERV"), "cntrl", "x")
     md = "\n".join(acquisition.report_lines(pd.DataFrame(rows), pd.DataFrame(tum), [line], "culture_batch"))
     assert "detector_voltage = 554.0: 2 tumours (cntrl 1, HERV 1; culture batch 2026-07-10)" in md
     assert "detector_voltage = 597.0: 2 tumours (cntrl 1, HERV 1; culture batch 2026-06-19)" in md
+    assert "voxel_x_um = 1.2478516: 1 tumour (cntrl 1; culture batch 2026-07-10)" in md
+    assert "Pixel size differs" in md
     assert "Tumours per group and culture batch" in md and "| cntrl | 1 | 1 |" in md
     assert "imaging day is recorded, never a batch" in md
 

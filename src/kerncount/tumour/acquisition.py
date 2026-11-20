@@ -153,8 +153,8 @@ def report_lines(acq: pd.DataFrame, tumours: pd.DataFrame, facs: list, batch: st
     md = ["## Acquisition settings (from each original's OME metadata)", "",
           f"- Verdict: **{c.describe()}**."]
     if c.differs:
-        t = acq.merge(tumours.drop(columns=[x for x in ("file", "acquisition_day") if x in tumours.columns]),
-                      on="tumour_id", how="left")
+        ident = ["tumour_id", *[f.name for f in facs], "culture_batch"]  # never measured columns (voxel_x_um ...)
+        t = acq.merge(tumours[[x for x in ident if x in tumours.columns]], on="tumour_id", how="left")
         t["_group"] = _groups(t, facs)
         for k in c.differs:
             for val, g in t.groupby(t[k].fillna("").astype(str), sort=True):
