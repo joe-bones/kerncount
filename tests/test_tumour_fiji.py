@@ -258,7 +258,8 @@ def test_concordance_outputs_follow_the_declared_confirmatory_readouts(tmp_path)
     t["fiji_main_volume_mm3"] = t["area_mm2"]
     s = _settings(readouts=[{"name": "area", "column": "area_mm2", "label": "Area", "role": "confirmatory",
                              "legacy": "fiji_area"},
-                            {"name": "main_mass_volume", "column": "main_mass_volume_mm3", "role": "exploratory"}])
+                            {"name": "main_mass_volume", "column": "main_mass_volume_mm3", "role": "exploratory"}],
+                  threshold_sweep=False)
     report = tmp_path / "stats_report.md"
     report.write_text("# r\n")
     written = concordance.analyse(tmp_path, t, s, factors(s), families(s), report)
@@ -269,6 +270,16 @@ def test_concordance_outputs_follow_the_declared_confirmatory_readouts(tmp_path)
     md = report.read_text()
     assert "Method concordance" in md and "Threshold sweep" in md and "threshold_sweep = false" in md
     assert str(tmp_path / "concordance.csv") in written
+
+
+def test_the_threshold_sweep_is_on_by_default():
+    """Review fix (ADR 0002: a +-20 % sweep is reported for every confirmatory effect)."""
+    from kerncount import settings as settings_mod
+    from kerncount.tumour import config
+
+    assert config.DEFAULTS["threshold_sweep"] is True
+    assert "\nthreshold_sweep = true" in config.TEMPLATE
+    assert config.tumour_settings(settings_mod._merge(settings_mod.DEFAULTS, {}))["threshold_sweep"] is True
 
 
 # ---------------------------------------------------------------- end to end: run with legacy + sweep

@@ -40,8 +40,10 @@ DEFAULTS: dict = {
     "fiji_fallback": True,
     "fiji_min_voxels": 200000,
     # Threshold sweep (ADR 0002): every confirmatory effect recomputed with the primary threshold x each scale.
-    # Off by default: re-segments every stack once (cached in _work/tumour/<slug>.sweep.json).
-    "threshold_sweep": False,
+    # On by default (ADR 0002 reports it for every confirmatory effect). Costs runtime: every stack is segmented once
+    # more on the first run (~20-60 s per real stack; cached in _work/tumour/<slug>.sweep.json). Switch off with
+    # threshold_sweep = false.
+    "threshold_sweep": True,
     "sweep_scales": [0.8, 0.9, 1.1, 1.2],
     # Shared-threshold robustness check (ADR 0002, ticket 11): every tumour re-segmented at one experiment-wide threshold
     # (median of the per-tumour automatic thresholds); only run when the acquisition settings are identical.
@@ -140,7 +142,8 @@ planner_fold_change = 1.5         # power planner (planning aid): tumours per gr
 fiji_legacy = true        # Fiji legacy readout (fiji_* columns, exploratory) and the new-vs-Fiji concordance report
 fiji_fallback = true      # no Fiji statistics/mask for a tumour: re-run the macro on its original stack
 fiji_min_voxels = 200000  # 3D Objects Counter minimum object size of the macro (voxels)
-threshold_sweep = false   # true: recompute every confirmatory effect at the threshold x sweep_scales (slow first run)
+threshold_sweep = true    # recompute every confirmatory effect at the threshold x sweep_scales (ADR 0002); costs
+                          # runtime on the first run (every stack segmented once more, then cached); false = off
 sweep_scales = [0.8, 0.9, 1.1, 1.2]
 shared_threshold_check = false   # true: robustness check at ONE threshold for every tumour (needs identical acquisition settings)
 batch = "culture_batch"   # batch (fixed block effect + confounding rule): "culture_batch" (file-name date = culture preparation), "session_folder" or "acquisition_day" (OME day)

@@ -316,8 +316,9 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
                                   "analysis plan."),
         "threshold_sweep": dict(kind="bool", label="Threshold sweep",
                                 help="Recompute every confirmatory effect with the threshold × each scale below and "
-                                     "report whether a conclusion depends on the threshold (ADR 0002). Slow on the "
-                                     "first run (every stack segmented once more; cached afterwards)."),
+                                     "report whether a conclusion depends on the threshold (ADR 0002). On by "
+                                     "default. Slow on the first run (every stack segmented once more; cached "
+                                     "afterwards); switch off to save that time."),
         "sweep_scales": dict(kind="list", numbers=True, label="Threshold sweep scales",
                              help="Factors applied to each tumour's automatic threshold, e.g. 0.8, 0.9, 1.1, 1.2."),
         "shared_threshold_check": dict(kind="bool", label="Shared-threshold robustness check",
