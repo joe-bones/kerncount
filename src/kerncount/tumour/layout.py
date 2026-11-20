@@ -12,7 +12,8 @@ underscores, extra spaces, typographic minus) are normalised and noted; names it
 note. `validate` checks a (possibly hand-edited) layout.csv against the folder: values typed into layout.csv override
 what the names say (noted per row), `include = no` + `note` excludes a tumour with that reason, and every problem that
 would turn a file into a wrong datapoint (unreadable values, duplicate tumour IDs, a session whose genotype is unknown,
-missing files) is collected. `check` raises them all at once as `LayoutBlocked`.
+missing files) is collected, as are stacks on disk that layout.csv does not list (they would go unmeasured: run
+`kerncount init`) and exclusions without a reason (review fix 2026-11-20; both were warnings before). `check` raises them all at once as `LayoutBlocked`.
 
 Ticket 12: any number of session folders (hidden / system folders ignored); session-folder names are read word by
 word through levels and aliases (`read_session`; the other words are the `session_label`); `file_date` (optional) and
@@ -711,10 +712,10 @@ def validate(layout: pd.DataFrame, raw: Path | None, settings: dict) -> Validati
 
     if scanned is not None:
         new = sorted(set(scanned.index) - set(lay["file"]))
-        if new:
-            warnings.append(f"{len(new)} tumour file(s) in the raw folder are not in layout.csv and are not measured: "
-                            + "; ".join(new) + " (run `kerncount init` again: your layout.csv is kept, the fresh scan "
-                            "goes to layout.new.csv)")
+        if new:  # review fix (ADR 0004): blocked, never silently unmeasured
+            problems.append(f"{len(new)} tumour file(s) in the raw folder are not in layout.csv: " + "; ".join(new)
+                            + " - run `kerncount init <experiment>` to add them (your edits in layout.csv are kept), "
+                            "then set include = no with a reason in note for any that should not be measured")
     if raw is not None:
         only = czi_only(raw, lay)
         if only:
@@ -723,8 +724,10 @@ def validate(layout: pd.DataFrame, raw: Path | None, settings: dict) -> Validati
                             "to the .czi and run `kerncount init` again): " + "; ".join(only))
     no_reason = [_cell(r, "file") for _, r in lay.iterrows()
                  if r["include"] == "no" and r["exclusion_reason"] == NO_REASON]
-    if no_reason:
-        warnings.append("excluded without a reason in note: " + "; ".join(no_reason))
+    if no_reason:  # review fix (ADR 0002: technical failures are excluded with a reason)
+        problems.append(f"{len(no_reason)} tumour(s) excluded (include = no) without a reason: " + "; ".join(no_reason)
+                        + " - write the reason in the note column of layout.csv (it goes to excluded_tumours.csv and "
+                        "the flow table)")
     return Validation(lay, problems, warnings)
 
 

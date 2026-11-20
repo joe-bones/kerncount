@@ -279,10 +279,9 @@ def test_duplicate_tumour_ids_block_the_run_naming_the_conflicting_files(tmp_pat
 
     layout.loc[layout["file"].str.endswith("-clodron n6 B.ome.tiff"), ["include", "note"]] = ["no", "duplicate copy"]
     layout.loc[layout["file"].str.endswith(".tiff.tif"), "include"] = "no"
-    v = lay.validate(layout, raw, s)
-    assert v.problems == [] and len(v.included) == 3
+    v = lay.validate(layout, raw, s)  # review fix: an exclusion without a reason blocks (was a warning)
+    assert len(v.problems) == 1 and "without a reason" in v.problems[0] and len(v.included) == 3
     assert sorted(v.excluded["exclusion_reason"]) == ["duplicate copy", "excluded in layout.csv (no reason given)"]
-    assert any("without a reason" in w for w in v.warnings)
 
 
 def test_a_session_folder_without_a_readable_genotype_blocks_until_set_in_layout(tmp_path):
@@ -352,6 +351,35 @@ def test_run_refuses_to_start_on_a_blocked_layout_and_lists_every_problem(tmp_pa
     assert len(e.value.problems) == 2
     assert not (prj / "_work" / "tumour").exists() or not any((prj / "_work" / "tumour").iterdir())
     assert not (prj / "tumours.csv").exists()
+
+
+def test_stacks_missing_from_layout_and_exclusions_without_a_reason_block_the_run(tmp_path, monkeypatch):
+    """Review fix (ADR 0004: blocked until every file maps to a tumour): a stack on disk that layout.csv does not list
+    would silently go unmeasured, and an exclusion needs its reason."""
+    from kerncount import cli, discover
+    from kerncount.tumour import layout as lay
+
+    raw, prj = _workspace(tmp_path, monkeypatch, ["030826 HERV -clodro n1 A.ome.tiff",
+                                                  "030826 HERV -clodro n1 B.ome.tiff"])
+    cli.main(["init", "tumour_exp", "--type", "tumour_volume"])
+    s = settings_mod.load(prj)
+    _touch(raw / KO_SESSION, "030826 N4 -clodro n2 A.ome.tiff")  # delivered later
+    with pytest.raises(lay.LayoutBlocked) as e:
+        lay.check(discover.read_table(prj / "layout.csv"), raw, s)
+    msg = str(e.value.code)
+    assert "030826 N4 -clodro n2 A.ome.tiff" in msg and "kerncount init" in msg and "not in layout.csv" in msg
+    cli.main(["init", "tumour_exp"])  # adds it, keeps the user's edits
+    layout = discover.read_table(prj / "layout.csv")
+    assert len(lay.check(layout, raw, s).included) == 3
+
+    layout.loc[layout["file"].str.endswith("n1 B.ome.tiff"), "include"] = "no"  # no reason in note
+    with pytest.raises(lay.LayoutBlocked) as e:
+        lay.check(layout, raw, s)
+    msg = str(e.value.code)
+    assert "030826 HERV -clodro n1 B.ome.tiff" in msg and "reason" in msg and "note" in msg
+    layout.loc[layout["file"].str.endswith("n1 B.ome.tiff"), "note"] = "section torn"
+    v = lay.check(layout, raw, s)
+    assert list(v.excluded["exclusion_reason"]) == ["section torn"]
 
 
 def test_reinit_keeps_an_edited_layout_csv(tmp_path, monkeypatch):
