@@ -20,12 +20,40 @@ kerncount run tumour_TLR7
 | `030826 HERV -clodro n3 Af.tif` | Fiji legacy binary mask (recorded in `legacy_mask`, not a tumour) |
 | `Statistics for 030826 HERV -clodro n3 Af.csv` / `.txt` | Fiji 3D Objects Counter table (`legacy_stats`) |
 
-`layout.csv` gets one row per original: `tumour_id`, `imaging_session`, `date` (from the 6-digit token,
-`[project] date_order`), one column per declared factor, `section` (`n3`), `hemisphere` (`A`), `tumour` (`n3A`),
+`layout.csv` gets one row per original: `tumour_id`, `imaging_session` (the folder), `session_label` (the folder's
+words that are no factor level, e.g. `5d`), `file_date` (6-digit token of the file name, `[project] date_order`;
+optional, may differ between folders and files, **not** the imaging date), `acquisition_day` (from the original's OME
+metadata; header only), one column per declared factor, `section` (`n3`), `hemisphere` (`A`), `tumour` (`n3A`),
 `file` (relative to the raw folder), `legacy_mask`, `legacy_stats`, `include`, `note`.
 `tumour_id` = every factor level + section + hemisphere (`TLR7 KO / HERV / -clodro / n3A`), unique across the
 experiment because `n3A` exists in several groups and both genotypes. A name the parser cannot read is set
 `include = no` with a note (full validation: ticket 03).
+
+### Session folders (ticket 12)
+- **Any number of session folders.** Every sub-folder of the experiment folder is an imaging session; hidden / system
+  folders (`.…`, `_…`, `@…`, `$…`, `#…`, `~…`, `System Volume Information`) are ignored; flat files directly in the
+  experiment folder are one session named after it.
+- **Factor levels from the folder name**, word by word and case-insensitive, through levels and `aliases` (multi-word
+  levels such as `TLR7 KO` are matched as a phrase): `5d K07`, `ready 5d KO7 030826`, `TLR7-KO 10d`, `5d TLR7KO` →
+  TLR7 KO; `5d WT` → WT. Words that are no level stay in `session_label`; a `timepoint` factor with
+  `source = "session"` and levels `["5d", "10d"]` would read them. **A new genotype** (e.g. a second KO line) is a new
+  level plus its folder spelling as an alias — no code change. A folder whose genotype cannot be read blocks the run
+  with a message naming the folder, the words not read and both fixes (alias in settings.toml, or the genotype
+  column of its rows in layout.csv).
+- **Repeat sessions** of one genotype (`5d WT`, `5d WT repeat`): when the same tumour ID comes from several session
+  folders, the folder is appended to those IDs only (`WT / HERV / -clodro / n1A / 5d WT repeat`); other IDs stay
+  plain. Two files giving one ID inside one folder still block the run, naming both files. (Adding a folder that
+  creates a new clash changes the IDs of the clashing tumours; their caches and review codes are then new.)
+- **Renaming or reorganising folders.** `layout.csv` rows are matched to the files by path; a row whose file is gone
+  is matched to the one scanned file of the same name. Folder-derived cells (paths, session, session label, genotype
+  from the folder) come from the new place; values you typed (cells differing from what the old place reads as),
+  `include` and your part of `note` are carried over. `kerncount run` does this in memory (a note lists every moved
+  file); `kerncount init` writes the updated layout.csv after backing the old one up to `_work/backups/` and lists
+  every moved / added file. When nothing moved and no file or column was added, init keeps layout.csv and writes the
+  fresh scan to `layout.new.csv` as before. Older layouts get the new columns (`date` becomes `file_date`).
+- **Caches survive a rename**: every cache key (segmentation, QC, Fiji, sweep, shared threshold) uses the file
+  name, size and modification time (not the folder) and the cache file is named after the tumour ID, which does not
+  contain the folder; review codes are keyed by tumour ID. A renamed folder therefore re-segments nothing.
 
 ### Factors (`[[tumour.factors]]`)
 Each factor declares `name`, `levels`, `reference` (comparison baseline), `role` (where it goes in group plots:
@@ -247,9 +275,17 @@ statistics knows readout names. Declared readouts missing from the table are rep
 
 **Rules.** Holm within each family and readout, over the contrasts that are tested. Stars only for confirmatory
 families of confirmatory readouts; exploratory families/readouts get p and Holm p but no stars and are labelled;
-descriptive families show estimate + CI only. **Imaging session:** a contrast whose weights do not cancel within every
-imaging session (a multiplicative day shift would move it) is labelled "confounded with imaging session" and never
-tested — direct WT vs KO (F6) is; within-session ratios and ratios of them (F1–F5, F7) are not. **Missing levels:**
+descriptive families show estimate + CI only. **Imaging batch:** a contrast whose weights do not cancel within every
+imaging batch (a multiplicative day shift would move it) is labelled "confounded with imaging session" (or "…with
+acquisition day") and never tested — with genotype read from the session folder, direct WT vs KO (F6) is; within-
+session ratios and ratios of them (F1–F5, F7) are not. What a batch is, is `[tumour] batch`: `"session_folder"`
+(default: one folder = one batch) or `"acquisition_day"` (one OME acquisition day = one batch; groups imaged on
+different days are then not compared by a test, e.g. HERV vs cntrl when HERV was imaged on another day). tumours.csv
+has the per-tumour `batch` column; the report's About lines state the definition and the batches, and § Acquisition
+settings always shows the group × acquisition-day table. The setting enters the analysis-plan lock only when changed
+from the default. With ≥ 3 genotype levels every family compares each non-reference level with the reference (F4 =
+each KO line's ratio of line effects vs WT), group plots get one row per present level, and declared levels without
+data are listed as `needs <level> data`. **Missing levels:**
 contrasts needing cells without tumours stay in every table, labelled `needs WT data` (whole level absent) or
 `needs data for <group>`. A family naming an undeclared factor is skipped with a note.
 
@@ -356,7 +392,8 @@ laser line / power / attenuation, pinhole, channel / fluor / ex / em, pixel type
 acquisition day and time. `stats_report.md` § Acquisition settings gives the verdict (every brightness-relevant
 setting identical, or which differ; settings never recorded are named as unchecked), what varies harmlessly
 (z-step, frame size), and a **group × acquisition-day table** with the groups imaged on a single day. Note:
-`imaging_session` in layout.csv is the data folder, not the acquisition day; a folder can span several days.
+`imaging_session` in layout.csv is the data folder, not the acquisition day; a folder can span several days (the
+`acquisition_day` column has the day; `[tumour] batch` decides which of the two the confounding rule uses).
 
 **Shared-threshold robustness check** (ADR 0002; `[tumour] shared_threshold_check = true`, off by default): only when
 no checked acquisition setting differs. One experiment-wide grey value = **median of the per-tumour automatic

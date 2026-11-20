@@ -43,7 +43,7 @@ def test_scan_layout_reads_factors_from_filenames_and_session_folder(tmp_path):
     row = layout.set_index("tumour_id").loc["TLR7 KO / HERV / -clodro / n3A"]
     assert row["genotype"] == "TLR7 KO" and row["tumour_line"] == "HERV" and row["clodronate"] == "-clodro"
     assert row["section"] == "n3" and row["hemisphere"] == "A" and row["tumour"] == "n3A"
-    assert row["imaging_session"] == KO_SESSION and row["date"] == "2026-08-03"
+    assert row["imaging_session"] == KO_SESSION and row["file_date"] == "2026-08-03"
     assert row["file"] == f"{KO_SESSION}/030826 HERV -clodro n3 A.ome.tiff"
     assert row["legacy_mask"] == f"{KO_SESSION}/030826 HERV -clodro n3 Af.tif"
     assert row["legacy_stats"] == f"{KO_SESSION}/Statistics for 030826 HERV -clodro n3 Af.csv"
@@ -165,7 +165,7 @@ def test_readout_table_has_one_row_per_included_tumour_with_factors_and_volume(t
     layout = pd.DataFrame({
         "tumour_id": ["TLR7 KO / HERV / -clodro / n3A", "TLR7 KO / HERV / -clodro / n3B",
                       "TLR7 KO / cntrl / +clodro / n1A"],
-        "imaging_session": KO_SESSION, "date": "2026-08-03", "genotype": "TLR7 KO",
+        "imaging_session": KO_SESSION, "file_date": "2026-08-03", "genotype": "TLR7 KO",
         "tumour_line": ["HERV", "HERV", "cntrl"], "clodronate": ["-clodro", "-clodro", "+clodro"],
         "section": ["n3", "n3", "n1"], "hemisphere": ["A", "B", "A"], "tumour": ["n3A", "n3B", "n1A"],
         "file": ["a.ome.tiff", "b.ome.tiff", "c.ome.tiff"], "legacy_mask": "", "legacy_stats": "",
@@ -281,7 +281,7 @@ def test_group_plot_keeps_long_titles_and_axis_labels_inside_the_figure(monkeypa
 
 # ---------------------------------------------------------------- real data smoke test (slow)
 
-REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7" / KO_SESSION
+REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7" / "5d K07"  # renamed from KO_SESSION 2026-11-20
 REAL_STEM = "030826 cntrl +clodro n1 B"
 
 

@@ -325,6 +325,12 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
                                             "thresholds) and report whether a confirmatory effect depends on the "
                                             "per-tumour adaptation, i.e. on brightness (ADR 0002). Only run when the "
                                             "acquisition settings are identical. Slow on the first run."),
+        "batch": dict(kind="choice", options=["session_folder", "acquisition_day"], label="Imaging batch",
+                      help="What counts as one imaging batch for the confounding rule: a contrast whose compared "
+                           "groups come from different batches is shown but never tested. session_folder = each "
+                           "session folder (default); acquisition_day = each day in the stacks' OME metadata (groups "
+                           "imaged on different days are then not compared by a test). Part of the locked analysis "
+                           "plan once changed from the default; decide before results are viewed."),
         "qc_saturation_warn": dict(kind="float", min=0, max=1, label="Saturation warning above (share)",
                                    help="A tumour gets a warning (never a flag) when more of its mid-section main mass "
                                         "is saturated (255) than this; the threshold rule is protected up to ~0.5."),

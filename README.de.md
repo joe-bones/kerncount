@@ -528,17 +528,28 @@ Ein Ordner pro Experiment in `data/`, darin **ein Unterordner pro Aufnahmesitzun
 Dateien flach und wie geliefert:
 ```
 data/tumour_TLR7/
-├── 030826 KO7/                                 ← Sitzungsordner: sein Name gibt den Genotyp (KO7 = TLR7 KO)
+├── 5d K07/                                     ← Sitzungsordner: sein Name gibt den Genotyp (K07 = TLR7 KO)
 │   ├── 030826 HERV -clodro n3 A.ome.tiff        ← ein Original-z-Stapel = ein Tumor
 │   ├── 030826 HERV -clodro n3 Af.tif            ← Fiji-Maske (Altverfahren, optional; nur zum Vergleich)
 │   └── Statistics for 030826 HERV -clodro n3 Af.csv   ← Tabelle des Fiji 3D Objects Counter (optional)
-└── 100926 WT/
+└── 5d WT/
     └── 100926 cntrl +clodro n1 B.ome.tif
 ```
-- **Der Genotyp kommt aus dem Namen des Sitzungsordners**: Er muss `WT` oder `KO7` / `KO` / `TLR7 KO` enthalten
-  (weitere Schreibweisen lassen sich in den Einstellungen als Alias ergänzen). WT und KO wurden an verschiedenen
-  Tagen aufgenommen, d. h. Genotyp und Aufnahmesitzung sind vermengt: Verhältnisse innerhalb einer Sitzung werden
-  zwischen den Genotypen verglichen; ein direkter WT-gegen-KO-Unterschied wird gezeigt, aber nie getestet.
+- **Der Genotyp kommt aus dem Namen des Sitzungsordners**, Wort für Wort gelesen (Groß-/Kleinschreibung egal): Er
+  muss `WT` oder `K07` / `KO7` / `KO` / `TLR7 KO` / `TLR7-KO` / `TLR7KO` enthalten; andere Wörter (`5d`) werden als
+  Sitzungsbezeichnung (`session_label`) festgehalten. Beliebig viele Sitzungsordner sind möglich, auch mehrere mit
+  demselben Genotyp (Wiederholungssitzungen). Ein neuer Genotyp ist eine neue Stufe in den Einstellungen plus seine
+  Ordner-Schreibweise als Alias. Ist der Genotyp eines Ordners nicht lesbar, stoppt der Lauf mit einer Meldung, wie
+  es zu beheben ist. WT und KO wurden an verschiedenen Tagen aufgenommen, d. h. Genotyp und Aufnahmesitzung sind
+  vermengt: Verhältnisse innerhalb einer Sitzung werden zwischen den Genotypen verglichen; ein direkter
+  WT-gegen-KO-Unterschied wird gezeigt, aber nie getestet. Ob ein *Sitzungsordner* oder ein *Aufnahmetag* (aus den
+  Mikroskop-Metadaten) als eine Charge gilt, legt `[tumour] batch` fest (Standard `session_folder`); der Bericht
+  nennt, welche Definition verwendet wurde.
+- **Umbenennen eines Sitzungsordners** verliert nichts: `kerncount run` findet die Dateien über ihren Namen, behält
+  Ihre Änderungen in layout.csv und nutzt alle gespeicherten Messungen weiter; `kerncount init` aktualisiert danach
+  layout.csv (die alte Fassung wird gesichert).
+- Das 6-stellige Datum am Anfang eines Dateinamens ist optional und **nicht** das Aufnahmedatum; den Aufnahmetag
+  liest kerncount aus den Metadaten jedes Stapels (`acquisition_day`).
 - **Dateinamen** liefern Datum, Tumorlinie, Clodronat, Schnitt und Hemisphäre. Für **neue Aufnahmen**:
   `DDMMYY <Linie> <±clodro> n<Schnitt> <A|B>.ome.tif`, z. B. `100926 HERV +clodro n3 A.ome.tif`: Datum mit 6 Ziffern,
   Tumorlinie und Clodronat-Stufe genau wie in den Einstellungen (`cntrl`, `HERV`, `N4`; `-clodro`, `+clodro`), die

@@ -25,7 +25,7 @@ from scipy import stats as sps
 
 from .config import Factor
 from .families import Cell, contrasts
-from .stats import CellModel
+from .stats import CONFOUNDED, CellModel, confounded
 
 PLAN_COLUMNS = ["readout", "family", "family_role", "comparison", "groups", "se", "df", "tests_in_family",
                 "alpha_per_test", "mdfc", "target_fold_change", "power_at_target", "n_balanced", "limiting_group",
@@ -67,6 +67,16 @@ def _session_confounded(facs: list[Factor], weights: dict[Cell, float]) -> bool:
     return any(abs(v) > 1e-9 for v in per.values())
 
 
+def _not_tested(model: CellModel, facs: list[Factor], weights: dict[Cell, float]) -> bool:
+    """Contrasts the statistics would not test for confounding. batch = session folder: the design-level rule
+    above. batch = acquisition day (ticket 12): which day a group is imaged on is not part of the design, so the
+    current data decide (contrasts whose groups are all present); contrasts needing absent groups fall back to the
+    design-level rule."""
+    if model.confounded_label == CONFOUNDED or any(cell not in model.n for cell in weights):
+        return _session_confounded(facs, weights)
+    return confounded(model, weights)
+
+
 def _absent_note(model: CellModel, missing: list[Cell]) -> str:
     absent, present = [], []
     for i, f in enumerate(model.factors):
@@ -94,7 +104,7 @@ def plan_readout(model: CellModel, facs: list[Factor], fams: list, readout, fold
     for fam in fams:
         if fam.role == "descriptive":
             continue
-        cs = [c for c in contrasts(facs, fam) if not _session_confounded(facs, c.weights)]
+        cs = [c for c in contrasts(facs, fam) if not _not_tested(model, facs, c.weights)]
         m = len(cs)
         a = alpha / m if m else alpha
         for c in cs:
@@ -189,8 +199,8 @@ def report_lines(summ: pd.DataFrame, s_by_readout: dict[str, float], fold_change
           "conservative.",
           f"- Tumours per group for a fold-change of {fold_change} (`[tumour] planner_fold_change`): *balanced* = "
           "every group at k; *top-up* = raise only the groups of the hardest contrast below k (the limiting group "
-          "is its smallest group). Contrasts confounded with imaging session and descriptive families are not "
-          "planned (they are never tested).",
+          "is its smallest group). Contrasts confounded with the imaging batch (`[tumour] batch`: session folder "
+          "or acquisition day) and descriptive families are not planned (they are never tested).",
           "- Families needing absent levels (e.g. genotype × tumour line with one genotype imaged) are planned from "
           "the present data's variance: see the note (assumes the absent level's variance equals the present one).",
           ""]

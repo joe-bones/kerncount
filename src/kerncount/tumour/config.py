@@ -9,6 +9,7 @@ import copy
 from dataclasses import dataclass, field
 
 ROLES = ("row", "panel", "x", "colour")
+BATCHES = ("session_folder", "acquisition_day")
 SOURCES = ("filename", "session")
 EFFECTS = ("simple", "interaction")  # simple effect of one factor / interaction of several, within cells of the rest
 FAMILY_ROLES = ("confirmatory", "exploratory", "descriptive")
@@ -49,11 +50,14 @@ DEFAULTS: dict = {
     # QC and blinded review (ticket 06): saturation warning threshold (share of the mid-section main mass at 255;
     # the intermedians threshold is protected up to ~50 %), review image size (px, longest side per panel), JPEG quality.
     "qc_saturation_warn": 0.40,
+    # Batch (ticket 12): what counts as one imaging batch for the confounding rule of the statistics and the planner
+    # ("session_folder" = the imaging-session folder, "acquisition_day" = the day in each original's OME metadata).
+    "batch": "session_folder",
     "review_px": 640,
     "review_jpeg_quality": 80,
     "factors": [
         {"name": "genotype", "levels": ["WT", "TLR7 KO"], "reference": "WT", "role": "row", "source": "session",
-         "aliases": {"KO7": "TLR7 KO", "KO": "TLR7 KO"}},
+         "aliases": {"KO7": "TLR7 KO", "K07": "TLR7 KO", "KO": "TLR7 KO", "TLR7KO": "TLR7 KO", "TLR7-KO": "TLR7 KO"}},
         {"name": "tumour_line", "levels": ["cntrl", "HERV", "N4"], "reference": "cntrl", "role": "x",
          "source": "filename", "aliases": {}},
         {"name": "clodronate", "levels": ["-clodro", "+clodro"], "reference": "-clodro", "role": "panel",
@@ -138,6 +142,7 @@ fiji_min_voxels = 200000  # 3D Objects Counter minimum object size of the macro 
 threshold_sweep = false   # true: recompute every confirmatory effect at the threshold x sweep_scales (slow first run)
 sweep_scales = [0.8, 0.9, 1.1, 1.2]
 shared_threshold_check = false   # true: robustness check at ONE threshold for every tumour (needs identical acquisition settings)
+batch = "session_folder"  # imaging batch for the confounding rule: "session_folder" or "acquisition_day" (OME day)
 qc_saturation_warn = 0.40 # QC warning when more of the mid-section main mass is saturated (255) than this
 review_px = 640           # blinded review images (review/<code>.jpg): longest side per panel in pixels
 review_jpeg_quality = 80
@@ -145,13 +150,15 @@ review_jpeg_quality = 80
 # Factors: one column per factor in layout.csv. levels = allowed values, reference = comparison baseline,
 # role = where the factor goes in group plots (row, panel, x, colour), source = where the value is read
 # ("filename" token or imaging-"session" folder name), aliases = other spellings mapped onto a level.
+# Session folders are read word by word (case-insensitive; "5d K07" -> K07 -> TLR7 KO); words that are no level
+# (e.g. "5d") are kept as the session_label. A new genotype = a new level (+ its folder spelling as an alias).
 [[tumour.factors]]
 name = "genotype"
 levels = ["WT", "TLR7 KO"]
 reference = "WT"
 role = "row"
 source = "session"
-aliases = {{ KO7 = "TLR7 KO", KO = "TLR7 KO" }}
+aliases = {{ KO7 = "TLR7 KO", K07 = "TLR7 KO", KO = "TLR7 KO", TLR7KO = "TLR7 KO", "TLR7-KO" = "TLR7 KO" }}
 
 [[tumour.factors]]
 name = "tumour_line"
@@ -418,6 +425,14 @@ def families(settings: dict) -> list[Family]:
             raise ValueError(f"[tumour.families] {fid}: a simple effect names one factor, an interaction two or more")
         out.append(Family(fid, effect, fs, role, str(f.get("label", ""))))
     return out
+
+
+def batch(settings: dict) -> str:
+    """`[tumour] batch`: "session_folder" (default) or "acquisition_day" (ticket 12)."""
+    b = str(tumour_settings(settings).get("batch") or "session_folder")
+    if b not in BATCHES:
+        raise ValueError(f"[tumour] batch = {b!r} must be one of {', '.join(BATCHES)}")
+    return b
 
 
 def normalise_by(settings: dict, facs: list[Factor]) -> Factor | None:

@@ -532,17 +532,25 @@ One folder per experiment in `data/`, with **one sub-folder per imaging session*
 files flat and as delivered:
 ```
 data/tumour_TLR7/
-├── 030826 KO7/                                 ← session folder: its name gives the genotype (KO7 = TLR7 KO)
+├── 5d K07/                                     ← session folder: its name gives the genotype (K07 = TLR7 KO)
 │   ├── 030826 HERV -clodro n3 A.ome.tiff        ← one original z-stack = one tumour
 │   ├── 030826 HERV -clodro n3 Af.tif            ← Fiji mask (legacy, optional; read for comparison only)
 │   └── Statistics for 030826 HERV -clodro n3 Af.csv   ← Fiji 3D Objects Counter table (legacy, optional)
-└── 100926 WT/
+└── 5d WT/
     └── 100926 cntrl +clodro n1 B.ome.tif
 ```
-- **Genotype comes from the session-folder name**: it must contain `WT` or `KO7` / `KO` / `TLR7 KO` (other spellings
-  can be added as aliases in the settings). WT and KO imaged on different days = genotype confounded with the
+- **Genotype comes from the session-folder name**, read word by word (upper/lower case does not matter): it must
+  contain `WT` or `K07` / `KO7` / `KO` / `TLR7 KO` / `TLR7-KO` / `TLR7KO`; other words (`5d`) are kept as the
+  session label. Any number of session folders is fine, also several of one genotype (repeat sessions). A new genotype
+  is a new level in the settings plus its folder spelling as an alias. A folder whose genotype cannot be read stops
+  the run with a message saying how to fix it. WT and KO imaged on different days = genotype confounded with the
   imaging session: ratios within a session are compared across genotypes, a direct WT-vs-KO difference is shown
-  but never tested.
+  but never tested. Whether one *session folder* or one *acquisition day* (from the microscope metadata) counts as a
+  batch is the setting `[tumour] batch` (default `session_folder`); the report says which was used.
+- **Renaming a session folder** loses nothing: `kerncount run` finds the files by name, keeps your edits in
+  layout.csv and re-uses every cached measurement; `kerncount init` then updates layout.csv (old copy backed up).
+- The 6-digit date at the start of a file name is optional and is **not** the imaging date; the imaging day is read
+  from each stack's metadata (`acquisition_day`).
 - **File names** give date, tumour line, clodronate, section and hemisphere. For **new acquisitions** use
   `DDMMYY <line> <±clodro> n<section> <A|B>.ome.tif`, e.g. `100926 HERV +clodro n3 A.ome.tif`: date as 6 digits,
   the tumour line and clodronate level exactly as in the settings (`cntrl`, `HERV`, `N4`; `-clodro`, `+clodro`),

@@ -357,7 +357,7 @@ def test_corrections_re_pick_the_main_mass_or_exclude_and_rebuild_without_re_seg
 
 # ---------------------------------------------------------------- real data (slow): QC + review image of real stacks
 
-REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7" / KO_SESSION
+REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7" / "5d K07"  # renamed from KO_SESSION 2026-11-20
 REAL_STEMS = ["030826 cntrl +clodro n1 B", "030826 HERV -clodro n2 A"]
 
 

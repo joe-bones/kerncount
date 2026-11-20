@@ -26,6 +26,15 @@ class TumourVolume(ExperimentType):
 
         return layout.scan(raw, settings)
 
+    def merge_layout(self, old: pd.DataFrame, fresh: pd.DataFrame, settings: dict
+                     ) -> tuple[pd.DataFrame, list[str]] | None:
+        """Ticket 12: files moved (session folder renamed / reorganised), new files or columns added -> the updated
+        layout with every edit carried over; None when nothing changed (layout.csv kept, layout.new.csv convention)."""
+        from . import layout
+
+        m = layout.migrate(old, fresh, settings, add_new=True)
+        return (m.layout, m.describe()) if m.changed else None
+
     layout_hint = ("Check the tumour IDs, factor columns and notes in layout.csv: fix a value by editing its cell "
                    "(noted as an override), or set include = no and give the reason in note")
 
@@ -39,6 +48,10 @@ class TumourVolume(ExperimentType):
         v = layout_mod.validate(layout, raw, settings)
         with pd.option_context("display.width", 200, "display.max_colwidth", 90, "display.max_rows", 500):
             print(layout[["tumour_id", "imaging_session", "include", "note"]].to_string(index=False))
+            if "acquisition_day" in layout.columns and len(layout):  # ticket 12: imaging days per session folder
+                days = layout.assign(day=layout["acquisition_day"].replace("", "(not recorded)"))
+                print("\nTumours per imaging session and acquisition day (OME metadata):")
+                print(pd.crosstab(days["imaging_session"], days["day"]).to_string())
             inc = v.layout[(v.layout["include"] == "yes") & (v.layout["tumour_id"] != "")]
             print(f"\n{len(inc)} tumours included ({len(layout) - len(inc)} excluded or unreadable); per group:")
             if len(inc):

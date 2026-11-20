@@ -8,8 +8,8 @@ Read from each file's OME-XML (no pixels are read). Two groups of settings:
   threshold (the shared-threshold robustness check, `shared.py`) meaningful.
 - `REPORTED` — settings that may legitimately differ (z-step, frame size, number of layers, acquisition day). They are
   listed, not judged. The acquisition day matters for the design: groups imaged on different days can differ by a
-  day effect even with identical settings (laser ageing, alignment), and the layout's `imaging_session` is the
-  folder, not the day.
+  day effect even with identical settings (laser ageing, alignment). Whether the statistics treat a session folder
+  or an acquisition day as one imaging batch is the `[tumour] batch` setting (ticket 12).
 
 Outputs: `acquisition.csv` (one row per tumour) and a report section `## Acquisition settings`.
 """
@@ -116,7 +116,7 @@ def consistency(acq: pd.DataFrame) -> Consistency:
     return Consistency(not differs, differs, missing, partly, values)
 
 
-def report_lines(acq: pd.DataFrame, tumours: pd.DataFrame, facs: list) -> list[str]:
+def report_lines(acq: pd.DataFrame, tumours: pd.DataFrame, facs: list, batch: str = "session_folder") -> list[str]:
     """Markdown: checked settings (shared values or what differs), settings that vary, groups x acquisition day."""
     c = consistency(acq)
     md = ["## Acquisition settings (from each original's OME metadata)", "",
@@ -137,9 +137,12 @@ def report_lines(acq: pd.DataFrame, tumours: pd.DataFrame, facs: list) -> list[s
         t = tumours[["tumour_id", *names]].merge(acq[["tumour_id", "acquisition_day"]], on="tumour_id")
         t["group"] = t[names].astype(str).agg(" / ".join, axis=1) if names else "all"
         ct = pd.crosstab(t["group"], t["acquisition_day"])
-        md += ["", f"Tumours per group and acquisition day ({ct.shape[1]} day(s)); `imaging_session` in layout.csv is "
-               "the folder, not the day. Groups imaged on different days can differ by a day effect even with "
-               "identical settings.", "",
+        rule = ("`[tumour] batch = \"session_folder\"`: the confounding rule of the statistics treats each session "
+                "folder as one batch, not each day" if batch == "session_folder" else
+                "`[tumour] batch = \"acquisition_day\"`: the confounding rule of the statistics treats each day as "
+                "one batch")
+        md += ["", f"Tumours per group and acquisition day ({ct.shape[1]} day(s)); {rule}. Groups imaged on "
+               "different days can differ by a day effect even with identical settings.", "",
                "| group | " + " | ".join(ct.columns) + " |", "|---|" + "---|" * ct.shape[1]]
         for g, r in ct.iterrows():
             md.append(f"| {g} | " + " | ".join(str(int(x)) if x else "" for x in r) + " |")
@@ -166,5 +169,7 @@ def analyse(out: Path, tumours: pd.DataFrame, settings: dict, facs: list, report
     acq.to_csv(path, index=False, sep=settings.get("project", {}).get("csv_delimiter", ","))
     if report is not None and report.exists():
         with report.open("a", encoding="utf-8") as fh:
-            fh.write("\n" + "\n".join(report_lines(acq, tumours, facs)) + "\n")
+            from .config import batch
+
+            fh.write("\n" + "\n".join(report_lines(acq, tumours, facs, batch(settings))) + "\n")
     return [str(path)], consistency(acq)

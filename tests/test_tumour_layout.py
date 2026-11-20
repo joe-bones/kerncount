@@ -228,7 +228,7 @@ def test_known_naming_variants_are_normalised_and_noted(tmp_path):
         row = by_file.loc[name]
         assert row["tumour_id"] == f"TLR7 KO / HERV / -clodro / n{k}A", name
         assert row["include"] == "yes" and note in row["note"], (name, row["note"])
-    assert layout["date"].eq("2026-08-03").all()
+    assert layout["file_date"].eq("2026-08-03").all()
 
 
 def test_unreadable_names_are_flagged_and_block_the_run_until_fixed_or_excluded(tmp_path):
@@ -396,20 +396,21 @@ def test_excluded_tumours_and_their_reasons_are_written_with_the_run(tmp_path, m
 # ---------------------------------------------------------------- real folder (slow)
 
 REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7"
+REAL_SESSION = "5d K07"  # renamed from KO_SESSION on 2026-11-20 (ticket 12)
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not (REAL / KO_SESSION).is_dir(), reason="real tumour data not present")
+@pytest.mark.skipif(not (REAL / REAL_SESSION).is_dir(), reason="real tumour data not present")
 def test_real_folder_layout_is_valid_with_48_tumours(tmp_path):
     from kerncount.tumour import layout as lay
 
     s = _settings(tmp_path)
     layout = lay.scan(REAL, s)
-    layout = layout[layout["imaging_session"] == KO_SESSION].reset_index(drop=True)  # other sessions may be added
+    layout = layout[layout["imaging_session"] == REAL_SESSION].reset_index(drop=True)  # other sessions may be added
     _assert_real_layout(layout)
-    assert lay.unmatched_files(REAL / KO_SESSION, layout.assign(
+    assert lay.unmatched_files(REAL / REAL_SESSION, layout.assign(
         file=layout["file"].str.split("/").str[-1], legacy_mask=layout["legacy_mask"].str.split("/").str[-1],
         legacy_stats=layout["legacy_stats"].str.split("/").str[-1])) == []
-    assert sorted(os.listdir(REAL / KO_SESSION)) == sorted(REAL_NAMES)  # the hard-coded list is the real folder
+    assert sorted(os.listdir(REAL / REAL_SESSION)) == sorted(REAL_NAMES)  # the hard-coded list is the real folder
     v = lay.check(layout, None, s)
     assert len(v.included) == 48

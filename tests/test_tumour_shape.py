@@ -329,7 +329,7 @@ def test_analyse_draws_the_shape_panel_and_analyses_area_and_perimeter_as_confir
 
 # ---------------------------------------------------------------- real data (slow, 2 stacks)
 
-REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7" / "ready 5d KO7 030826"
+REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7" / "5d K07"  # renamed 2026-11-20
 
 
 @pytest.mark.slow

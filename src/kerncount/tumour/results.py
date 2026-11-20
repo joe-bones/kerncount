@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from . import planner, plots, sensitivity, stats
-from .config import Factor, Family, Readout, factors, families, normalise_by, readouts
+from .config import Factor, Family, Readout, batch, factors, families, normalise_by, readouts
 
 MODEL = "N-way linear model on log(readout), full interaction, pooled variance"
 NAN = float("nan")
@@ -30,6 +30,8 @@ def lock(settings: dict) -> tuple[str, dict]:
                      for f in families(settings)],
         "normalise_by": (normalise_by(settings, factors(settings)) or Factor("", ("",), "")).name,
     }
+    if batch(settings) != "session_folder":  # ticket 12: decides which contrasts are tested; in the hash only when
+        spec["batch"] = batch(settings)  # changed from the default, so existing locks stay valid
     return hashlib.sha1(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:12], spec
 
 
@@ -233,8 +235,11 @@ def _about(settings: dict, h: str, spec: dict, fams: list[Family], notes: list[s
              f"Model: {MODEL}; one tumour = one n; effects are fold-changes (ratios of geometric means) with 95 % CI.",
              "Holm within each family and readout. Stars only for confirmatory families of confirmatory readouts; "
              "exploratory results carry p-values but no stars; descriptive families are never tested.",
-             f"Contrasts whose compared groups come from different imaging sessions (not a within-session ratio) are "
-             f"labelled '{stats.CONFOUNDED}' and never tested.",
+             f"Batch definition: {batch(settings)} ([tumour] batch; "
+             + ("one imaging batch = one session folder" if batch(settings) == "session_folder" else
+                "one imaging batch = one acquisition day from the OME metadata") + "). Contrasts whose compared "
+             f"groups come from different batches (not a within-batch ratio) are labelled "
+             f"'{stats.batch_of(table)[1]}' and never tested.",
              "Factors: " + "; ".join(f"{f['name']} ({', '.join(f['levels'])}; reference {f['reference']})"
                                      for f in spec["factors"]),
              "Readouts: " + "; ".join(f"{r['name']} ({r['role']})" for r in spec["readouts"]),
@@ -248,6 +253,9 @@ def _about(settings: dict, h: str, spec: dict, fams: list[Family], notes: list[s
         lines.append("Levels without data (contrasts needing them are listed as 'needs … data'): " + "; ".join(absent))
     if "imaging_session" in table.columns:
         lines.append("Imaging sessions: " + ", ".join(sorted(set(table["imaging_session"].astype(str)))))
+    col = stats.batch_of(table)[0]
+    if col in table.columns:
+        lines.append("Batches: " + ", ".join(sorted(set(table[col].astype(str)))))
     lines += [f"NOTE: {n}" for n in notes]
     return lines
 

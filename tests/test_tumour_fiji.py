@@ -283,7 +283,7 @@ def test_run_adds_fiji_columns_and_the_threshold_sweep(tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------- real data (slow, 2 stacks)
 
-REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7" / "ready 5d KO7 030826"
+REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7" / "5d K07"  # renamed 2026-11-20
 
 
 @pytest.mark.slow

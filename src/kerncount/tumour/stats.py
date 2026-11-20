@@ -17,7 +17,22 @@ from .config import Factor
 from .families import Cell, Contrast
 
 CONFOUNDED = "confounded with imaging session"
+CONFOUNDED_DAY = "confounded with acquisition day"
 SESSION_COLUMN = "imaging_session"
+BATCH_COLUMN = "batch"  # tumours.csv: the imaging batch per `[tumour] batch` (table.build); else imaging_session
+
+
+def batch_of(table: pd.DataFrame) -> tuple[str, str]:
+    """(column holding each tumour's imaging batch, label of contrasts confounded with it). `batch` (ticket 12) when
+    present: it equals imaging_session (batch = "session_folder") or acquisition_day (batch = "acquisition_day")."""
+    if BATCH_COLUMN in table.columns:
+        b = table[BATCH_COLUMN].astype(str)
+        if SESSION_COLUMN in table.columns and b.equals(table[SESSION_COLUMN].astype(str)):
+            return BATCH_COLUMN, CONFOUNDED
+        if "acquisition_day" in table.columns:
+            return BATCH_COLUMN, CONFOUNDED_DAY
+        return BATCH_COLUMN, "confounded with imaging batch"
+    return SESSION_COLUMN, CONFOUNDED
 
 
 @dataclass
@@ -28,8 +43,9 @@ class CellModel:
     mean: dict[Cell, float]  # mean log(readout) per present cell
     s2: float  # pooled residual variance (log scale); nan when df = 0
     df: int  # residual degrees of freedom = tumours − present cells
-    sessions: dict[Cell, dict[str, float]] = field(default_factory=dict)  # cell -> {session: share of its tumours}
+    sessions: dict[Cell, dict[str, float]] = field(default_factory=dict)  # cell -> {batch: share of its tumours}
     dropped: int = 0  # rows left out (missing, non-positive or outside the declared levels)
+    confounded_label: str = CONFOUNDED  # what a batch is (imaging session / acquisition day), for notes
 
     @property
     def N(self) -> int:
@@ -62,7 +78,11 @@ def usable(table: pd.DataFrame, facs: list[Factor], column: str) -> pd.Series:
     return ok
 
 
-def fit(table: pd.DataFrame, facs: list[Factor], column: str, session: str = SESSION_COLUMN) -> CellModel:
+def fit(table: pd.DataFrame, facs: list[Factor], column: str, session: str | None = None) -> CellModel:
+    """`session` = the batch column (default: `batch_of(table)`); confounding is judged per batch."""
+    label = CONFOUNDED
+    if session is None:
+        session, label = batch_of(table)
     ok = usable(table, facs, column)
     t = table[ok]
     y = np.log(pd.to_numeric(t[column]).to_numpy(float))
@@ -80,12 +100,13 @@ def fit(table: pd.DataFrame, facs: list[Factor], column: str, session: str = SES
             sessions[cell] = t.loc[idx, session].astype(str).value_counts(normalize=True).to_dict()
     df = len(y) - len(n)
     return CellModel(list(facs), column, n, mean, ss / df if df > 0 else float("nan"), df, sessions,
-                     int((~ok).sum()))
+                     int((~ok).sum()), label)
 
 
 def confounded(model: CellModel, weights: dict[Cell, float]) -> bool:
-    """True when the contrast's weight does not cancel within every imaging session: a multiplicative shift of one
-    session (day effect) would then move the estimate. Within-session ratios (and ratios of them) cancel."""
+    """True when the contrast's weight does not cancel within every imaging batch (session folder or acquisition day,
+    `[tumour] batch`): a multiplicative shift of one batch (day effect) would then move the estimate. Within-batch
+    ratios (and ratios of them) cancel."""
     per: dict[str, float] = {}
     for cell, w in weights.items():
         for s, share in model.sessions.get(cell, {}).items():
@@ -148,7 +169,7 @@ def readout_results(table: pd.DataFrame, facs: list[Factor], fams: list, readout
                 tested = False
             else:
                 if e.confounded:
-                    notes.append(CONFOUNDED + " (not tested)")
+                    notes.append(m.confounded_label + " (not tested)")
                     tested = False
                 if fam.role == "descriptive":
                     notes.append("descriptive only (not tested)")

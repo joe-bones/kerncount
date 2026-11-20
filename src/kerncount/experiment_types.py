@@ -54,6 +54,12 @@ class ExperimentType:
         with pd.option_context("display.width", 200, "display.max_colwidth", 60, "display.max_rows", 500):
             print(layout.to_string(index=False))
 
+    def merge_layout(self, old: pd.DataFrame, fresh: pd.DataFrame, settings: dict
+                     ) -> tuple[pd.DataFrame, list[str]] | None:
+        """Re-init with an existing layout.csv: (updated layout carrying the user's edits, messages) when the raw
+        folder was reorganised so that layout.csv must change; None = keep layout.csv, fresh scan to layout.new.csv."""
+        return None
+
     def measure(self, project_dir: Path, layout: pd.DataFrame, settings: dict, options: RunOptions) -> pd.DataFrame:
         """Measurement: one row per measured unit (cached under _work/ where expensive)."""
         raise NotImplementedError

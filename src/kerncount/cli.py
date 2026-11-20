@@ -102,7 +102,15 @@ def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False, ety
     etype = _experiment_type(s)
     layout = etype.scan_layout(raw, s)
     lp = prj / "layout.csv"
-    if lp.exists() and not (force or force_layout):
+    merged = etype.merge_layout(discover.read_table(lp), layout, s) if lp.exists() and not (force or force_layout) \
+        else None
+    if merged is not None:  # raw folder reorganised: layout.csv updated with the user's edits, old one backed up
+        layout, messages = merged
+        bk = settings.backup(prj, "layout.csv")
+        print("\n".join(messages))
+        kept = bk.relative_to(prj).as_posix() if bk is not None else "-"
+        print(f"layout.csv updated; the previous version is kept in {kept}")
+    elif lp.exists() and not (force or force_layout):
         lp = prj / "layout.new.csv"
         print(f"layout.csv already exists (kept); fresh scan written to {lp.name} for comparison.")
     elif lp.exists():
