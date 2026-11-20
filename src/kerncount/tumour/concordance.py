@@ -18,9 +18,9 @@ import numpy as np
 import pandas as pd
 
 from . import stats
+from .stats import ALPHA
 from .config import Factor, Family, Readout, legacy_counterpart, readouts, tumour_settings
 
-ALPHA = 0.05
 LEGACY = "Fiji legacy (exploratory)"
 COMPARE_COLUMNS = ["readout", "fiji_column", "family", "family_role", "comparison", "estimate", "ci_low", "ci_high",
                    "p_adj", "fiji_estimate", "fiji_ci_low", "fiji_ci_high", "fiji_p_adj", "direction_agree",

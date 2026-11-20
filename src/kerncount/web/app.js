@@ -12,6 +12,7 @@ const S = { state: null, exp: null, sec: "home", params: {}, project: null, ov: 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => "&#" + c.charCodeAt(0) + ";");
 const js = v => esc(JSON.stringify(v));  // a JSON value inside an HTML attribute
+const isTumour = e => !!e && e.type === "tumour_volume";  // experiment type (ADR 0004); also used by tumour.js
 // The page runs under Content-Security-Policy script-src 'self': no inline <script>, no inline on* attributes.
 // Templates attach handlers with on("click", fn), which stores fn and returns data-on-click="<id>"; one delegated
 // listener per event type runs it with `this` = the element (as an inline handler would; returning false prevents
@@ -87,7 +88,7 @@ const SECTIONS = [
   ["Results", [["results", "Results explorer"], ["stats", "Statistics table"], ["layers", "Layer comparison", e => e.intensity],
                ["intensity", "Intensity & cut-off", e => e.intensity]]],
   ["Images", [["review", "Review images"], ["corrections", "Corrections"]]],
-  ["Plan the next experiment", [["planner", "Planner", e => e.type !== "tumour_volume"], ["plates", "Plate maps", e => e.type !== "tumour_volume"]]],
+  ["Plan the next experiment", [["planner", "Planner", e => !isTumour(e)], ["plates", "Plate maps", e => !isTumour(e)]]],
   ["Set-up", [["layout", "Layout"], ["settings", "Settings"], ["files", "All files"]]],
 ];
 const SEC_TITLE = Object.fromEntries(SECTIONS.flatMap(([, l]) => l.map(([k, t]) => [k, t])));
@@ -155,7 +156,7 @@ function renderSide() {
   if (!S.state) return;
   const html = S.state.experiments.map(e => `<button class="exp ${e.name === S.exp ? "active" : ""}" ${on("click", function (event) { go((e.name)) })}>
       <span class="nm">${esc(e.name)}</span>
-      <span class="st">${!e.initialised ? "not set up" : e.type === "tumour_volume" ? (e.results ? "tumours · results" : "tumours · set up, not run") : !e.generations.length ? "set up, not run" : e.generations.length + " generation(s)"}${e.intensity ? " · intensity" : ""}</span></button>
+      <span class="st">${!e.initialised ? "not set up" : isTumour(e) ? (e.results ? "tumours · results" : "tumours · set up, not run") : !e.generations.length ? "set up, not run" : e.generations.length + " generation(s)"}${e.intensity ? " · intensity" : ""}</span></button>
       ${e.name === S.exp ? `<div class="secnav">${SECTIONS.map(([g, items]) => {
         const its = items.filter(([, , show]) => !show || show(e));
         return its.length ? `<div class="grp">${esc(g)}</div>` + its.map(([k, t]) => `<a class="${k === S.sec ? "active" : ""} ${!e.initialised && k !== "home" ? "dis" : ""}" ${on("click", function (event) { nav(String(k)) })}>${esc(t)}</a>`).join("") : "";
@@ -495,7 +496,7 @@ function itemValue(sec, f) {
   return $(id).value;
 }
 RENDER.settings = async function (b) {
-  const p = S.project, tum = p.type === "tumour_volume", rd = tum ? "re-measures" : "re-detects";
+  const p = S.project, tum = isTumour(p), rd = tum ? "re-measures" : "re-detects";
   b.innerHTML = `<p class="muted" style="margin-top:0">Every setting of this experiment. Changes are saved to <code>settings.toml</code>; after saving, kerncount tells you which steps to re-run.
       ${tum ? `Settings marked <span class="tag fail">${rd}</span> make the next run segment and measure every stack again (slow); the others reuse the cached segmentations.`
             : `Settings marked <span class="tag fail">${rd}</span> make the next run re-detect every nucleus (slow); the others reuse the detections.`}</p>

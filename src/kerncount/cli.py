@@ -98,7 +98,7 @@ def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False, ety
         had = (prj / "settings.toml").exists()
         template = new_type.settings_template() if new_type is not None else None
         if new_type is not None and template is None:  # a type without its own template: default + type line
-            template = settings.TEMPLATE.replace('type = "cell_count"', f'type = "{new_type.name}"', 1)
+            template = settings.TEMPLATE.replace(f'type = "{experiment_types.DEFAULT}"', f'type = "{new_type.name}"', 1)
         settings.write_template(prj, raw, template)  # backs up an existing settings.toml to _work/backups/ first
         if had:
             print(f"settings.toml reset to the defaults; the previous version is kept in {settings.BACKUPS}/")

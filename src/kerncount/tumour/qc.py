@@ -186,8 +186,8 @@ def without_flagged(table: pd.DataFrame, facs, fams, readout) -> pd.DataFrame:
     for _, r in prim.iterrows():
         a = alt.loc[(r["family"], r["comparison"])] if (r["family"], r["comparison"]) in alt.index else None
         ap = a["p_adj"] if a is not None else NAN
-        changed = (bool((r["p_adj"] < 0.05) != (ap < 0.05)) if np.isfinite(r["p_adj"]) and np.isfinite(ap)
-                   else None)
+        changed = (bool((r["p_adj"] < stats.ALPHA) != (ap < stats.ALPHA))
+                   if np.isfinite(r["p_adj"]) and np.isfinite(ap) else None)
         rows.append({"readout": readout.name, "readout_role": readout.role, "family": r["family"],
                      "family_role": r["family_role"], "comparison": r["comparison"], "estimate": r["estimate"],
                      "ci_low": r["ci_low"], "ci_high": r["ci_high"], "p_adj": r["p_adj"],

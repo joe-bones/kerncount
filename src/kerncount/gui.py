@@ -231,14 +231,15 @@ class State:
 
 
 def experiment_type(prj: Path) -> str:
-    """[experiment] type of a project ("cell_count" when not set up, unreadable or not set)."""
+    """[experiment] type of a project (experiment_types.DEFAULT when not set up, unreadable or not set)."""
     st = prj / "settings.toml"
     if not st.is_file():
-        return "cell_count"
+        return experiment_types.DEFAULT
     try:
-        return str((tomllib.loads(st.read_text(encoding="utf-8")).get("experiment") or {}).get("type") or "cell_count")
+        return str((tomllib.loads(st.read_text(encoding="utf-8")).get("experiment") or {}).get("type")
+                   or experiment_types.DEFAULT)
     except (OSError, ValueError):
-        return "cell_count"
+        return experiment_types.DEFAULT
 
 
 def gen_dirs(root: Path) -> list[str]:
@@ -308,7 +309,7 @@ def project_info(prj: Path) -> dict:
             gens.append({**json.loads(meta.read_text(encoding="utf-8")), "name": g})
         except (OSError, ValueError):
             gens.append(dict(name=g))
-    etype = str(s.get("experiment", {}).get("type") or "cell_count")
+    etype = str(s.get("experiment", {}).get("type") or experiment_types.DEFAULT)
     return dict(
         path=str(prj), settings=s, settings_text=st.read_text(encoding="utf-8") if st.exists() else "", type=etype,
         schema=settings_form.schema(etype), generations=gens,

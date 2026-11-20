@@ -8,7 +8,7 @@
 // review/ images) and /api/tumour/corrections. They never request the layout, the results, the overview or
 // review_key.csv, and show no factor level, session, date or tumour ID.
 
-const isTumour = e => !!e && e.type === "tumour_volume";
+// isTumour (experiment type check) is defined in app.js, which loads first.
 const T = {};
 
 function lockLine(L) {

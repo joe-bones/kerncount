@@ -26,6 +26,7 @@ from scipy import stats as sps
 from .config import Factor
 from .families import Cell, Contrast
 
+ALPHA = 0.05  # significance level of every tumour test and concordance check (Holm-adjusted p < ALPHA)
 CONFOUNDED = "confounded with session folder"  # batch = session_folder (CONTEXT.md: not "imaging session")
 CONFOUNDED_DAY = "confounded with acquisition day"
 CONFOUNDED_BATCH = "confounded with culture batch"

@@ -21,7 +21,7 @@ from scipy import stats as sps
 
 from .config import Factor
 from .families import Cell, Contrast
-from .stats import cell_of, usable
+from .stats import ALPHA, cell_of, usable
 
 Groups = dict[Cell, np.ndarray]  # cell -> log(readout) of its tumours
 
@@ -156,7 +156,6 @@ SENSITIVITY_COLUMNS = ["readout", "readout_role", "family", "family_role", "comp
                        "primary_p_adj", "welch_ci_low", "welch_ci_high", "welch_df", "welch_p", "welch_p_adj",
                        "perm_p", "perm_p_adj", "perm_n", "perm_exact", "perm_seed", "concordant", "concordance",
                        "note"]
-ALPHA = 0.05
 
 
 def _sig(p: float) -> bool:
