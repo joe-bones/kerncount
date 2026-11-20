@@ -162,6 +162,29 @@ def test_legacy_source_order_statistics_then_mask_then_re_implementation(tmp_pat
     assert off["fiji_source"] == "" and math.isnan(off["fiji_main_volume_um3"])
 
 
+def test_fiji_mid_section_readouts_are_re_derived_from_the_cached_fiji_mask(tmp_path, monkeypatch):
+    """Review fix: a change of the mid-section rule / scales re-derives fiji_* sections from the cached main-object
+    mask; the macro (~90 s per real stack) is not re-run."""
+    from kerncount.tumour import fiji, legacy
+
+    t = SynthTumour(semi_axes_um=(12, 20, 20), voxel_um=(2.0, 1.0, 1.0), shape=(24, 96, 96), plateau=150, seed=3)
+    write_ome(tmp_path / "raw" / "t.ome.tiff", t.stack(), t.voxel_um)
+    layout = pd.DataFrame({"tumour_id": ["a"], "file": ["t.ome.tiff"], "include": ["yes"], "legacy_stats": [""],
+                           "legacy_mask": [""]})
+    s = {"project": {"raw_dir": str(tmp_path / "raw")}, "tumour": {"fiji_min_voxels": 1000}}
+    first = legacy.measure(tmp_path, layout, s)
+    assert first["fiji_mid_section_um"].iloc[0] == pytest.approx(20.0)
+
+    def no_macro(*a, **k):
+        raise AssertionError("the Fiji macro was re-run although its mask is cached")
+
+    monkeypatch.setattr(fiji, "macro_mask", no_macro)
+    thin = legacy.measure(tmp_path, layout, {**s, "tumour": {"fiji_min_voxels": 1000, "mid_section_um": 4.0}})
+    assert thin["fiji_mid_section_um"].iloc[0] == pytest.approx(4.0)
+    assert thin["fiji_main_volume_um3"].iloc[0] == first["fiji_main_volume_um3"].iloc[0]
+    assert thin["fiji_source"].iloc[0] == "re-implementation"
+
+
 # ---------------------------------------------------------------- seam 3: threshold scale -> threshold, sweep
 
 

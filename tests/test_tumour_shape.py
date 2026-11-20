@@ -78,16 +78,59 @@ def test_pixel_counting_overestimates_but_the_estimator_does_not():
 
 
 def test_mid_section_is_centred_on_the_largest_cross_section_with_fixed_physical_thickness():
+    """Review fix (ADR 0002 amendment): exactly `thickness_um` for every z-step. Layer k spans its centre +- half a
+    z-step; the outermost layers count with the fraction of their extent inside the mid-section."""
     from kerncount.tumour import shape
 
     areas = np.array([0, 1, 3, 6, 9, 10, 9.5, 7, 4, 2, 1, 0, 0, 0, 0, 0], float)
     ms = shape.mid_section(areas, z_um=2.36, thickness_um=20.0)
-    assert (ms.centre, ms.first, ms.last, ms.fits) == (5, 1, 9, True)  # +-4 layers = +-9.4 µm
+    assert (ms.centre, ms.first, ms.last, ms.fits) == (5, 1, 9, True)  # +-10 µm = +-4.24 layers
+    w = ms.weights
+    assert w[0] == pytest.approx((10 - 3.5 * 2.36) / 2.36) and w[-1] == pytest.approx(w[0])  # 0.737
+    assert np.all(w[1:-1] == 1.0)
+    assert ms.thickness_um == pytest.approx(20.0)
     assert shape.mid_section(np.array([0, 5, 5, 5, 0.0]), 2.0, 2.0).centre == 2  # plateau: its middle
-    ms = shape.mid_section(areas, z_um=1.75, thickness_um=20.0)
-    assert (ms.first, ms.last, ms.fits) == (0, 10, True)  # +-5 layers = +-8.75 µm
+    ms = shape.mid_section(areas, z_um=1.75, thickness_um=16.0)
+    assert (ms.first, ms.last, ms.fits) == (0, 10, True)  # +-8 µm = +-4.57 layers
+    assert ms.thickness_um == pytest.approx(16.0)
+    ms = shape.mid_section(areas, z_um=2.0, thickness_um=20.0)
+    assert (ms.first, ms.last, ms.fits) == (0, 10, True)  # +-5 layers, the outer two at half weight
+    assert ms.weights[0] == pytest.approx(0.5) and ms.thickness_um == pytest.approx(20.0)
     ms = shape.mid_section(areas, z_um=1.0, thickness_um=20.0)
     assert (ms.first, ms.last, ms.fits) == (0, 15, False)  # needs layers -5..15: clipped and flagged
+    assert ms.thickness_um == pytest.approx(15.5)  # what was actually averaged over: layers 0..15 + half of 15
+
+
+def _paraboloid_labels(vz: float, a0_um: float = 150.0, l_um: float = 30.0, nz: int = 41) -> np.ndarray:
+    """Main mass whose cross-section is a disc of area pi a0² (1 - (z/L)²), widest in the middle layer."""
+    n = int(2 * a0_um / PX) + 10
+    c = n * PX / 2
+    y, x = (np.mgrid[:n, :n] + 0.5) * PX - c
+    rho2 = y * y + x * x
+    z = (np.arange(nz) - nz // 2) * vz
+    r2 = a0_um ** 2 * np.clip(1 - (z / l_um) ** 2, 0, None)
+    return np.stack([rho2 <= v for v in r2]).astype(np.uint8)
+
+
+def test_mid_section_readouts_are_the_same_for_every_z_step():
+    """Review fix: the real data have 1.75 µm (all WT) and 2.36 µm (most KO) z-steps. The same object must give the
+    same mid-section mean whatever the z-step: exactly 20 µm, recorded per tumour."""
+    from kerncount.tumour import shape
+
+    out = {vz: shape.readouts(_paraboloid_labels(vz), (vz, PX, PX)) for vz in (1.75, 2.0, 2.36)}
+    exact = math.pi * 150.0 ** 2 * (1 - 20.0 ** 2 / (12 * 30.0 ** 2))  # mean of the area over z = -10..10 µm
+    for vz, r in out.items():
+        assert r["mid_section_um"] == pytest.approx(20.0), vz
+        assert r["cross_sectional_area_um2"] == pytest.approx(exact, rel=0.004), vz
+    a = [r["cross_sectional_area_um2"] for r in out.values()]
+    p = [r["perimeter_um"] for r in out.values()]
+    assert max(a) / min(a) - 1 < 0.004 and max(p) / min(p) - 1 < 0.004
+    # a z-invariant object: identical values (up to rounding) for every z-step
+    cyl = {vz: shape.readouts(np.repeat(_paraboloid_labels(vz, nz=1), 30, axis=0), (vz, PX, PX))
+           for vz in (1.75, 2.36)}
+    assert cyl[1.75]["cross_sectional_area_um2"] == pytest.approx(cyl[2.36]["cross_sectional_area_um2"], rel=1e-9)
+    assert cyl[1.75]["perimeter_um"] == pytest.approx(cyl[2.36]["perimeter_um"], rel=1e-9)
+    assert cyl[1.75]["slab_volume_um3"] == pytest.approx(cyl[2.36]["slab_volume_um3"], rel=1e-9)
 
 
 # ---------------------------------------------------------------- seam 3: segment -> confirmatory readouts
@@ -125,6 +168,7 @@ def test_cross_sectional_area_and_perimeter_match_the_analytic_mid_section_of_an
     centre = int(31.0 // VOX[0])  # layer holding the ellipsoid's centre
     assert abs(r["mid_section_centre_layer"] - (centre + 1)) <= 1  # 1-based in the table
     assert r["mid_section_layers"] == 9 and r["mid_section_fits"] == "yes"
+    assert r["mid_section_um"] == pytest.approx(20.0)
     area, perim = _truth(t, r["mid_section_centre_layer"] - 1, 4)
     assert r["cross_sectional_area_um2"] == pytest.approx(area, rel=READOUT_TOL)
     assert r["perimeter_um"] == pytest.approx(perim, rel=READOUT_TOL)
@@ -149,7 +193,8 @@ def test_confirmatory_readouts_do_not_depend_on_the_z_step():
     for vz, nz in ((1.75, 54), (2.36, 40)):
         t = SynthTumour(semi_axes_um=SEMI, voxel_um=(vz, PX, PX), shape=(nz, 600, 460), plateau=90)
         out[vz] = _seg(t).readouts
-    assert out[1.75]["mid_section_layers"] == 11 and out[2.36]["mid_section_layers"] == 9
+    assert out[1.75]["mid_section_layers"] == 13 and out[2.36]["mid_section_layers"] == 9  # outer ones in part
+    assert out[1.75]["mid_section_um"] == pytest.approx(20.0) and out[2.36]["mid_section_um"] == pytest.approx(20.0)
     for k in ("cross_sectional_area_um2", "perimeter_um"):
         assert out[1.75][k] == pytest.approx(out[2.36][k], rel=0.01), k
 
@@ -170,7 +215,7 @@ def test_mid_section_that_does_not_fit_in_the_stack_is_clipped_and_reported():
     t = SynthTumour(semi_axes_um=SEMI, centre_um=(4.0, 190.0, 140.0), voxel_um=VOX, shape=SHAPE, plateau=90)
     r = _seg(t).readouts
     assert r["mid_section_fits"] == "no" and r["mid_section_first_layer"] == 1
-    assert r["mid_section_layers"] < 9
+    assert r["mid_section_layers"] < 9 and r["mid_section_um"] < 20.0
 
 
 # ---------------------------------------------------------------- seam 4: exploratory shape readouts (2D, mid-section)
@@ -228,7 +273,7 @@ def test_footprint_slab_volume_burden_and_invasion_from_labels():
     r = shape.readouts(lab, vox, shape.ShapeOptions(mid_section_um=10, slab_um=20))
     assert r["footprint_area_um2"] == pytest.approx(40 * 30)
     assert r["cross_sectional_area_um2"] == pytest.approx(40 * 30)
-    assert r["slab_volume_um3"] == pytest.approx(11 * 2.0 * 40 * 30)  # +-5 layers of 2 µm around the centre layer
+    assert r["slab_volume_um3"] == pytest.approx(20 * 40 * 30)  # exactly 20 µm deep (outer layers in half)
     main, sat = 20 * 40 * 30 * 2.0, 100 * 2.0
     assert r["tumour_burden_um3"] == pytest.approx(main + sat)
     assert r["invasion_fraction"] == pytest.approx(sat / (main + sat))
@@ -269,10 +314,12 @@ def test_fiji_mid_section_area_and_perimeter_come_from_the_labs_mask(tmp_path):
 
     r = legacy.tumour_readouts(stack, None, tmp_path / "tf.tif", min_voxels=1000)
 
-    used = radii[10:19]  # 9 layers = 20 µm at 2.36 µm
+    used = radii[10:19]  # 9 layers = 20 µm at 2.36 µm: layers 10..18, the outer two at 74 %
+    w = np.array([1.0] * 9)
+    w[[0, -1]] = (10 - 3.5 * 2.36) / 2.36
     assert r["fiji_mid_section_centre_layer"] == 15 and r["fiji_mid_section_fits"] == "yes"
-    assert r["fiji_cross_sectional_area_um2"] == pytest.approx(np.mean(np.pi * used ** 2), rel=AREA_TOL)
-    assert r["fiji_perimeter_um"] == pytest.approx(np.mean(2 * np.pi * used), rel=PERIMETER_TOL)
+    assert r["fiji_cross_sectional_area_um2"] == pytest.approx(np.average(np.pi * used ** 2, weights=w), rel=AREA_TOL)
+    assert r["fiji_perimeter_um"] == pytest.approx(np.average(2 * np.pi * used, weights=w), rel=PERIMETER_TOL)
     assert r["fiji_section_source"] == "Fiji mask"
 
 
@@ -288,13 +335,15 @@ def test_cached_measurements_from_before_the_readouts_or_with_other_scales_are_r
     write_ome(tmp_path / "raw" / "t.ome.tiff", t.stack(), t.voxel_um)
     layout = pd.DataFrame({"tumour_id": ["a"], "file": ["t.ome.tiff"], "include": ["yes"]})
     s = {"project": {"raw_dir": str(tmp_path / "raw")}, "tumour": {}}
-    monkeypatch.setattr(measure, "CACHE_VERSION", 1)  # a cache written before ticket 05 ...
+    monkeypatch.setattr(measure, "CACHE_VERSION", 1)  # a cache written before ticket 05 (old single key) ...
     old = measure.measure(tmp_path, layout, s)
     meta = next((tmp_path / measure.WORK).glob("*.json"))
     import json
 
     j = json.loads(meta.read_text())
     j["readouts"] = {k: v for k, v in j["readouts"].items() if k not in ("cross_sectional_area_um2", "perimeter_um")}
+    j["key"] = measure._legacy_key(tmp_path / "raw" / "t.ome.tiff", measure.tumour_settings(s))
+    del j["labels_key"]
     meta.write_text(json.dumps(j))  # ... lacked the new columns
     monkeypatch.undo()
     new = measure.measure(tmp_path, layout, s)
@@ -303,6 +352,48 @@ def test_cached_measurements_from_before_the_readouts_or_with_other_scales_are_r
     thin = measure.measure(tmp_path, layout, {**s, "tumour": {"mid_section_um": 5.0}})
     assert thin["mid_section_layers"].iloc[0] == 3 and new["mid_section_layers"].iloc[0] == 9
     assert old["main_mass_volume_um3"].iloc[0] == new["main_mass_volume_um3"].iloc[0]
+
+
+def test_a_change_of_the_mid_section_rule_or_scales_re_measures_from_the_cached_labels(tmp_path, monkeypatch):
+    """Review fix: the readouts are re-derived from the cached label image (no re-segmentation) when only the
+    mid-section / outline settings or the readout definitions change - also for caches written before the fix."""
+    import hashlib
+    import json
+
+    import pandas as pd
+
+    from kerncount.tumour import measure, segment
+
+    t = SynthTumour(semi_axes_um=(20, 50, 40), voxel_um=(2.36, 1.25, 1.25), shape=(30, 128, 128), plateau=90)
+    write_ome(tmp_path / "raw" / "t.ome.tiff", t.stack(), t.voxel_um)
+    layout = pd.DataFrame({"tumour_id": ["a"], "file": ["t.ome.tiff"], "include": ["yes"]})
+    s = {"project": {"raw_dir": str(tmp_path / "raw")}, "tumour": {}}
+    first = measure.measure(tmp_path, layout, s)
+    meta = next((tmp_path / measure.WORK).glob("*.json"))
+    # a cache as written before the fix: old key formula (segmentation + shape settings, version 2), no mid_section_um
+    ts = measure.tumour_settings(s)
+    src = tmp_path / "raw" / "t.ome.tiff"
+    st = src.stat()
+    old_keys = ("smooth_sigma_um", "threshold", "min_object_um3", *measure.SHAPE_KEYS)
+    old_key = hashlib.sha1(json.dumps({"seg": {k: ts[k] for k in old_keys}, "file": [src.name, st.st_size,
+                                       st.st_mtime_ns], "version": 2}, sort_keys=True, default=str).encode()
+                           ).hexdigest()[:16]
+    j = json.loads(meta.read_text())
+    meta.write_text(json.dumps({"tumour_id": "a", "file": "t.ome.tiff", "key": old_key,
+                                "readouts": {k: v for k, v in j["readouts"].items() if k != "mid_section_um"}}))
+
+    def no_segmentation(*a, **k):
+        raise AssertionError("re-segmented although the labels are cached")
+
+    monkeypatch.setattr(segment, "measure_file", no_segmentation)
+    monkeypatch.setattr(measure, "measure_file", no_segmentation)
+    again = measure.measure(tmp_path, layout, s)
+    assert again["mid_section_um"].iloc[0] == pytest.approx(20.0)
+    pd.testing.assert_frame_equal(again[first.columns], first)
+    thin = measure.measure(tmp_path, layout, {**s, "tumour": {"mid_section_um": 5.0}})
+    assert thin["mid_section_um"].iloc[0] == pytest.approx(5.0)
+    assert thin["main_mass_volume_um3"].iloc[0] == first["main_mass_volume_um3"].iloc[0]
+    assert thin["threshold"].iloc[0] == first["threshold"].iloc[0]
 
 
 # ---------------------------------------------------------------- seam 7: analyse -> shape panel

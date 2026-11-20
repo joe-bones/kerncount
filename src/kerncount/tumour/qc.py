@@ -8,7 +8,8 @@ Per tumour, from its (possibly corrected) labels — label 1 = main mass — and
   must lie inside the imaged layers. z-extent beyond the stack alone is NOT a flag: every tumour extends beyond it.
 - **truncated** = edge contact or a mid-section that does not fit. Truncated tumours are `flagged`: kept in the
   primary analysis, drawn hollow, dropped in the sensitivity analysis.
-- **saturation**: share of main-mass voxels in the mid-section at the top grey value; a warning above
+- **saturation**: share of main-mass voxels in the mid-section at the top grey value (layers weighted like the
+  readouts: the outermost layers by the fraction of their extent inside the exact mid-section thickness); a warning above
   `[tumour] qc_saturation_warn` (default 40 %: the intermedians threshold is protected up to ~50 %). Not a flag.
 """
 from __future__ import annotations
@@ -31,13 +32,13 @@ def _shape_options(settings: dict):
     return ShapeOptions.from_settings(tumour_settings(settings))
 
 
-def mid_section(area_per_layer: np.ndarray, voxel_z_um: float, settings: dict) -> tuple[int, int, int, bool]:
-    """(centre, first, last, fits), 0-based and clipped to the stack: ticket 05's mid-section rule
-    (`shape.mid_section`, [tumour] mid_section_um), so QC and the readouts always use the same layers."""
+def mid_section(area_per_layer: np.ndarray, voxel_z_um: float, settings: dict):
+    """The mid-section (`shape.MidSection`: centre, first, last, fits, per-layer weights), 0-based and clipped to the
+    stack: ticket 05's rule (`shape.mid_section`, [tumour] mid_section_um), so QC and the readouts always use the
+    same layers with the same weights (exact thickness, outermost layers in part)."""
     from .shape import mid_section as rule
 
-    ms = rule(area_per_layer, voxel_z_um, _shape_options(settings).mid_section_um)
-    return ms.centre, ms.first, ms.last, bool(ms.fits)
+    return rule(area_per_layer, voxel_z_um, _shape_options(settings).mid_section_um)
 
 
 def edge_outline_frac(mask: np.ndarray) -> float:
@@ -86,16 +87,20 @@ def assess(labels: np.ndarray, stack: np.ndarray, voxel_um: tuple[float, float, 
     frac = edge_outline_frac(main.any(axis=0)) if contact else 0.0
     sl = ndi.find_objects(main.any(axis=0).astype(np.uint8))[0]  # areas as ticket 05 measures them (holes filled)
     area = np.array([section_area(m[sl], (voxel_um[1], voxel_um[2])) if m.any() else 0.0 for m in main])
-    centre, first, last, fits = mid_section(area, voxel_um[0], settings)
+    ms = mid_section(area, voxel_um[0], settings)
+    centre, first, last, fits = ms.centre, ms.first, ms.last, ms.fits
     mid = main[first:last + 1]
+    w = ms.weights
     if contact:
-        fr = [edge_outline_frac(m) for m in mid if m.any()]
-        frac_mid = float(np.mean(fr)) if fr else NAN
+        fr = [(wk, edge_outline_frac(m)) for wk, m in zip(w, mid) if m.any()]
+        frac_mid = float(np.average([f for _, f in fr], weights=[wk for wk, _ in fr])) if fr else NAN
     else:
         frac_mid = 0.0
     top = np.iinfo(stack.dtype).max if np.issubdtype(stack.dtype, np.integer) else float(stack.max())
-    n_mid = int(mid.sum())
-    sat = int(np.count_nonzero(stack[first:last + 1][mid] >= top)) / n_mid if n_mid else NAN
+    n_mid = np.array([np.count_nonzero(m) for m in mid], float)
+    n_sat = np.array([np.count_nonzero(s[m] >= top) for s, m in zip(stack[first:last + 1], mid)], float)
+    tot = float(np.dot(w, n_mid))
+    sat = float(np.dot(w, n_sat)) / tot if tot > 0 else NAN
     sat_warn = bool(np.isfinite(sat) and sat > warn)
     flags = []
     if contact:
@@ -382,7 +387,8 @@ def analyse(out, table: pd.DataFrame, settings: dict, facs, fams, report, lock_h
 
 # ---------------------------------------------------------------- per-tumour pass: QC, corrections, review sheets
 
-QC_VERSION = 2  # 2: edge-contact wording "<1%" for a few touching pixels (ticket 11)
+QC_VERSION = 3  # 2: edge-contact wording "<1%" for a few touching pixels (ticket 11); 3: exact-thickness
+# mid-section (outermost layers weighted, review fix 2026-11-20)
 
 
 def measure(project_dir, layout: pd.DataFrame, settings: dict, measurements: pd.DataFrame, corr,

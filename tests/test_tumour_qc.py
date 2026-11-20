@@ -94,6 +94,21 @@ def test_saturation_of_the_main_mass_in_the_mid_section_is_reported_with_a_warni
     assert q["saturation_warning"] == "no"
 
 
+@pytest.mark.parametrize("vz, outer", [(2.36, (10 - 3.5 * 2.36) / 2.36), (1.75, (10 - 5.5 * 1.75) / 1.75)])
+def test_mid_section_saturation_weights_the_outermost_layers_like_the_readouts(vz, outer):
+    """Review fix: QC on the mid-section uses the same exact-thickness layer weights as the readouts."""
+    from kerncount.tumour import qc
+
+    shape = (40, 80, 80)
+    main = np.zeros(shape, bool)
+    main[:, 20:60, 20:60] = True  # z-invariant: all layers tie, centre = middle layer 20
+    stack = np.full(shape, 100, np.uint8)
+    half = int(10 / vz + 0.5)  # outermost layer with a weight > 0
+    stack[20 + half] = 255
+    q = qc.tumour_qc(_labels(main), stack, (vz, 0.6239, 0.6239), {"tumour": {"mid_section_um": 20.0}})
+    assert q["saturated_frac_mid_section"] == pytest.approx(outer / (20 / vz), abs=1e-4)
+
+
 # ---------------------------------------------------------------- seam 2: group plots draw flagged tumours hollow
 
 def _facs():

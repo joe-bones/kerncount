@@ -16,7 +16,7 @@ SOURCES = {"culture_batch": ("culture_batch", NO_BATCH), "session_folder": ("ima
            "acquisition_day": ("acquisition_day", NO_DAY)}
 IDENTITY = ["section", "hemisphere", "tumour", "file"]
 READOUTS = ["cross_sectional_area_mm2", "perimeter_mm", "mid_section_centre_layer", "mid_section_layers",
-            "mid_section_fits", "footprint_area_mm2", "slab_volume_mm3", "main_mass_volume_um3",
+            "mid_section_um", "mid_section_fits", "footprint_area_mm2", "slab_volume_mm3", "main_mass_volume_um3",
             "main_mass_volume_mm3", "main_mass_surface_mm2", "tumour_burden_mm3", "invasion_fraction", "n_satellites",
             "elongation", "solidity", "edge_roughness", "circularity"]
 # Derived columns: (new column, measured column, divisor) -- mm / mm² / mm³ for readable plots and statistics.

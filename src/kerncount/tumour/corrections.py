@@ -127,9 +127,7 @@ def main_mass_readouts(labels: np.ndarray, stack: np.ndarray, voxel_um: tuple[fl
     return {
         "main_mass_voxels": n, "main_mass_volume_um3": round(n * vz * vy * vx, 3),
         "saturated_frac_main_mass": int(np.count_nonzero(stack[main] >= top)) / n if n else float("nan"),
-        **shape.readouts(labels, voxel_um, opts),
-        "main_mass_surface_um2": round(shape.surface_area(main, voxel_um, opts.surface_grid_um,
-                                                          opts.outline_smooth_um), 3),
+        **shape.label_readouts(labels, voxel_um, opts),
     }
 
 

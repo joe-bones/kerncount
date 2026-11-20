@@ -17,15 +17,20 @@ centred on the layer where the main mass has its largest cross-section (docs/tum
 - Edge roughness = outline length at `roughness_fine_um` (2 µm) / at `roughness_smooth_um` (20 µm): the fine ragged
   border the confirmatory perimeter deliberately smooths away.
 
-Mid-section: layers whose centres lie within +-thickness/2 of the centre layer (so 20 µm = 9 layers at 2.36 µm z-step,
-11 at 1.75 or 2.0 µm). When it does not fit inside the stack it is clipped and `mid_section_fits` = "no".
+Mid-section: exactly `mid_section_um` thick for every z-step (review fix 2026-11-20; the real data mix 1.75, 2.0 and
+2.36 µm). Layer k represents the slab from its centre - z/2 to its centre + z/2; the mid-section is the interval of
++-thickness/2 around the centre of the layer of largest cross-section, and each layer counts with the fraction of its
+extent inside that interval (`MidSection.weights`: 1 inside, a fraction for the two outermost layers). Readouts are
+weighted means, so 20 µm is 20 µm at 1.75 µm (13 layers, the outer two at 21 %) as at 2.36 µm (9 layers, the outer two
+at 74 %). The slab volume uses the same rule with `slab_um`. When the interval does not fit inside the stack it is
+clipped and `mid_section_fits` = "no"; `mid_section_um` records the thickness actually averaged over.
 
 Pure numpy / scipy / scikit-image; nothing here knows about files or settings beyond `ShapeOptions`.
 """
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy import ndimage as ndi
@@ -55,13 +60,37 @@ KEYS = tuple(ShapeOptions.__dataclass_fields__)
 @dataclass(frozen=True)
 class MidSection:
     centre: int  # 0-based layer of the largest main-mass cross-section
-    first: int  # 0-based, inclusive (clipped to the stack)
+    first: int  # 0-based, inclusive (clipped to the stack): first layer with a weight > 0
     last: int
     fits: bool  # the full thickness lies inside the imaged layers
+    weights: np.ndarray = field(default_factory=lambda: np.zeros(0))  # per layer first..last, in (0, 1]
+    z_um: float = 1.0
 
     @property
     def layers(self) -> range:
         return range(self.first, self.last + 1)
+
+    @property
+    def thickness_um(self) -> float:
+        """Thickness actually covered (= the set thickness unless clipped by the stack)."""
+        return float(np.sum(self.weights)) * self.z_um
+
+    def weight(self, k: int) -> float:
+        return float(self.weights[k - self.first]) if self.first <= k <= self.last else 0.0
+
+
+def layer_weights(n_layers: int, centre: int, z_um: float, thickness_um: float) -> tuple[int, int, np.ndarray, bool]:
+    """(first, last, weights, fits): fraction of each layer's extent (centre +- z/2) inside centre +- thickness/2."""
+    eps = 1e-9
+    lo, hi = centre * z_um - thickness_um / 2, centre * z_um + thickness_um / 2
+    k = np.arange(n_layers)
+    w = np.clip(np.minimum((k + 0.5) * z_um, hi) - np.maximum((k - 0.5) * z_um, lo), 0, None) / z_um
+    w[w < eps] = 0.0
+    w[w > 1 - eps] = 1.0
+    nz = np.flatnonzero(w)
+    first, last = (int(nz[0]), int(nz[-1])) if len(nz) else (centre, centre)
+    fits = lo >= -0.5 * z_um - eps and hi <= (n_layers - 0.5) * z_um + eps
+    return first, last, w[first:last + 1], bool(fits)
 
 
 def mid_section(areas: np.ndarray, z_um: float, thickness_um: float) -> MidSection:
@@ -69,9 +98,15 @@ def mid_section(areas: np.ndarray, z_um: float, thickness_um: float) -> MidSecti
     a = np.asarray(areas, float)
     ties = np.flatnonzero(a == a.max())
     k = int(ties[len(ties) // 2])
-    half = int(math.floor(thickness_um / 2 / z_um + 1e-9))
-    lo, hi = k - half, k + half
-    return MidSection(k, max(lo, 0), min(hi, len(a) - 1), lo >= 0 and hi <= len(a) - 1)
+    first, last, w, fits = layer_weights(len(a), k, z_um, thickness_um)
+    return MidSection(k, first, last, fits, w, z_um)
+
+
+def weighted_mean(values: dict[int, float], ms: MidSection) -> float:
+    """Mean of per-layer values over the mid-section, each layer weighted by `ms.weight` (missing layers skipped)."""
+    pairs = [(ms.weight(k), v) for k, v in values.items() if ms.weight(k) > 0 and np.isfinite(v)]
+    tot = sum(w for w, _ in pairs)
+    return sum(w * v for w, v in pairs) / tot if tot > 0 else NAN
 
 
 def _section(mask2d: np.ndarray) -> np.ndarray:
@@ -166,25 +201,25 @@ def readouts(labels: np.ndarray, voxel_um: tuple[float, float, float], opts: Sha
     for k, s in sections.items():
         areas[k] = np.count_nonzero(s) * vy * vx
     ms = mid_section(areas, vz, opts.mid_section_um)
-    per = [section_shape(sections[k], px, opts) for k in ms.layers if k in sections]
-    zero = sum(1 for k in ms.layers if k not in sections)
+    per = {k: section_shape(sections[k], px, opts) for k in ms.layers if k in sections}
     mean = {}
-    for key in per[0]:  # layers of the mid-section without main mass count as area / perimeter 0
-        vals = [p[key] for p in per] + ([0.0] * zero if key in ("area", "perimeter") else [])
-        vals = [v for v in vals if np.isfinite(v)]
-        mean[key] = float(np.mean(vals)) if vals else NAN
-    half_slab = int(math.floor(opts.slab_um / 2 / vz + 1e-9))
-    s0, s1 = ms.centre - half_slab, ms.centre + half_slab
+    for key in next(iter(per.values())):  # layers of the mid-section without main mass count as area / perimeter 0
+        vals = {k: p[key] for k, p in per.items()}
+        if key in ("area", "perimeter"):
+            vals.update({k: 0.0 for k in ms.layers if k not in per})
+        mean[key] = weighted_mean(vals, ms)
+    s0, s1, sw, slab_fits = layer_weights(nz, ms.centre, vz, opts.slab_um)
+    slab_vox = float(np.dot(sw, crop[s0:s1 + 1].sum(axis=(1, 2))))
     main_vox = int(np.count_nonzero(crop))
     burden_vox = int(np.count_nonzero(labels))
     out = {
         "mid_section_centre_layer": ms.centre + 1, "mid_section_first_layer": ms.first + 1,
         "mid_section_last_layer": ms.last + 1, "mid_section_layers": len(ms.layers),
-        "mid_section_fits": "yes" if ms.fits else "no",
+        "mid_section_um": round(ms.thickness_um, 4), "mid_section_fits": "yes" if ms.fits else "no",
         "cross_sectional_area_um2": round(mean["area"], 3), "perimeter_um": round(mean["perimeter"], 3),
         "footprint_area_um2": round(float(np.count_nonzero(_fill_2d(crop.any(axis=0)))) * vy * vx, 3),
-        "slab_volume_um3": round(float(np.count_nonzero(crop[max(s0, 0):s1 + 1])) * vz * vy * vx, 3),
-        "slab_fits": "yes" if s0 >= 0 and s1 <= nz - 1 else "no",
+        "slab_volume_um3": round(slab_vox * vz * vy * vx, 3),
+        "slab_fits": "yes" if slab_fits else "no",
         "tumour_burden_um3": round(burden_vox * vz * vy * vx, 3),
         "invasion_fraction": (burden_vox - main_vox) / burden_vox,
         "elongation": mean["elongation"], "solidity": mean["solidity"],
@@ -193,9 +228,19 @@ def readouts(labels: np.ndarray, voxel_um: tuple[float, float, float], opts: Sha
     return {f"{prefix}{k}": v for k, v in out.items()}
 
 
+def label_readouts(labels: np.ndarray, voxel_um: tuple[float, float, float], opts: ShapeOptions | None = None
+                   ) -> dict:
+    """Every readout that depends only on the label image and the readout scales (`readouts` + the exploratory mesh
+    surface): what the measurement cache re-derives when only the scales or definitions change."""
+    opts = opts or ShapeOptions()
+    return {**readouts(labels, voxel_um, opts),
+            "main_mass_surface_um2": round(surface_area(labels == 1, voxel_um, opts.surface_grid_um,
+                                                        opts.outline_smooth_um), 3)}
+
+
 def _empty() -> dict:
     return {"mid_section_centre_layer": NAN, "mid_section_first_layer": NAN, "mid_section_last_layer": NAN,
-            "mid_section_layers": 0, "mid_section_fits": "", "cross_sectional_area_um2": NAN, "perimeter_um": NAN,
+            "mid_section_layers": 0, "mid_section_um": NAN, "mid_section_fits": "", "cross_sectional_area_um2": NAN, "perimeter_um": NAN,
             "footprint_area_um2": NAN, "slab_volume_um3": NAN, "slab_fits": "", "tumour_burden_um3": NAN,
             "invasion_fraction": NAN, "elongation": NAN, "solidity": NAN, "edge_roughness": NAN,
             "circularity": NAN}
