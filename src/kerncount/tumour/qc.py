@@ -99,7 +99,8 @@ def assess(labels: np.ndarray, stack: np.ndarray, voxel_um: tuple[float, float, 
     sat_warn = bool(np.isfinite(sat) and sat > warn)
     flags = []
     if contact:
-        flags.append(f"main mass touches the image edge ({frac:.0%} of its outline)")
+        share = "<1%" if frac < 0.005 else f"{frac:.0%}"  # a few touching pixels must not read as "0%"
+        flags.append(f"main mass touches the image edge ({share} of its outline)")
     if not fits:
         flags.append(f"mid-section does not fit in the {len(area)} imaged layers")
     if sat_warn:
@@ -380,7 +381,7 @@ def analyse(out, table: pd.DataFrame, settings: dict, facs, fams, report, lock_h
 
 # ---------------------------------------------------------------- per-tumour pass: QC, corrections, review sheets
 
-QC_VERSION = 1
+QC_VERSION = 2  # 2: edge-contact wording "<1%" for a few touching pixels (ticket 11)
 
 
 def measure(project_dir, layout: pd.DataFrame, settings: dict, measurements: pd.DataFrame, corr,

@@ -54,6 +54,16 @@ def test_a_tumour_cut_by_the_image_edge_is_flagged_with_the_fraction_of_its_outl
     assert "image edge" in q["qc_flags"]
 
 
+def test_a_tumour_grazing_the_image_edge_is_flagged_without_claiming_0_percent_of_its_outline():
+    """Real data (cntrl -clodro n1A): contact over a few pixels rounds to 0 % — the flag must not read '0%'."""
+    shape = (30, 200, 200)
+    main = _ellipsoid(shape, (15, 100, 139), (100, 60, 60))  # reaches the last column at one point
+    assert main[:, :, -1].any()
+    q = _qc(_labels(main), mid_section_um=20.0)
+    assert q["edge_contact"] == "yes" and q["edge_outline_frac"] < 0.005
+    assert "(<1% of its outline)" in q["qc_flags"] and "(0%" not in q["qc_flags"]
+
+
 def test_a_mid_section_that_does_not_fit_in_the_imaged_layers_is_flagged():
     shape = (30, 200, 200)
     main = _ellipsoid(shape, (2, 100, 100), (25, 60, 60))  # largest cross-section in layer 3
