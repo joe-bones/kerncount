@@ -320,6 +320,11 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
                                      "first run (every stack segmented once more; cached afterwards)."),
         "sweep_scales": dict(kind="list", numbers=True, label="Threshold sweep scales",
                              help="Factors applied to each tumour's automatic threshold, e.g. 0.8, 0.9, 1.1, 1.2."),
+        "shared_threshold_check": dict(kind="bool", label="Shared-threshold robustness check",
+                                       help="Re-segment every tumour at ONE threshold (median of the per-tumour "
+                                            "thresholds) and report whether a confirmatory effect depends on the "
+                                            "per-tumour adaptation, i.e. on brightness (ADR 0002). Only run when the "
+                                            "acquisition settings are identical. Slow on the first run."),
         "qc_saturation_warn": dict(kind="float", min=0, max=1, label="Saturation warning above (share)",
                                    help="A tumour gets a warning (never a flag) when more of its mid-section main mass "
                                         "is saturated (255) than this; the threshold rule is protected up to ~0.5."),

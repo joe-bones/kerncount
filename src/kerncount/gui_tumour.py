@@ -48,6 +48,7 @@ PLOT_KINDS = [
     ("residuals", "Diagnostics", "Residuals by group and QQ plot of the log-scale model."),
 ]
 RESULT_TABLES = ["tumours.csv", "excluded_tumours.csv", "flow.csv", "concordance.csv", "threshold_sweep.csv",
+                 "acquisition.csv", "shared_threshold.csv",
                  "corrections_used.csv", "lock_log.csv"]
 
 
