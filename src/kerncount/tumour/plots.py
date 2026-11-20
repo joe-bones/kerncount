@@ -55,6 +55,14 @@ def _save(fig, out: Path) -> Path:
     return out.with_suffix(".png")
 
 
+def _wrap(text: str, inches: float, fontsize: float) -> str:
+    """Wrap `text` to lines that fit `inches` at `fontsize` (average glyph ~0.55 em wide)."""
+    import textwrap
+
+    width = max(int(inches * 72 / (0.55 * fontsize)), 12)
+    return "\n".join(textwrap.wrap(text, width)) if len(text) > width else text
+
+
 def group_plot(table: pd.DataFrame, facs: list[Factor], value: str, label: str, out: Path, log: bool = True,
                ci: dict[GroupKey, tuple[float, float, float]] | None = None, marks: dict[GroupKey, str] | None = None,
                ref_line: float | None = None, suptitle: str | None = None, hollow: str | None = None) -> Path:
@@ -121,12 +129,12 @@ def group_plot(table: pd.DataFrame, facs: list[Factor], value: str, label: str, 
                 ax.spines[side].set_visible(False)
             title = " · ".join(t for t in (r if len(rows) > 1 or row_f else None, p) if t)
             ax.set_title(title, fontsize=9, color=INK)
-            if j == 0:
-                ax.set_ylabel(label)
+            if j == 0:  # wrapped to the panel height: long normalised labels were cut off (ticket 11)
+                ax.set_ylabel(_wrap(label, 3.0 * 0.85, 10))
     title = suptitle or f"{label}: every tumour one dot, line = geometric mean"
     if bool(is_hollow.any()):
         title += f"; hollow = flagged by QC ({int(is_hollow.sum())}: truncated, kept in the analysis)"
-    fig.suptitle(title, fontsize=9, color=MUTED)
+    fig.suptitle(_wrap(title, fig.get_figwidth() * 0.95, 9), fontsize=9, color=MUTED)
     fig.tight_layout()
     return _save(fig, out)
 
@@ -238,7 +246,8 @@ def interaction_plot(means: pd.DataFrame, facs: list[Factor], label: str, out: P
             ax.set_ylabel(f"{label}\nmodel mean, 95 % CI")
         if any(p is not None for p in panels):
             ax.legend(fontsize=7, frameon=False)
-    fig.suptitle(f"{label}: interaction plot (parallel lines = no interaction on the fold-change scale)", fontsize=9,
+    fig.suptitle(_wrap(f"{label}: interaction plot (parallel lines = no interaction on the fold-change scale)",
+                       fig.get_figwidth() * 0.95, 9), fontsize=9,
                  color=MUTED)
     fig.tight_layout()
     return _save(fig, out)

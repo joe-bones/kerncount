@@ -386,3 +386,26 @@ def test_real_stack_qc_and_review_image_are_small_and_blind(tmp_path, stem):
     assert out.stat().st_size < 400_000  # review images stay small (48 tumours: a few MB)
     assert not [w for w in GROUP_WORDS if w.encode() in out.read_bytes()]
     assert took < 60
+
+
+def test_hemisphere_plot_keeps_title_and_axis_labels_inside_the_figure(monkeypatch):
+    """Real run (ticket 11): the long confirmatory label pushed the title and y label off the figure."""
+    from pathlib import Path
+
+    import pandas as pd
+
+    from kerncount.tumour import plots, qc
+
+    figs = []
+    monkeypatch.setattr(plots, "_save", lambda fig, out: figs.append(fig) or out)
+    pairs = pd.DataFrame({"group": ["g1", "g1", "g2"], "section": ["n1", "n2", "n1"], "A": [0.2, 0.3, 0.4],
+                          "B": [0.25, 0.2, 0.5], "flagged": [False, True, False]})
+    qc.hemisphere_plot(pairs, "Cross-sectional area, mid-section (mm²)", Path("x"))
+    fig = figs[0]
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    W, H = fig.bbox.width, fig.bbox.height
+    ax = fig.axes[0]
+    for text in (ax.title, ax.yaxis.label, ax.xaxis.label):
+        e = text.get_window_extent(r)
+        assert e.x0 >= -1 and e.x1 <= W + 1 and e.y0 >= -1 and e.y1 <= H + 1, (text.get_text(), e, W, H)

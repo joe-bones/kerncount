@@ -152,10 +152,12 @@ def sweep_plot(sw: pd.DataFrame, readout: Readout, out: Path) -> Path:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from .plots import MUTED, SERIES, _save
+    from .plots import MUTED, SERIES, _plain_log, _save, _wrap
 
     d = sw[sw["readout"] == readout.name]
-    fams = list(dict.fromkeys(d["family"]))
+    # only families with an estimate (KO-only data: F4-F7 'need WT data' would be empty panels)
+    est = pd.to_numeric(d["estimate"], errors="coerce")
+    fams = list(dict.fromkeys(d.loc[np.isfinite(est), "family"])) or list(dict.fromkeys(d["family"]))[:1]
     fig, axes = plt.subplots(1, max(len(fams), 1), figsize=(4.6 * max(len(fams), 1), 4.4), squeeze=False)
     for ax, fam in zip(axes[0], fams):
         g = d[d["family"] == fam]
@@ -173,12 +175,14 @@ def sweep_plot(sw: pd.DataFrame, readout: Readout, out: Path) -> Path:
         ax.axhline(1, color=MUTED, lw=1, ls="--")
         ax.axvline(1, color=MUTED, lw=0.8, ls=":")
         ax.set_yscale("log")
+        _plain_log(ax, "y")
         ax.set_xlabel("threshold × scale (1 = primary)")
         ax.set_title(f"{fam} [{g['family_role'].iloc[0]}]", fontsize=10)
         if ax.get_legend_handles_labels()[0]:
             ax.legend(fontsize=6, frameon=False, loc="best")
     axes[0][0].set_ylabel(f"fold-change, {readout.label}")
-    fig.suptitle(f"Threshold sweep: {readout.label} — filled = Holm p < 0.05, band = 95 % CI", fontsize=10)
+    fig.suptitle(_wrap(f"Threshold sweep: {readout.label} — filled = Holm p < 0.05, band = 95 % CI",
+                       fig.get_figwidth() * 0.95, 10), fontsize=10)
     fig.tight_layout()
     return _save(fig, out)
 

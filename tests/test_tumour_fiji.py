@@ -309,3 +309,26 @@ def test_re_implementation_reproduces_fijis_mask_and_statistics_on_real_stacks(s
     ratio = mine[0]["volume_um3"] / ref["volume_um3"]
     print(f"\n{stem}: Dice {d:.5f}, main-object volume ratio {ratio:.5f}, statistics problems {st.problems}")
     assert d > 0.99 and ratio == pytest.approx(1.0, abs=0.01)
+
+
+def test_sweep_plot_skips_families_without_estimates_and_uses_plain_log_ticks(monkeypatch):
+    """Real run (ticket 11): with KO data only, F4-F7 were empty panels (7 panels, 6440 px wide, unreadable) and
+    the y ticks read '6×10^-1'."""
+    from kerncount.tumour import concordance, plots
+    from kerncount.tumour.config import Readout
+
+    figs = []
+    monkeypatch.setattr(plots, "_save", lambda fig, out: figs.append(fig) or out)
+    rows = []
+    for s in (0.8, 1.0, 1.2):
+        rows.append(dict(readout="area", scale=s, family="F1", family_role="confirmatory", comparison="HERV vs cntrl",
+                         estimate=0.7 * s, ci_low=0.5, ci_high=1.1, p_adj=0.2, significant="no", N=12))
+        rows.append(dict(readout="area", scale=s, family="F4", family_role="confirmatory", comparison="KO ÷ WT",
+                         estimate=float("nan"), ci_low=float("nan"), ci_high=float("nan"), p_adj=float("nan"),
+                         significant="", N=0))
+    concordance.sweep_plot(pd.DataFrame(rows), Readout("area", "a", "Area", "confirmatory"), Path("x"))
+    fig = figs[0]
+    assert len(fig.axes) == 1 and fig.axes[0].get_title().startswith("F1")
+    fig.canvas.draw()
+    labels = [t.get_text() for t in fig.axes[0].get_yticklabels() if t.get_text()]
+    assert labels and not any("10^" in t or "times" in t for t in labels), labels

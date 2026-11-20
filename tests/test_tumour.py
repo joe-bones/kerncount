@@ -255,6 +255,30 @@ def test_group_plot_works_with_one_genotype(tmp_path, monkeypatch):
     assert (prj / "plots" / "main_mass_volume_absolute.png").exists()
 
 
+def test_group_plot_keeps_long_titles_and_axis_labels_inside_the_figure(monkeypatch):
+    """Real run (ticket 11): the confirmatory suptitle and the normalised y label were cut off at the figure edge."""
+    from kerncount.tumour import plots
+    from kerncount.tumour.config import Factor
+
+    figs = []
+    monkeypatch.setattr(plots, "_save", lambda fig, out: figs.append(fig) or out)
+    facs = [Factor("tumour_line", ("cntrl", "HERV", "N4"), "cntrl", "x"),
+            Factor("clodronate", ("-clodro", "+clodro"), "-clodro", "panel")]
+    t = pd.DataFrame({"tumour_line": ["cntrl", "HERV", "N4"] * 4, "clodronate": ["-clodro"] * 6 + ["+clodro"] * 6,
+                      "v": np.linspace(0.1, 0.5, 12), "flagged": [True] + [False] * 11})
+    long = ("% of model-estimated cntrl in the same cell of the other factors; bars = fold-change 95 % CI; "
+            "stars: F1 (Holm)")
+    plots.group_plot(t, facs, "v", "Cross-sectional area, mid-section (mm²), % of cntrl", Path("x"), suptitle=long,
+                     hollow="flagged")
+    fig = figs[0]
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    W, H = fig.bbox.width, fig.bbox.height
+    for text in [fig._suptitle, *[ax.yaxis.label for ax in fig.axes if ax.get_ylabel()]]:
+        e = text.get_window_extent(r)
+        assert e.x0 >= -1 and e.x1 <= W + 1 and e.y0 >= -1 and e.y1 <= H + 1, (text.get_text(), e, W, H)
+
+
 # ---------------------------------------------------------------- real data smoke test (slow)
 
 REAL = Path(__file__).resolve().parents[2] / "data" / "tumour_TLR7" / KO_SESSION

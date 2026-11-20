@@ -239,7 +239,7 @@ def hemisphere_plot(pairs: pd.DataFrame, label: str, out) -> object:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from .plots import INK, MUTED, SERIES, _plain_log, _save
+    from .plots import INK, MUTED, SERIES, _plain_log, _save, _wrap
 
     fig, ax = plt.subplots(figsize=(6.4, 4.6))
     ok = pairs[(pairs["A"] > 0) & (pairs["B"] > 0)]
@@ -258,10 +258,10 @@ def hemisphere_plot(pairs: pd.DataFrame, label: str, out) -> object:
         _plain_log(ax, "x")
         _plain_log(ax, "y")
         r = float(np.corrcoef(np.log(ok["A"]), np.log(ok["B"]))[0, 1]) if len(ok) > 2 else NAN
-        ax.set_title(f"{label}: hemisphere A vs B of the same section ({len(ok)} sections, r(log) = {r:.2f})",
-                     fontsize=8.5, color=INK)
-    ax.set_xlabel(f"{label}, hemisphere A")
-    ax.set_ylabel(f"{label}, hemisphere B")
+        ax.set_title(_wrap(f"{label}: hemisphere A vs B of the same section ({len(ok)} sections, "
+                           f"r(log) = {r:.2f})", 4.2, 8.5), fontsize=8.5, color=INK)
+    ax.set_xlabel(_wrap(f"{label}, hemisphere A", 4.2, 10))
+    ax.set_ylabel(_wrap(f"{label}, hemisphere B", 3.3, 10))
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     ax.legend(fontsize=6.5, frameon=False, loc="center left", bbox_to_anchor=(1.0, 0.5))
