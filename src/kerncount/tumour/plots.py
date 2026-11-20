@@ -4,7 +4,7 @@ Group plots: one row of panels per level of the `row` factor that is present, on
 factor, the `x` factor along the x-axis, every tumour a dot, log y, group n under each group; optionally the model
 estimate with its 95 % CI and a mark (stars / label) per group. Used for absolute and normalised values.
 Forest plot: every contrast of a readout grouped by family. Interaction plot: model means per cell.
-QC (ticket 06) adds hollow markers for flagged tumours.
+Flagged tumours (QC, ticket 06) are drawn as hollow markers.
 """
 from __future__ import annotations
 
@@ -57,9 +57,10 @@ def _save(fig, out: Path) -> Path:
 
 def group_plot(table: pd.DataFrame, facs: list[Factor], value: str, label: str, out: Path, log: bool = True,
                ci: dict[GroupKey, tuple[float, float, float]] | None = None, marks: dict[GroupKey, str] | None = None,
-               ref_line: float | None = None, suptitle: str | None = None) -> Path:
+               ref_line: float | None = None, suptitle: str | None = None, hollow: str | None = None) -> Path:
     """`ci` maps (row, panel, x) -> (estimate, low, high) drawn beside the dots instead of the plain geometric-mean
-    line; `marks` maps the same key to a text above the group (stars, "confounded", …); `ref_line` draws e.g. 100 %."""
+    line; `marks` maps the same key to a text above the group (stars, "confounded", …); `ref_line` draws e.g. 100 %.
+    `hollow` names a boolean column (QC `flagged`): those tumours are drawn as hollow markers (ticket 06)."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -72,6 +73,8 @@ def group_plot(table: pd.DataFrame, facs: list[Factor], value: str, label: str, 
                              sharey=True, squeeze=False)
     rng = np.random.default_rng(0)
     vals = pd.to_numeric(table[value], errors="coerce")
+    is_hollow = (_as_bool(table[hollow]) if hollow is not None and hollow in table.columns
+                 else pd.Series(False, index=table.index))
     for i, r in enumerate(rows):
         for j, p in enumerate(panels):
             ax = axes[i][j]
@@ -82,12 +85,16 @@ def group_plot(table: pd.DataFrame, facs: list[Factor], value: str, label: str, 
                 sel &= table[panel_f.name].astype(str) == p
             for k, xv in enumerate(xs):
                 s = sel & (table[x_f.name].astype(str) == xv) if x_f is not None and xv is not None else sel
-                v = vals[s].dropna().to_numpy()
-                v = v[v > 0] if log else v
+                ok = s & vals.notna() & ((vals > 0) if log else True)
+                v = vals[ok].to_numpy()
+                hv = is_hollow[ok].to_numpy()
                 key = (r, p, xv)
                 if len(v):
-                    ax.scatter(k + rng.uniform(-0.15, 0.15, len(v)), v, s=22, color=DOT, edgecolor="white",
-                               linewidth=0.6, zorder=3)
+                    jit = k + rng.uniform(-0.15, 0.15, len(v))
+                    if (~hv).any():
+                        ax.scatter(jit[~hv], v[~hv], s=22, color=DOT, edgecolor="white", linewidth=0.6, zorder=3)
+                    if hv.any():
+                        ax.scatter(jit[hv], v[hv], s=22, facecolors="none", edgecolors=DOT, linewidth=1.0, zorder=3)
                     if ci is not None and key in ci and np.isfinite(ci[key][0]):
                         e, lo, hi = ci[key]
                         ax.hlines(e, k - 0.28, k + 0.28, color=INK, linewidth=1.5, zorder=2)
@@ -116,9 +123,19 @@ def group_plot(table: pd.DataFrame, facs: list[Factor], value: str, label: str, 
             ax.set_title(title, fontsize=9, color=INK)
             if j == 0:
                 ax.set_ylabel(label)
-    fig.suptitle(suptitle or f"{label}: every tumour one dot, line = geometric mean", fontsize=9, color=MUTED)
+    title = suptitle or f"{label}: every tumour one dot, line = geometric mean"
+    if bool(is_hollow.any()):
+        title += f"; hollow = flagged by QC ({int(is_hollow.sum())}: truncated, kept in the analysis)"
+    fig.suptitle(title, fontsize=9, color=MUTED)
     fig.tight_layout()
     return _save(fig, out)
+
+
+def _as_bool(col: pd.Series) -> pd.Series:
+    """Boolean QC column read back from CSV / Excel (True/False, yes/no, 1/0)."""
+    if col.dtype == bool:
+        return col
+    return col.astype(str).str.strip().str.lower().isin(("true", "yes", "1", "1.0"))
 
 
 def forest_plot(results: pd.DataFrame, label: str, out: Path) -> Path:
@@ -223,5 +240,105 @@ def interaction_plot(means: pd.DataFrame, facs: list[Factor], label: str, out: P
             ax.legend(fontsize=7, frameon=False)
     fig.suptitle(f"{label}: interaction plot (parallel lines = no interaction on the fold-change scale)", fontsize=9,
                  color=MUTED)
+    fig.tight_layout()
+    return _save(fig, out)
+
+
+# Exploratory shape readouts in the shape panel (ticket 05): column, label; linear axes (fractions and counts have 0s).
+SHAPE_PANEL = [("elongation", "Elongation (major / minor axis)"), ("solidity", "Solidity (area / convex hull)"),
+               ("edge_roughness", "Edge roughness (P / P smoothed)"), ("circularity", "Circularity 4πA/P² (reference)"),
+               ("invasion_fraction", "Invasion fraction"), ("n_satellites", "Satellites (count)")]
+MARKERS = ["o", "^", "s", "D"]
+
+
+def shape_panel(table: pd.DataFrame, facs: list[Factor], out: Path) -> Path:
+    """Shape panel (exploratory): cross-sectional area vs perimeter of every tumour with the circle reference
+    P = 2·sqrt(π·A) (points above it: elongated / lobed / ragged outlines), and the exploratory shape readouts by group
+    (every tumour a dot, line = group median). Colour = the `x` factor, marker = the `panel` factor."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    from .families import cells
+
+    x_f, panel_f = _by_role(facs, "x"), _by_role(facs, "panel")
+    shown = [(c, lab) for c, lab in SHAPE_PANEL if c in table.columns]
+    fig, axes = plt.subplots(2, 4, figsize=(15, 7.2), squeeze=False)
+    flat = [ax for row in axes for ax in row]
+
+    def colour(row: pd.Series) -> str:
+        return SERIES[x_f.levels.index(str(row[x_f.name])) % len(SERIES)] if x_f is not None and str(
+            row[x_f.name]) in x_f.levels else DOT
+
+    def marker(row: pd.Series) -> str:
+        return MARKERS[panel_f.levels.index(str(row[panel_f.name])) % len(MARKERS)] if panel_f is not None and str(
+            row[panel_f.name]) in panel_f.levels else "o"
+
+    # area vs perimeter (log-log) with the circle reference
+    ax = flat[0]
+    def column(name: str) -> pd.Series:
+        return (pd.to_numeric(table[name], errors="coerce") if name in table.columns
+                else pd.Series(np.nan, index=table.index))
+
+    a, p = column("cross_sectional_area_mm2"), column("perimeter_mm")
+    for i, row in table.iterrows():
+        if np.isfinite(a[i]) and np.isfinite(p[i]) and a[i] > 0 and p[i] > 0:
+            ax.scatter(a[i], p[i], s=30, marker=marker(row), color=colour(row), edgecolor="white", linewidth=0.6,
+                       zorder=3)
+    ok = a[(a > 0) & np.isfinite(a)]
+    if len(ok):
+        g = np.geomspace(ok.min() / 1.3, ok.max() * 1.3, 50)
+        ax.plot(g, 2 * np.sqrt(np.pi * g), color=MUTED, linestyle="--", linewidth=1.0, label="circle: P = 2√(πA)")
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        _plain_log(ax, "x")
+        _plain_log(ax, "y")
+    ax.set_xlabel("Cross-sectional area (mm²)")
+    ax.set_ylabel("Perimeter (mm)")
+    ax.set_title("Mid-section: area vs perimeter", fontsize=9, color=INK)
+    handles = [Line2D([], [], color=MUTED, linestyle="--", label="circle: P = 2√(πA)")]
+    if x_f is not None:
+        handles += [Line2D([], [], marker="o", linestyle="", color=SERIES[k % len(SERIES)], label=lv)
+                    for k, lv in enumerate(x_f.levels) if lv in set(table[x_f.name].astype(str))]
+    if panel_f is not None:
+        handles += [Line2D([], [], marker=MARKERS[k % len(MARKERS)], linestyle="", color=INK, label=lv)
+                    for k, lv in enumerate(panel_f.levels) if lv in set(table[panel_f.name].astype(str))]
+    ax.legend(handles=handles, fontsize=7, frameon=False)
+
+    # exploratory shape readouts by group
+    from .stats import cell_of
+
+    keys = cell_of(table, facs) if facs else pd.Series([()] * len(table), index=table.index)
+    groups = [c for c in cells(facs) if (keys == c).any()] if facs else [()]
+    rng = np.random.default_rng(0)
+    for ax, (col, lab) in zip(flat[1:], shown):
+        vals = pd.to_numeric(table[col], errors="coerce")
+        for k, cell in enumerate(groups):
+            sel = (keys == cell) & vals.notna()
+            if not sel.any():
+                continue
+            rows = table[sel]
+            jit = k + rng.uniform(-0.15, 0.15, len(rows))
+            for (_, row), xj, v in zip(rows.iterrows(), jit, vals[sel]):
+                ax.scatter(xj, v, s=18, marker=marker(row), color=colour(row), edgecolor="white", linewidth=0.5,
+                           zorder=3)
+            ax.hlines(float(vals[sel].median()), k - 0.28, k + 0.28, color=INK, linewidth=1.3, zorder=2)
+        ax.set_xticks(range(len(groups)), [" / ".join(c) for c in groups], rotation=60, ha="right", fontsize=6)
+        ax.set_xlim(-0.6, len(groups) - 0.4)
+        ax.set_title(lab, fontsize=9, color=INK)
+        ax.grid(axis="y", color="#d0d7de", linewidth=0.5)
+        if col == "n_satellites":
+            from matplotlib.ticker import MaxNLocator
+
+            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    for ax in flat:
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+    for ax in flat[1 + len(shown):]:
+        ax.set_visible(False)
+    fig.suptitle("Shape panel (exploratory, never starred): 2D shape on the mid-section; every tumour one dot, "
+                 "line = group median", fontsize=9, color=MUTED)
     fig.tight_layout()
     return _save(fig, out)

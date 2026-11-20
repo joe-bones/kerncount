@@ -286,7 +286,8 @@ def test_analyse_writes_stats_long_results_workbook_prism_csvs_plots_and_a_locke
     from kerncount.manifest import STATS_LONG_COLUMNS
 
     t = _vol_table(np.random.default_rng(10), n=lambda cell: 4 if cell == ("WT", "N4", "+clodro") else 6)
-    get("tumour_volume").analyse(tmp_path, t, _settings(), RunOptions())
+    vol = [{"name": "main_mass_volume", "column": "main_mass_volume_mm3", "role": "confirmatory"}]  # ticket 05: the
+    get("tumour_volume").analyse(tmp_path, t, _settings(readouts=vol), RunOptions())  # default is area-based now
     st = pd.read_csv(tmp_path / "stats_long.csv")
     assert list(st.columns) == STATS_LONG_COLUMNS
     fams = set(st["family"])

@@ -154,6 +154,9 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
     from . import concordance  # ticket 07: primary vs Fiji legacy, threshold sweep
 
     written += concordance.analyse(out, table, settings, facs, fams, report)
+    from . import qc  # ticket 06: flow table, sensitivity without flagged tumours, A-B hemisphere check
+
+    written += qc.analyse(out, table, settings, facs, fams, report, h)
     print("\n".join(x for x in lines if x.startswith(("Tumour statistics", "Readouts", "Levels without", "NOTE"))))
     return [str(out / "stats_long.csv"), str(out / "results.xlsx"), str(report), *written]
 
@@ -199,13 +202,15 @@ def _plots(out: Path, table: pd.DataFrame, tum: pd.DataFrame, facs: list[Factor]
             cell = next(k for k, w in c.weights.items() if w > 0)
             marks[_key(facs, cell)] = r["significance"] or ("conf." if r["confounded"] else "")
     pd_ = out / "plots"
+    hollow = "flagged" if "flagged" in table.columns else None  # ticket 06: QC-flagged tumours drawn hollow
     w = [plots.group_plot(table, facs, ro.column, ro.label, pd_ / f"{ro.name}_absolute", ci=ci if placed else None,
+                          hollow=hollow,
                           suptitle=f"{ro.label} ({ro.role}): every tumour one dot; line + bar = model geometric "
                                    "mean, 95 % CI")]
     if focus is not None and f"{ro.name}_pct" in tum.columns:
         w.append(plots.group_plot(
             tum, facs, f"{ro.name}_pct", f"{ro.label}, % of {focus.reference}", pd_ / f"{ro.name}_normalised",
-            ci=norm_ci if placed else None, marks=marks, ref_line=100.0,
+            ci=norm_ci if placed else None, marks=marks, ref_line=100.0, hollow=hollow,
             suptitle=f"% of model-estimated {focus.reference} in the same cell of the other factors; bars = "
                   f"fold-change 95 % CI" + (f"; stars: {fam.id} (Holm)" if fam and ro.role == "confirmatory"
                                              and fam.role == "confirmatory" else "")))

@@ -69,17 +69,29 @@ class TumourVolume(ExperimentType):
         v = layout_mod.check(discover.read_table(lp), raw_dir(Path(project_dir), s), s)
         for w in v.warnings:
             print(f"Note: {w}")
+        import pandas as pd
+
+        from . import corrections
+
+        # ticket 06: review corrections (blind codes in review/corrections.csv) -> exclusions with reason
+        corr = corrections.read(Path(project_dir), s)
+        layout, review_excluded = corrections.exclusions(v.layout.drop(columns="exclusion_reason"), corr)
+        excluded = pd.concat([v.excluded, review_excluded], ignore_index=True) if len(review_excluded) else v.excluded
         atomic_write(Path(project_dir) / layout_mod.EXCLUDED,
-                     v.excluded.to_csv(index=False, sep=s["project"]["csv_delimiter"]))
-        layout = v.layout.drop(columns="exclusion_reason")
+                     excluded.to_csv(index=False, sep=s["project"]["csv_delimiter"]))
         measurements = self.measure(project_dir, layout, s, options)
+        corrections.write_used(Path(project_dir), corr, list(layout["tumour_id"]))
+        print(f"Review: {corr.describe()}")
         table = self.readout_table(project_dir, layout, measurements, s)
         self.analyse(project_dir, table, s, options)
 
     def measure(self, project_dir: Path, layout: pd.DataFrame, settings: dict, options: RunOptions) -> pd.DataFrame:
-        from . import legacy, measure
+        from . import corrections, legacy, measure, qc
 
         m = measure.measure(project_dir, layout, settings, resegment=options.resegment)
+        # ticket 06: re-picked main masses (relabelled cached labels), QC flags, blinded review sheets
+        m = qc.measure(project_dir, layout, settings, m, corrections.read(Path(project_dir), settings),
+                       render=not options.no_review)
         fiji = legacy.measure(project_dir, layout, settings, m)  # ticket 07: fiji_* legacy readouts
         return m.merge(fiji, on="tumour_id", how="left") if len(fiji.columns) > 1 else m
 
@@ -95,4 +107,8 @@ class TumourVolume(ExperimentType):
         from . import results
 
         written = results.analyse(Path(project_dir), table, settings)
+        from .config import factors
+        from .plots import shape_panel  # ticket 05: exploratory shape readouts + area vs perimeter
+
+        written.append(str(shape_panel(table, factors(settings), Path(project_dir) / "plots" / "shape_panel")))
         print(f"Wrote {Path(project_dir) / 'tumours.csv'}, " + ", ".join(written))

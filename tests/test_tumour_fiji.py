@@ -269,8 +269,12 @@ def test_run_adds_fiji_columns_and_the_threshold_sweep(tmp_path, monkeypatch):
     assert table["fiji_note"].fillna("").str.contains("unreadable").sum() == 1
     sw = pd.read_csv(prj / "threshold_sweep.csv")
     assert sorted(set(sw["scale"])) == [0.8, 0.9, 1.0, 1.1, 1.2]
-    assert (prj / "plots" / "main_mass_volume_threshold_sweep.png").exists()
-    assert (prj / "plots" / "main_mass_volume_vs_fiji.png").exists()
+    # confirmatory readouts since the 2026-11-20 amendment: mid-section area and perimeter (ticket 05)
+    for name in ("cross_sectional_area", "perimeter"):
+        assert (prj / "plots" / f"{name}_threshold_sweep.png").exists()
+        assert (prj / "plots" / f"{name}_vs_fiji.png").exists()
+    assert (table["fiji_cross_sectional_area_mm2"] > 0).all()
+    assert set(sw["readout"]) >= {"cross_sectional_area", "perimeter"}
     cached = {q.name: q.stat().st_mtime_ns for q in (prj / "_work" / "tumour").glob("*.json")}
     assert any(n.endswith(".sweep.json") for n in cached) and any(n.endswith(".fiji.json") for n in cached)
     cli.main(["run", "tumour_exp"])  # cached: nothing recomputed

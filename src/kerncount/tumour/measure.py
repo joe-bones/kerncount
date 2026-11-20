@@ -17,9 +17,13 @@ import pandas as pd
 
 from .config import tumour_settings
 from .segment import measure_file
+from .shape import KEYS as SHAPE_KEYS
 
 WORK = Path("_work") / "tumour"
-SEG_KEYS = ("smooth_sigma_um", "threshold", "min_object_um3")
+SEG_KEYS = ("smooth_sigma_um", "threshold", "min_object_um3", *SHAPE_KEYS)
+# Bump when the readouts computed per tumour change (new columns / definitions): old caches are then re-measured
+# instead of silently lacking columns. 2 = ticket 05 (mid-section, area, perimeter, shape, burden).
+CACHE_VERSION = 2
 
 
 def slug(tumour_id: str) -> str:
@@ -41,7 +45,7 @@ def raw_dir(project_dir: Path, settings: dict) -> Path:
 def _key(path: Path, ts: dict) -> str:
     st = path.stat()
     blob = json.dumps({"seg": {k: ts[k] for k in SEG_KEYS}, "file": [path.name, st.st_size, st.st_mtime_ns],
-                       "version": 1}, sort_keys=True, default=str)
+                       "version": CACHE_VERSION}, sort_keys=True, default=str)
     return hashlib.sha1(blob.encode()).hexdigest()[:16]
 
 

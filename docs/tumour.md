@@ -2,9 +2,8 @@
 
 mCherry tumours in brain sections, imaged as z-stacks. One **tumour** (hemisphere A or B of a section) is one n.
 Vocabulary: `CONTEXT.md` (Tumour experiments). Decisions: ADR 0002 (measurement), 0003 (statistics), 0004 (types,
-factor tables). Status: layout, primary segmentation, main-mass volume (ticket 02) and the pre-registered factorial
-statistics with group, forest and interaction plots (ticket 04). Shape readouts, QC flags, Fiji legacy readout and
-sensitivity models follow in tickets 05–08.
+factor tables). Confirmatory readouts: main-mass **cross-sectional area and perimeter over a fixed-thickness
+mid-section** (ADR 0002/0003 amendments 2026-11-20; see Readouts) — the 3D volume depends on the acquired depth.
 
 ## Quick start
 ```
@@ -87,10 +86,108 @@ and below the bright core, the half-way threshold does not (n1 B: substantial ma
 filling (the Fiji macro) would add ~8 % on n1 B. How much of the dim top/bottom layers is tumour versus out-of-focus
 light is the open question for the threshold sweep and Fiji concordance (ticket 07) and truncation flags (ticket 06).
 
+## Readouts (ticket 05; ADR 0002 / 0003 amendments 2026-11-20)
+**Why area, not volume.** Every tumour is ~0.5–1 mm wide, but only ~80–150 µm of it is imaged. The lab's Fiji masks
+were thresholded per layer, so Fiji's main object spans every layer of every stack and its volume ≈ footprint ×
+acquired depth (a microscope setting). The primary method's z-extent in turn follows the axial brightness fall-off
+(brighter tumours look deeper). Neither is a tumour volume. What *is* measured reliably is the tumour's cross-section
+in the layers where it is fully in focus, so the **confirmatory readouts are 2D**:
+
+| readout (column) | definition | role |
+|---|---|---|
+| `cross_sectional_area_mm2` (`…_um2`) | mean main-mass area per layer over the **mid-section** | **confirmatory** |
+| `perimeter_mm` (`…_um`) | mean main-mass outline length per layer over the mid-section, at `outline_smooth_um` | **confirmatory** |
+| `footprint_area_mm2` | area of the main mass's outline merged over all layers (projection) | exploratory |
+| `slab_volume_mm3` | main-mass volume within ± `slab_um`/2 of the mid-section centre (`slab_fits`) | exploratory |
+| `main_mass_volume_mm3` | 3D main-mass volume (depends on acquired depth / brightness fall-off) | exploratory |
+| `main_mass_surface_mm2` | 3D mesh surface: isotropic `surface_grid_um` grid, smoothed at `outline_smooth_um`, marching cubes; includes the faces cut by the first/last layer | exploratory |
+| `tumour_burden_mm3` | main mass + satellites | exploratory |
+| `elongation` | √(λ₁/λ₂) of the section's second moments (major / minor axis), mid-section mean | exploratory |
+| `solidity` | outline area / convex-hull area (lobes, branching), mid-section mean | exploratory |
+| `edge_roughness` | outline length at `roughness_fine_um` (2 µm) / at `roughness_smooth_um` (20 µm) (ragged border), mid-section mean | exploratory |
+| `circularity` | 4πA/P² (2D sphericity; confounds elongation and roughness — reference only) | exploratory |
+| `invasion_fraction`, `n_satellites` | satellites' share of the burden; number of satellites | columns + shape panel only (zeros: no log model) |
+
+**Mid-section.** Per tumour, the per-layer main-mass area (2D holes filled) is computed; the centre is the layer with
+the largest area (middle one on ties); the mid-section is every layer whose centre lies within ± `mid_section_um`/2
+of it — **20 µm by default = 9 layers at 2.36 µm, 11 at 2.0 or 1.75 µm**. Columns `mid_section_centre_layer`,
+`mid_section_first_layer`, `mid_section_last_layer` (1-based, as in Fiji), `mid_section_layers`, `mid_section_fits`
+(`no` = it runs off the stack and was clipped; ticket 06 flags these as truncated). Why 20 µm (2026-11-20, 4 real
+stacks, main-mass area per layer): the main mass is within 10 % of its largest cross-section over 9–19 µm of depth and
+within 50 % over 28–40 µm; the brightest layer sits ~20–80 µm below the first layer in all 48 stacks (data survey).
+20 µm therefore averages ≥ 9 layers (noise) while staying on the near-flat top of the area profile and fitting into
+the stack; a thicker slab would mix in the brightness-dependent fall-off that makes volumes unreliable.
+
+**Section and area.** The section of the main mass in a layer is all its pieces in that layer with enclosed holes
+filled (a dark core opening to the top or bottom of the stack is still inside the outline). Area = pixel count × pixel
+area (unbiased).
+
+**Perimeter estimator.** Counting pixel edges overestimates every curved outline by 4/π (+27 %) at any resolution, and
+marching squares on the raw binary still follows the staircase (+5.5 %). kerncount Gaussian-smooths the binary
+section at `outline_smooth_um` and traces its 0.5 iso-line with marching squares (sub-pixel). Synthetic digitised
+shapes at the real 0.6239 µm pixel (`tests/test_tumour_shape.py`; error vs 2πr / Ramanujan):
+
+| shape | raw marching squares | σ = 2 µm | σ = 4 µm | **σ = 8 µm (default)** |
+|---|---|---|---|---|
+| disc r = 20 µm | +5.6 % | −0.26 % | −1.8 % | −8.4 % |
+| disc r = 50 / 80 µm | +5.4 % | −0.02 / +0.01 % | −0.27 / −0.09 % | −1.2 / −0.47 % |
+| disc r = 150 / 300 / 500 µm | +5.5 % | +0.02–0.04 % | 0.00 % | −0.12 / −0.03 / −0.01 % |
+| ellipses 400×150, 300×120 (rotated), 250×200 µm | | +0.01–0.03 % | −0.02–0.00 % | −0.06 – −0.14 % |
+
+The smoothing shrinks an outline by ≈ σ²/2r; real mid-sections are r ≈ 250–400 µm (0.19–0.5 mm²), where 8 µm costs
+< 0.1 %.
+
+**Why an 8 µm outline scale** (2026-11-20, 3 real stacks, `segment.sweep` at threshold × 0.8 / 1.2). Real tumour
+borders are ragged at the µm scale, so a fine-scale perimeter measures border texture (circularity 0.09–0.40 at 2 µm)
+and moves with the threshold; area does not:
+
+| stack | area, threshold ×0.8 / ×1.2 | perimeter σ = 2 µm | σ = 4 µm | σ = 8 µm | perimeter / Fiji's at 2 / 4 / 8 µm |
+|---|---|---|---|---|---|
+| cntrl +clodro n1 B | +5.5 / −4.8 % | −16.8 / +16.4 % | −13.8 / +13.1 % | −9.8 / +5.1 % | 0.85 / 0.95 / 1.01 |
+| HERV −clodro n2 A | +4.4 / −5.2 % | −13.8 / +10.6 % | −11.0 / +9.7 % | −2.0 / +4.5 % | 0.68 / 0.69 / 0.63 |
+| N4 +clodro n3 A (dim) | +15.8 / −10.8 % | +13.6 / −10.9 % | +11.8 / −8.2 % | +6.5 / −6.5 % | 0.49 / 0.58 / 0.69 |
+
+At 8 µm the confirmatory perimeter is as threshold-stable as the area and describes the outline, not its texture; the
+texture is kept as the exploratory edge roughness (outline length at `roughness_fine_um` = 2 µm ÷ at
+`roughness_smooth_um` = 20 µm). Tests: synthetic ellipsoid tumours at the default scale — mid-section area −0.6 % and
+perimeter −0.5 % vs the analytic mid-section mean (tolerance 2 %); ×0.4 / ×2.5 brightness (clipped) +0.005 / +0.2 %
+(tolerance 3 %); z-step 1.75 vs 2.36 µm +0.4 % / +0.2 % (tolerance 1 %); the threshold sweep recomputes both (they
+are computed in `segment._segment_at`, not from saved labels).
+
+**Fiji counterparts** (`legacy` on the readout entries; concordance plots and side-by-side effects, ticket 07):
+`fiji_cross_sectional_area_um2|mm2`, `fiji_perimeter_um|mm`, `fiji_mid_section_centre_layer`,
+`fiji_mid_section_layers`, `fiji_mid_section_fits`, `fiji_section_source` — the same mid-section rule and estimator
+applied to Fiji's largest 3D object on the lab's mask (or the re-implementation's mask when there is none and
+`fiji_fallback = true`). Volume → `fiji_main_volume_mm3`, surface → `fiji_main_surface_mm2`, burden →
+`fiji_total_volume_mm3` (exploratory).
+
+Real stacks (default settings, Fiji = the lab's masks; slow test `tests/test_tumour_shape.py`, 2026-11-20):
+
+| stack | centre layer (layers) | area mm² (Fiji, ratio) | perimeter mm (Fiji, ratio) | circularity | footprint mm² |
+|---|---|---|---|---|---|
+| cntrl +clodro n1 B | 17 (11) | 0.187 (0.203, 0.92) | 2.05 (2.03, 1.01) | 0.67 | 0.201 |
+| HERV −clodro n2 A | 29 (9) | 0.417 (0.506, 0.82) | 3.08 (4.88, 0.63) | 0.56 | 0.448 |
+| N4 +clodro n3 A (dim) | 11 (9) | 0.191 (0.385, 0.50) | 2.57 (3.70, 0.69) | 0.37 | 0.230 |
+
+Fiji's centre layer is within one layer of ours. Fiji's per-layer Triangle keeps faint haze around dim tumours, so
+its sections are larger and more ragged the dimmer the tumour (N4 +clodro: twice the area) — the brightness
+dependence ADR 0002 warns about, now visible in 2D as well. Runtime of the readouts: +1–4 s per stack.
+
+**Shape panel** `plots/shape_panel.png|pdf` (exploratory, never starred): area vs perimeter of every tumour with the
+circle reference P = 2√(πA) (above it = elongated, lobed or ragged outline), and elongation, solidity, edge roughness,
+circularity, invasion fraction and satellites by group (dots, group median). Colour = tumour line, marker =
+clodronate.
+
+**Settings** (`[tumour]`, all in the measurement cache key): `mid_section_um = 20`, `outline_smooth_um = 8`, `roughness_fine_um = 2`,
+`roughness_smooth_um = 20`, `slab_um = 40`, `surface_grid_um = 2`. The per-tumour cache (`_work/tumour/<slug>.json`)
+also carries a readout version: caches written before these readouts existed are re-measured, never reused without
+the new columns (likewise the sweep and Fiji caches).
+
 ## Outputs
 - `layout.csv` (init), `tumours.csv` — one row per included tumour: factor columns, imaging session, IDs, voxel
-  size, `n_layers`, main-mass volume (µm³, mm³), threshold method / value / levels, satellites, saturation fractions.
-- Statistics outputs (see **Statistics** below), per readout `<name>` (e.g. `main_mass_volume`):
+  size, `n_layers`, the readouts above (confirmatory first), threshold method / value / levels, saturation fractions.
+- `plots/shape_panel.png|pdf` — see Readouts.
+- Statistics outputs (see **Statistics** below), per readout `<name>` (e.g. `cross_sectional_area`):
   - `plots/<name>_absolute.png|pdf` — one row of panels per genotype present, −/+clodro panels, tumour line on x,
     every tumour a dot, model geometric mean with 95 % CI, n under each group, log y.
   - `plots/<name>_normalised.png|pdf` — the same as % of the model-estimated cntrl in the same genotype and
@@ -248,6 +345,73 @@ go through `table.build`. Outputs: `threshold_sweep.csv` / sheet **Threshold swe
 p < 0.05) and a `## Threshold sweep` report table (fold-change range, whether significance changes). Off by default
 because the first run re-segments every stack (~20–60 s each, 1 stack in memory). Only readouts produced by
 `segment.segment` / `table.build` are sweepable; others are listed as not available.
+
+## QC, problem tumours and blinded review (ticket 06, ADR 0002 + amendment 2026-11-20)
+**Rules, set before results are seen — never per-tumour judgement.** Computed per tumour from its (possibly
+corrected) labels and the original stack (`tumour/qc.py`), columns in `tumours.csv`:
+
+| column | meaning |
+|---|---|
+| `edge_contact` | `yes` when the main mass touches the xy image frame in any layer |
+| `edge_outline_frac` | share of the main mass's outline (footprint, all layers merged) lying on the frame; sub-pixel contour lengths (a disc cut in half: 0.39) |
+| `edge_outline_frac_mid` | the same per mid-section layer, averaged |
+| `mid_section_fits` | `no` when the mid-section (same rule as the readouts, `shape.mid_section`) runs off the imaged layers |
+| `saturated_frac_mid_section`, `saturation_warning` | share of the mid-section main mass at 255; warning above `qc_saturation_warn` (default 40 %: the intermedians threshold is protected up to ~50 %). A warning, not a flag |
+| `truncated`, `flagged` | edge contact **or** a mid-section that does not fit. Extending beyond the imaged depth is **not** a flag (every tumour does) |
+| `qc_flags` | the reasons in words |
+| `main_mass_object` | which object is the main mass (1 = automatic; another number after a review correction) |
+
+Flagged tumours stay in the primary analysis (excluding them would bias toward "smaller": large tumours touch the
+edge more often), are drawn as **hollow markers** in every group plot, and are dropped in a **sensitivity analysis**:
+the same model and families on the table without them, shown beside the primary in sheet **Without flagged**
+(primary estimate / CI / Holm p / N beside the same without flagged, `conclusion_changed`) and as stats_long rows with
+family `<id> (without flagged)` (never starred). Real data (2 stacks): HERV −clodro n2 A has 51 % of its mid-section
+main mass saturated (warning).
+
+**Flow table** per group (every factor): files → tumours → excluded (reasons from `excluded_tumours.csv`: layout.csv
+exclusions and review exclusions) → analysed → flagged → analysed without flagged, plus a total row: `flow.csv`,
+sheet **QC flow**, report section `## QC and problem tumours` (also lists flagged tumours, saturation warnings and
+the review-corrections generation). Sheet **QC** has the QC columns per tumour.
+
+**A–B hemisphere check** (exploratory, not a test): `plots/<name>_hemispheres_AB.png|pdf` per confirmatory readout —
+hemisphere A vs B of the same section (same group, imaging session and section label), log-log with the identity line,
+one colour per group, r of the logs. Each hemisphere stays its own n; this only shows whether sections share an effect.
+
+### Blinded review sheets (`review/`)
+- `review/<code>.jpg` per tumour (downsampled to `review_px` per panel, JPEG `review_jpeg_quality`; ~70–150 kB on the
+  real stacks): left the maximum projection over all layers with every object's footprint, right the mid-section
+  centre layer. Main mass (object 1) orange, satellites cyan; the 40 largest objects are numbered.
+- `review/overview_<k>.jpg` — contact sheets, 12 tumours each, in code order.
+- `review/corrections.csv` — one row per tumour in code order: `code`, `objects`, `qc_flags`, `manual_1..3`, `note`.
+- **Blinding:** codes are random (5 characters without vowels) and fixed across runs; the key `review_key.csv` (code
+  → tumour ID) is written in the project folder, **outside** `review/`. Nothing in `review/` — file names, image
+  titles, the corrections file — carries a factor level, imaging session, date, section label or file name; order is
+  by code, not by group; each image is contrast-stretched on its own (brightness differences between lines are not
+  displayed as such). Hand the reviewer only the `review/` folder. (The tests search every file name and byte in
+  `review/` for level, session and file-name strings.)
+
+### Corrections (re-pick the main mass, or exclude — nothing else)
+Type into `review/corrections.csv`, like `manual_1` in the cell-count `counts.csv`:
+- a whole number — that object (number on the review image) becomes the main mass (`1` = back to automatic);
+- `x: reason` — exclude the tumour; the reason goes to `excluded_tumours.csv` (`excluded at review (manual_1): …`)
+  and the flow table;
+- empty — no change. Each `manual_<k>` column is one round; later rounds override earlier ones; the chain stops at
+  the first completely empty column. Generation **g1** = automatic, **g2** = + `manual_1`, … (reported in
+  `stats_report.md`; `corrections_used.csv` in the project folder lists per tumour the code, ID, main-mass object,
+  source and generation).
+
+Then `kerncount run <experiment>` again. Nothing is re-segmented: the cached labels are relabelled (picked object
+and object 1 swap numbers) and the main-mass readouts (area, perimeter, volume, shape, saturation, surface…) are
+recomputed from them with the same functions as the segmentation (`corrections.main_mass_readouts` → `shape.readouts`,
+`shape.surface_area`); QC is recomputed. An unknown code, an unreadable cell or an object number that does not exist
+stops the run with every problem listed. **Per-tumour threshold changes are not possible** (ADR 0002: one rule for
+every tumour). Unlike the cell-count type, earlier generations are not kept as separate folders: the outputs are
+rebuilt for the current generation. Caches: `_work/tumour/<slug>.qc.json` (key = measurement key + picked object +
+QC settings; the stack is only read again when one of them, the code or the review settings change).
+`--no-review` skips drawing (QC is still computed).
+
+Known limitation: the threshold sweep (ticket 07) keeps no labels, so for a re-picked tumour its swept values still
+follow the automatic main mass.
 
 ## Memory
 One stack at a time: uint8 stack + float32 smoothed copy, then mask + int32 labels; peak ≈ 10 × the stack size

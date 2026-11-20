@@ -28,6 +28,9 @@ from pathlib import Path
 import numpy as np
 from scipy import ndimage as ndi
 
+from . import shape
+from .shape import ShapeOptions
+
 THRESHOLDS = ("intermedians", "otsu")
 _UNIT_UM = {"µm": 1.0, "um": 1.0, "micron": 1.0, "microns": 1.0, "nm": 1e-3, "mm": 1e3, "cm": 1e4, "m": 1e6}
 _HIST_BINS = 1024
@@ -136,8 +139,10 @@ def _smoothed(stack: np.ndarray, voxel_um: tuple[float, float, float], smooth_si
 
 
 def _segment_at(stack: np.ndarray, sm: np.ndarray, voxel_um: tuple[float, float, float], t: float,
-                min_object_um3: float, top: float) -> tuple[np.ndarray, dict]:
-    """Threshold the smoothed stack at `t` -> 3D fill -> 26-connected objects: (labels, size readouts)."""
+                min_object_um3: float, top: float, shape_opts: ShapeOptions | None = None
+                ) -> tuple[np.ndarray, dict]:
+    """Threshold the smoothed stack at `t` -> 3D fill -> 26-connected objects: (labels, size readouts incl. the
+    mid-section / confirmatory readouts of `shape.readouts`, so the threshold sweep covers them)."""
     vz, vy, vx = voxel_um
     voxel_um3 = vz * vy * vx
     mask = sm > np.float32(t)
@@ -161,19 +166,21 @@ def _segment_at(stack: np.ndarray, sm: np.ndarray, voxel_um: tuple[float, float,
         "main_mass_voxels": main_vox, "main_mass_volume_um3": round(main_vox * voxel_um3, 3),
         "n_satellites": max(len(order) - 1, 0),
         "saturated_frac_main_mass": sat_main / main_vox if main_vox else float("nan"),
+        **shape.readouts(labels, voxel_um, shape_opts),
     }
 
 
 def segment(stack: np.ndarray, voxel_um: tuple[float, float, float], smooth_sigma_um: float = 2.0,
-            threshold: str = "intermedians", min_object_um3: float = 1000.0, threshold_scale: float = 1.0
-            ) -> Segmentation:
+            threshold: str = "intermedians", min_object_um3: float = 1000.0, threshold_scale: float = 1.0,
+            shape_opts: ShapeOptions | None = None) -> Segmentation:
     """`threshold_scale` multiplies the automatic threshold (1 = the primary method; the threshold sweep uses
     0.8-1.2); `threshold` in the readouts is the applied value, `threshold_auto` the automatic one."""
     vz, vy, vx = voxel_um
     sm, counts, centres, top = _smoothed(stack, voxel_um, smooth_sigma_um)
     n_sat = int(np.count_nonzero(stack >= top))
     t, bg_level, fg_level = threshold_from_histogram(counts, centres, threshold)
-    labels, size = _segment_at(stack, sm, voxel_um, t * threshold_scale, min_object_um3, top)
+    opts = shape_opts or ShapeOptions()
+    labels, size = _segment_at(stack, sm, voxel_um, t * threshold_scale, min_object_um3, top, opts)
     del sm
     readouts = {
         "voxel_z_um": vz, "voxel_y_um": vy, "voxel_x_um": vx,
@@ -185,6 +192,10 @@ def segment(stack: np.ndarray, voxel_um: tuple[float, float, float], smooth_sigm
         "n_satellites": size["n_satellites"],
         "saturated_frac": n_sat / stack.size,
         "saturated_frac_main_mass": size["saturated_frac_main_mass"],
+        **{k: v for k, v in size.items() if k not in ("main_mass_voxels", "main_mass_volume_um3", "n_satellites",
+                                                     "saturated_frac_main_mass")},
+        "main_mass_surface_um2": round(shape.surface_area(labels == 1, voxel_um, opts.surface_grid_um,
+                                                          opts.outline_smooth_um), 3),
     }
     if threshold_scale != 1.0:
         readouts.update(threshold_auto=round(t, 3), threshold_scale=threshold_scale)
@@ -192,8 +203,8 @@ def segment(stack: np.ndarray, voxel_um: tuple[float, float, float], smooth_sigm
 
 
 def sweep(stack: np.ndarray, voxel_um: tuple[float, float, float], scales: list[float],
-          smooth_sigma_um: float = 2.0, threshold: str = "intermedians", min_object_um3: float = 1000.0
-          ) -> dict[float, dict]:
+          smooth_sigma_um: float = 2.0, threshold: str = "intermedians", min_object_um3: float = 1000.0,
+          shape_opts: ShapeOptions | None = None) -> dict[float, dict]:
     """Readouts of `segment` at threshold x each scale, smoothing once (one stack in memory at a time; the
     labels are not kept). Identical to calling `segment(..., threshold_scale=s)` per scale."""
     sm, counts, centres, top = _smoothed(stack, voxel_um, smooth_sigma_um)
@@ -201,7 +212,7 @@ def sweep(stack: np.ndarray, voxel_um: tuple[float, float, float], scales: list[
     vz, vy, vx = voxel_um
     out = {}
     for s in scales:
-        _, size = _segment_at(stack, sm, voxel_um, t * float(s), min_object_um3, top)
+        _, size = _segment_at(stack, sm, voxel_um, t * float(s), min_object_um3, top, shape_opts)
         out[float(s)] = {"voxel_z_um": vz, "voxel_y_um": vy, "voxel_x_um": vx, "n_layers": int(stack.shape[0]),
                          "threshold": round(t * float(s), 3), "threshold_auto": round(t, 3),
                          "threshold_scale": float(s), **size}
@@ -214,7 +225,8 @@ def measure_file(path: Path, tumour_settings: dict, threshold_scale: float = 1.0
     stack = read_stack(path)
     return segment(stack, vox, smooth_sigma_um=float(tumour_settings["smooth_sigma_um"]),
                    threshold=str(tumour_settings["threshold"]),
-                   min_object_um3=float(tumour_settings["min_object_um3"]), threshold_scale=threshold_scale)
+                   min_object_um3=float(tumour_settings["min_object_um3"]), threshold_scale=threshold_scale,
+                   shape_opts=ShapeOptions.from_settings(tumour_settings))
 
 
 def sweep_file(path: Path, tumour_settings: dict, scales: list[float]) -> dict[float, dict]:
@@ -222,4 +234,5 @@ def sweep_file(path: Path, tumour_settings: dict, scales: list[float]) -> dict[f
     vox = voxel_size_um(path)
     return sweep(read_stack(path), vox, scales, smooth_sigma_um=float(tumour_settings["smooth_sigma_um"]),
                  threshold=str(tumour_settings["threshold"]),
-                 min_object_um3=float(tumour_settings["min_object_um3"]))
+                 min_object_um3=float(tumour_settings["min_object_um3"]),
+                 shape_opts=ShapeOptions.from_settings(tumour_settings))

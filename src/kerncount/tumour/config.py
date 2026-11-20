@@ -18,6 +18,14 @@ DEFAULTS: dict = {
     "smooth_sigma_um": 2.0,  # Gaussian smoothing before thresholding (physical scale, same for every tumour)
     "threshold": "intermedians",  # per-tumour automatic threshold, no rolling ball (docs/tumour.md)
     "min_object_um3": 1000.0,  # connected objects smaller than this are noise (not satellites)
+    # Readouts (ticket 05, ADR 0002/0003 amendments 2026-11-20): physical scales, identical for every tumour.
+    # Mid-section = layers within +-mid_section_um/2 of the layer with the largest main-mass cross-section.
+    "mid_section_um": 20.0,
+    "outline_smooth_um": 8.0,  # Gaussian smoothing of the outline before measuring perimeters (µm)
+    "roughness_fine_um": 2.0,  # edge roughness = outline length at this smoothing (µm) ...
+    "roughness_smooth_um": 20.0,  # ... / outline length at this smoothing
+    "slab_um": 40.0,  # depth of the slab for the (exploratory) slab volume
+    "surface_grid_um": 2.0,  # isotropic grid of the (exploratory) 3D mesh surface area
     # Sensitivity models (ticket 08): random permutations per contrast (when not enumerated exactly) and their seed.
     "sensitivity_permutations": 9999,
     "sensitivity_seed": 20261119,
@@ -34,6 +42,11 @@ DEFAULTS: dict = {
     # Off by default: re-segments every stack once (cached in _work/tumour/<slug>.sweep.json).
     "threshold_sweep": False,
     "sweep_scales": [0.8, 0.9, 1.1, 1.2],
+    # QC and blinded review (ticket 06): saturation warning threshold (share of the mid-section main mass at 255;
+    # the intermedians threshold is protected up to ~50 %), review image size (px, longest side per panel), JPEG quality.
+    "qc_saturation_warn": 0.40,
+    "review_px": 640,
+    "review_jpeg_quality": 80,
     "factors": [
         {"name": "genotype", "levels": ["WT", "TLR7 KO"], "reference": "WT", "role": "row", "source": "session",
          "aliases": {"KO7": "TLR7 KO", "KO": "TLR7 KO"}},
@@ -42,11 +55,30 @@ DEFAULTS: dict = {
         {"name": "clodronate", "levels": ["-clodro", "+clodro"], "reference": "-clodro", "role": "panel",
          "source": "filename", "aliases": {"-clodron": "-clodro"}},
     ],
-    # Readouts analysed by the factorial statistics (ADR 0003): column in tumours.csv + confirmatory/exploratory.
-    # Only confirmatory readouts in confirmatory families carry significance stars.
+    # Readouts analysed by the factorial statistics (ADR 0003 + amendment 2026-11-20): column in tumours.csv,
+    # confirmatory/exploratory, `legacy` = the Fiji counterpart column (concordance). Only confirmatory readouts in
+    # confirmatory families carry significance stars.
     "readouts": [
+        {"name": "cross_sectional_area", "column": "cross_sectional_area_mm2",
+         "label": "Cross-sectional area, mid-section (mm²)", "role": "confirmatory",
+         "legacy": "fiji_cross_sectional_area_mm2"},
+        {"name": "perimeter", "column": "perimeter_mm", "label": "Perimeter, mid-section (mm)",
+         "role": "confirmatory", "legacy": "fiji_perimeter_mm"},
+        {"name": "footprint_area", "column": "footprint_area_mm2", "label": "Footprint area (mm²)",
+         "role": "exploratory"},
+        {"name": "slab_volume", "column": "slab_volume_mm3", "label": "Slab volume (mm³)", "role": "exploratory"},
         {"name": "main_mass_volume", "column": "main_mass_volume_mm3", "label": "Main-mass volume (mm³)",
-         "role": "confirmatory"},
+         "role": "exploratory", "legacy": "fiji_main_volume_mm3"},
+        {"name": "main_mass_surface", "column": "main_mass_surface_mm2", "label": "Main-mass surface area (mm²)",
+         "role": "exploratory", "legacy": "fiji_main_surface_mm2"},
+        {"name": "tumour_burden", "column": "tumour_burden_mm3", "label": "Tumour burden (mm³)",
+         "role": "exploratory", "legacy": "fiji_total_volume_mm3"},
+        {"name": "elongation", "column": "elongation", "label": "Elongation (mid-section)", "role": "exploratory"},
+        {"name": "solidity", "column": "solidity", "label": "Solidity (mid-section)", "role": "exploratory"},
+        {"name": "edge_roughness", "column": "edge_roughness", "label": "Edge roughness (mid-section)",
+         "role": "exploratory"},
+        {"name": "circularity", "column": "circularity", "label": "Circularity (mid-section; reference only)",
+         "role": "exploratory"},
     ],
     # Factor whose reference level normalised values are expressed against ("" = the factor with role x).
     "normalise_by": "",
@@ -87,6 +119,12 @@ notes = ""
 smooth_sigma_um = 2.0     # Gaussian smoothing (µm) before the threshold; identical for every tumour
 threshold = "intermedians"   # per-tumour automatic threshold without rolling ball: "intermedians" or "otsu"
 min_object_um3 = 1000.0   # smaller connected objects are noise; larger ones besides the main mass are satellites
+mid_section_um = 20.0     # mid-section thickness (µm), centred on the layer of largest main-mass cross-section
+outline_smooth_um = 8.0   # outline smoothing (µm) for perimeters; identical for this method and the Fiji masks
+roughness_fine_um = 2.0   # edge roughness = outline length at roughness_fine_um / at roughness_smooth_um
+roughness_smooth_um = 20.0
+slab_um = 40.0            # depth (µm) of the slab for the exploratory slab volume
+surface_grid_um = 2.0     # isotropic grid (µm) of the exploratory 3D mesh surface area
 sensitivity_permutations = 9999   # sensitivity: random permutations per contrast (exact enumeration when fewer splits)
 sensitivity_seed = 20261119       # seed of the permutations (recorded in the report; same seed = same p-values)
 planner_fold_change = 1.5         # power planner (planning aid): tumours per group needed to detect this fold-change
@@ -95,6 +133,9 @@ fiji_fallback = true      # no Fiji statistics/mask for a tumour: re-run the mac
 fiji_min_voxels = 200000  # 3D Objects Counter minimum object size of the macro (voxels)
 threshold_sweep = false   # true: recompute every confirmatory effect at the threshold x sweep_scales (slow first run)
 sweep_scales = [0.8, 0.9, 1.1, 1.2]
+qc_saturation_warn = 0.40 # QC warning when more of the mid-section main mass is saturated (255) than this
+review_px = 640           # blinded review images (review/<code>.jpg): longest side per panel in pixels
+review_jpeg_quality = 80
 
 # Factors: one column per factor in layout.csv. levels = allowed values, reference = comparison baseline,
 # role = where the factor goes in group plots (row, panel, x, colour), source = where the value is read
@@ -123,12 +164,80 @@ source = "filename"
 aliases = {{ "-clodron" = "-clodro" }}
 
 # Statistics (ADR 0003): LOCKED before results are viewed — the run records a hash of factors, readouts and families.
-# Readouts: column in tumours.csv; role = "confirmatory" (stars) or "exploratory" (effect sizes, labelled).
+# Readouts: column in tumours.csv; role = "confirmatory" (stars) or "exploratory" (effect sizes, labelled);
+# legacy = Fiji counterpart column (method concordance). Confirmatory = main-mass cross-sectional area and perimeter
+# over the mid-section (ADR 0002/0003 amendments: only ~80-150 µm of each tumour is imaged, so 3D volume and
+# surface depend on the acquired depth and are exploratory).
+[[tumour.readouts]]
+name = "cross_sectional_area"
+column = "cross_sectional_area_mm2"
+label = "Cross-sectional area, mid-section (mm²)"
+role = "confirmatory"
+legacy = "fiji_cross_sectional_area_mm2"
+
+[[tumour.readouts]]
+name = "perimeter"
+column = "perimeter_mm"
+label = "Perimeter, mid-section (mm)"
+role = "confirmatory"
+legacy = "fiji_perimeter_mm"
+
+[[tumour.readouts]]
+name = "footprint_area"
+column = "footprint_area_mm2"
+label = "Footprint area (mm²)"
+role = "exploratory"
+
+[[tumour.readouts]]
+name = "slab_volume"
+column = "slab_volume_mm3"
+label = "Slab volume (mm³)"
+role = "exploratory"
+
 [[tumour.readouts]]
 name = "main_mass_volume"
 column = "main_mass_volume_mm3"
 label = "Main-mass volume (mm³)"
-role = "confirmatory"
+role = "exploratory"
+legacy = "fiji_main_volume_mm3"
+
+[[tumour.readouts]]
+name = "main_mass_surface"
+column = "main_mass_surface_mm2"
+label = "Main-mass surface area (mm²)"
+role = "exploratory"
+legacy = "fiji_main_surface_mm2"
+
+[[tumour.readouts]]
+name = "tumour_burden"
+column = "tumour_burden_mm3"
+label = "Tumour burden (mm³)"
+role = "exploratory"
+legacy = "fiji_total_volume_mm3"
+
+[[tumour.readouts]]
+name = "elongation"
+column = "elongation"
+label = "Elongation (mid-section)"
+role = "exploratory"
+
+[[tumour.readouts]]
+name = "solidity"
+column = "solidity"
+label = "Solidity (mid-section)"
+role = "exploratory"
+
+[[tumour.readouts]]
+name = "edge_roughness"
+column = "edge_roughness"
+label = "Edge roughness (mid-section)"
+role = "exploratory"
+
+[[tumour.readouts]]
+name = "circularity"
+column = "circularity"
+label = "Circularity (mid-section; reference only)"
+role = "exploratory"
 
 # Contrast families, Holm within each. effect = "simple" (each level of the factor vs its reference, within every
 # combination of the other factors) or "interaction" (ratio of ratios of the listed factors, within the rest; the last
@@ -273,6 +382,10 @@ LEGACY_COUNTERPARTS = {
     "main_mass_surface_mm2": "fiji_main_surface_mm2",
     "main_mass_surface_um2": "fiji_main_surface_um2",
     "tumour_burden_mm3": "fiji_total_volume_mm3",
+    "cross_sectional_area_mm2": "fiji_cross_sectional_area_mm2",
+    "cross_sectional_area_um2": "fiji_cross_sectional_area_um2",
+    "perimeter_mm": "fiji_perimeter_mm",
+    "perimeter_um": "fiji_perimeter_um",
 }
 
 
