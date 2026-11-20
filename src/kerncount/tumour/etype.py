@@ -50,11 +50,11 @@ class TumourVolume(ExperimentType):
             print(layout[["tumour_id", "imaging_session", "include", "note"]].to_string(index=False))
             if "culture_batch" in layout.columns and len(layout):  # ticket 13: culture batches per session folder
                 cb = layout.assign(batch=layout["culture_batch"].replace("", "(not recorded)"))
-                print("\nTumours per imaging session and culture batch (file-name date = culture preparation):")
+                print("\nTumours per session folder and culture batch (file-name date = culture preparation):")
                 print(pd.crosstab(cb["imaging_session"], cb["batch"]).to_string())
             if "acquisition_day" in layout.columns and len(layout):  # ticket 12: imaging days per session folder
                 days = layout.assign(day=layout["acquisition_day"].replace("", "(not recorded)"))
-                print("\nTumours per imaging session and acquisition day (OME metadata):")
+                print("\nTumours per session folder and acquisition day (OME metadata):")
                 print(pd.crosstab(days["imaging_session"], days["day"]).to_string())
             inc = v.layout[(v.layout["include"] == "yes") & (v.layout["tumour_id"] != "")]
             print(f"\n{len(inc)} tumours included ({len(layout) - len(inc)} excluded or unreadable); per group:")

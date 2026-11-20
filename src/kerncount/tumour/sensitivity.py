@@ -318,7 +318,7 @@ def report_lines(sens: list[pd.DataFrame], n_perm: int, seed: int) -> list[str]:
           f"- Random permutations are seeded: seed {seed} (`[tumour] sensitivity_seed`) combined with each contrast's "
           "label, so reruns give identical p-values.",
           "- Holm within each family and readout, per method. Contrasts the primary model does not test (confounded "
-          "with imaging session, descriptive, needing absent groups) are not tested here either.",
+          "with the batch, descriptive, needing absent groups) are not tested here either.",
           "- **Concordant** = the Holm-adjusted significance at 0.05 of both sensitivity methods agrees with the "
           "primary model (direction always agrees: all three share the point estimate). Sensitivity results never "
           "carry stars.",

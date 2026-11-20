@@ -1,5 +1,5 @@
 """Tumour factorial statistics (ticket 04, ADR 0003 amendment): contrasts from a declarative family spec, one N-way
-log-scale model with pooled variance, Holm within family, confounding with imaging session, missing levels.
+log-scale model with pooled variance, Holm within family, confounding with the session folder, missing levels.
 
 All tests use synthetic readout tables (no images)."""
 from __future__ import annotations
@@ -212,7 +212,7 @@ def test_ratio_contrast_is_unaffected_by_a_session_shift_while_direct_genotype_c
     herv = "(HERV / cntrl in TLR7 KO) ÷ (HERV / cntrl in WT) | -clodro"
     assert ra.loc[herv, "ci_low"] < 1.5 < ra.loc[herv, "ci_high"]
     f6 = rb[rb.family == "F6"]
-    assert f6["confounded"].all() and f6["note"].str.contains("confounded with imaging session").all()
+    assert f6["confounded"].all() and f6["note"].str.contains("confounded with session folder").all()
     assert (f6["significance"] == "").all() and f6["p"].isna().all()
     assert np.allclose(f6["estimate"] / ra[ra.family == "F6"]["estimate"], 3.0)
     assert not rb[rb.family.isin(["F1", "F2", "F3", "F4", "F5", "F7"])]["confounded"].any()

@@ -164,7 +164,7 @@ def analyse(project_dir: Path, table: pd.DataFrame, settings: dict) -> list[str]
         all_sens.append(sens)
         if ro.role == "confirmatory":
             fc, pw, alpha = planner.options(settings)
-            plans.append(planner.plan_readout(model, facs, fams, ro, fc, pw, alpha))
+            plans.append(planner.plan_readout(model, facs, fams, ro, fc, pw, alpha, batch(settings)))
             pooled_sd[ro.name] = float(np.sqrt(model.s2))
         written.append(str(sensitivity.residual_plot(sensitivity.groups(adjusted, facs, ro.column), facs, ro.label,
                                                      out / "plots" / f"{ro.name}_residuals")))
@@ -296,7 +296,7 @@ def _about(settings: dict, h: str, spec: dict, fams: list[Family], notes: list[s
     if absent:
         lines.append("Levels without data (contrasts needing them are listed as 'needs … data'): " + "; ".join(absent))
     if "imaging_session" in table.columns:
-        lines.append("Imaging sessions: " + ", ".join(sorted(set(table["imaging_session"].astype(str)))))
+        lines.append("Session folders: " + ", ".join(sorted(set(table["imaging_session"].astype(str)))))
     col = stats.batch_of(table)[0]
     if col in table.columns:
         lines.append("Batches: " + ", ".join(sorted(set(table[col].astype(str)))))

@@ -122,7 +122,7 @@ DEFAULTS: dict = {
 TEMPLATE = '''# kerncount settings — tumour volume experiment (docs/tumour.md); anything left out falls back to defaults.
 
 [project]
-raw_dir = "{raw_dir}"   # raw experiment folder: one sub-folder per imaging session, flat z-stack files
+raw_dir = "{raw_dir}"   # raw experiment folder: one session folder per delivery (e.g. "5d K07", "5d WT"), z-stacks inside
 date_order = "DMY"        # dates in file names: 030826 = 3 Aug 2026
 csv_delimiter = ","       # set to ";" if Excel (German/European locale) shows everything in one column
 
@@ -159,7 +159,7 @@ review_jpeg_quality = 80
 
 # Factors: one column per factor in layout.csv. levels = allowed values, reference = comparison baseline,
 # role = where the factor goes in group plots (row, panel, x, colour), source = where the value is read
-# ("filename" token or imaging-"session" folder name), aliases = other spellings mapped onto a level.
+# ("filename" token or the "session"-folder name), aliases = other spellings mapped onto a level.
 # Session folders are read word by word (case-insensitive; "5d K07" -> K07 -> TLR7 KO); words that are no level
 # (e.g. "5d") are kept as the session_label. A new genotype = a new level (+ its folder spelling as an alias).
 [[tumour.factors]]

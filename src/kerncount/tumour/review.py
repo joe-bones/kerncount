@@ -3,7 +3,7 @@
 Blinding: the reviewer gets the `review/` folder, which holds nothing that names a group —
 - every tumour gets a random code (`review_key.csv` maps code -> tumour ID; it lives in the project folder, NOT in
   `review/`, and codes stay fixed across runs so corrections keep pointing at the same tumour);
-- file names, image titles and `review/corrections.csv` carry only the code (no factor level, imaging session, date,
+- file names, image titles and `review/corrections.csv` carry only the code (no factor level, session folder, date,
   section label or file name); tumours are listed / tiled in code order, which is random, not grouped;
 - each image is contrast-stretched on its own (percentiles), so brightness differences between tumour lines are not
   shown as such; JPEGs are written without metadata.

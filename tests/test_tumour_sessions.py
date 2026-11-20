@@ -420,7 +420,7 @@ def test_batch_setting_decides_which_contrasts_are_confounded(tmp_path, batch, f
     if label:
         assert label in herv["note"]
     assert np.isfinite(res.loc["+clodro vs -clodro | TLR7 KO, HERV", "p"])  # same day: tested either way
-    plan = planner.plan_readout(stats.fit(t, facs, ro.column), facs, fams, ro)
+    plan = planner.plan_readout(stats.fit(t, facs, ro.column), facs, fams, ro, batch_kind=batch)
     assert any(plan["comparison"].str.startswith("HERV vs cntrl | TLR7 KO")) == f1_tested
 
 

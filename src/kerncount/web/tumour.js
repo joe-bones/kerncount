@@ -68,7 +68,7 @@ function tumourRunPanel(e, ov) {
   const d = S.running ? "disabled" : "";
   return `${S.running ? `<div class="notice info">A job is running — see the log at the bottom. Buttons that change files are paused until it finishes.</div>` : ""}
     <div class="steps">
-      ${step(1, e.initialised, "Set up", "Scan the raw folder (one sub-folder per imaging session) into layout.csv: one row per tumour.",
+      ${step(1, e.initialised, "Set up", "Scan the raw folder (its session folders, as delivered) into layout.csv: one row per tumour.",
         `<label class="small"><input type="checkbox" id="o_force"> start over: reset settings and layout</label>
          <label class="small"><input type="checkbox" id="o_forcelayout"> rewrite the layout only</label>
          <button ${d} ${on("click", function () { setUp($("o_force").checked, $("o_forcelayout").checked); })}>Re-scan folder</button>`)}
@@ -111,10 +111,10 @@ T.layout = async function (b) {
     ${L.problems.length ? `<div class="notice err"><b>${L.problems.length} problem(s) block the run</b> (nothing is measured until every included file maps to exactly one tumour ID):<ul>${L.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul></div>`
       : `<div class="notice ok">The layout is complete: ${L.included} tumour(s) included, ${L.excluded} excluded.</div>`}
     ${L.warnings.length ? `<div class="notice"><ul style="margin:0">${L.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
-    <p class="muted">One row per original z-stack. Factor values come from the file name or the imaging-session folder; fix a value that was read wrongly
+    <p class="muted">One row per original z-stack. Factor values come from the file name or the session-folder name; fix a value that was read wrongly
       (it is noted as an override), or untick <b>include</b> and give the reason in <b>note</b>. The tumour ID is rebuilt from the values when you save.</p>
     <div class="bar"><button class="primary" ${on("click", function () { saveTumourLayout() })}>Save layout</button><span class="muted small" id="layoutState"></span></div>
-    <div class="tablewrap"><table class="grid" id="tlayTbl"><thead><tr><th>file</th><th>imaging session</th>${L.factors.map(f => `<th>${esc(f.name)}</th>`).join("")}
+    <div class="tablewrap"><table class="grid" id="tlayTbl"><thead><tr><th>file</th><th>session folder</th>${L.factors.map(f => `<th>${esc(f.name)}</th>`).join("")}
       <th>section</th><th>hemi&shy;sphere</th><th>tumour ID</th><th>include</th><th>note</th></tr></thead>
     <tbody>${L.rows.map((r, i) => `<tr data-i="${i}">
       <td class="small" title="${esc(r[ix.file])}">${esc(r[ix.file])}</td><td class="small">${esc(r[ix.imaging_session])}</td>
@@ -161,7 +161,7 @@ async function loadTReview(force) {
   return S.trev;
 }
 const BLIND_TXT = `<div class="notice info"><b>Blinded.</b> Tumours are shown by a random code only, in code order, each image contrast-stretched on its own.
-  Nothing here names a group, imaging session, date or file (the key <code>review_key.csv</code> stays out of these pages). Orange = main mass (object 1), cyan = satellites; the numbers are the objects you can pick.</div>`;
+  Nothing here names a group, session folder, date or file (the key <code>review_key.csv</code> stays out of these pages). Orange = main mass (object 1), cyan = satellites; the numbers are the objects you can pick.</div>`;
 
 T.review = async function (b) {
   const R = await loadTReview(true);

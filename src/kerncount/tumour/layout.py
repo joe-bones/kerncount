@@ -1,6 +1,6 @@
 """Raw experiment folder -> layout.csv rows (one row per tumour), and the check that blocks a run on a bad layout.
 
-    <raw>/<imaging session>/<date> <tumour line> <±clodro> n<k> <A|B>.ome.tiff     original z-stack = one tumour
+    <raw>/<session folder>/<date> <tumour line> <±clodro> n<k> <A|B>.ome.tiff     original z-stack = one tumour
                             ... <A|B>f.tif                                         Fiji legacy binary mask
                             Statistics for ... <A|B>f.csv|.txt, ... <A|B>f_3Dresults.csv, ... <A|B>.txt
                                                                                     Fiji legacy statistics
@@ -223,7 +223,7 @@ def _walk(folder: Path, recursive: bool = True) -> list[tuple[str, str]]:
 
 
 def _sessions(raw: Path) -> list[tuple[str, Path]]:
-    """Every sub-folder of the experiment folder is one imaging session (hidden / system folders ignored)."""
+    """Every sub-folder of the experiment folder is one session folder (hidden / system folders ignored)."""
     subs = sorted(d for d in raw.iterdir() if _is_session_folder(d))
     out = [(d.name, d) for d in subs]
     if any(p.is_file() and is_original(p.name) for p in raw.iterdir()):
@@ -324,7 +324,7 @@ NO_BATCH = "no culture batch"
 
 
 def disambiguate(lay: pd.DataFrame, rows: pd.Series | None = None) -> None:
-    """In place: a tumour ID given by tumours of several imaging sessions (repeat sessions of one genotype) gets the
+    """In place: a tumour ID given by tumours of several session folders (repeat sessions of one genotype) gets the
     session appended ("WT / HERV / -clodro / n1A / 5d WT repeat"); then an ID still given by tumours of several
     culture batches (section labels restart per batch, ticket 13) gets the batch appended
     ("WT / cntrl / -clodro / n1B / 2026-07-10"). IDs that are unique stay as they are, so adding a session or batch
@@ -462,7 +462,7 @@ def _parts(note: str) -> list[str]:
 
 
 def _parse_path(file: str, session: str, facs: list[Factor], order: str) -> dict:
-    """What a scan says about `file` (relative path) in imaging session `session` (the file need not exist)."""
+    """What a scan says about `file` (relative path) in session folder `session` (the file need not exist)."""
     name = file.rsplit("/", 1)[-1]
     tokens, _ = _normalise_stem(session)
     _, label, _ = read_session(session, facs)
@@ -691,7 +691,7 @@ def validate(layout: pd.DataFrame, raw: Path | None, settings: dict) -> Validati
     for (session, fname), files in session_missing.items():
         _, _, unread = read_session(session, facs)
         words = f" (words not read as a level: {', '.join(repr(w) for w in unread)})" if unread else ""
-        problems.append(f"imaging session {session!r}: {fname} cannot be determined from the folder name{words} "
+        problems.append(f"session folder {session!r}: {fname} cannot be determined from the folder name{words} "
                         f"({len(files)} tumour{'s' if len(files) != 1 else ''}); declare the folder's spelling as an "
                         f"alias of a level in settings.toml ([[tumour.factors]] name = \"{fname}\": aliases = "
                         f"{{ \"<word>\" = \"<level>\" }}; a new {fname} = a new level), or fill the {fname} column "

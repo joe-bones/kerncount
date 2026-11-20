@@ -108,7 +108,7 @@ def test_only_tested_families_and_contrasts_are_planned_with_bonferroni_within_f
 
     t = synth_table(np.random.default_rng(7))
     plan = planner.plan_readout(stats.fit(t, FACS, "volume"), FACS, ALL, VOL)
-    assert "F6" not in set(plan["family"])  # descriptive (and confounded with imaging session)
+    assert "F6" not in set(plan["family"])  # descriptive (and confounded with the session folder)
     counts = plan.groupby("family")["comparison"].count().to_dict()
     assert counts == {"F1": 8, "F2": 6, "F3": 4, "F4": 4, "F5": 3, "F7": 2}
     assert (plan["alpha_per_test"] * plan["tests_in_family"]).round(12).eq(0.05).all()
@@ -168,3 +168,20 @@ def test_analyse_writes_a_separate_planning_aid_for_confirmatory_readouts_only(t
     report = (tmp_path / "stats_report.md").read_text()
     sec = report[report.index("## Planning aid"):]
     assert "not part of the confirmatory results" in sec and "Bonferroni" in sec and "2.0" in sec
+
+
+@pytest.mark.parametrize("batch_kind", ["culture_batch", "session_folder", "acquisition_day"])
+def test_contrasts_needing_absent_groups_are_planned_by_the_design_rule_under_every_batch_kind(batch_kind):
+    """Review fix: the planner takes the batch kind from the settings (not from a display label). With WT absent,
+    which batch a WT group would come from is unknown, so the design-level rule decides: factors read from the session
+    folder (genotype) are taken to come from their own batches. A direct genotype contrast (here declared
+    confirmatory) is then not planned under any batch kind, the genotype x line ratio (F4) is."""
+    from kerncount.tumour import planner, stats
+    from kerncount.tumour.config import Family
+
+    t = synth_table(np.random.default_rng(8), genotypes=("TLR7 KO",))
+    t["batch"] = "030826"  # one culture batch (as the real KO set)
+    direct = Family("G", "simple", ("genotype",), "confirmatory")
+    plan = planner.plan_readout(stats.fit(t, FACS, "volume"), FACS, [direct, F4, F1], VOL, batch_kind=batch_kind)
+    assert "G" not in set(plan["family"])
+    assert len(plan[plan.family == "F4"]) == 4 and len(plan[plan.family == "F1"]) == 8  # WT ones need data

@@ -26,11 +26,12 @@ from scipy import stats as sps
 from .config import Factor
 from .families import Cell, Contrast
 
-CONFOUNDED = "confounded with imaging session"
+CONFOUNDED = "confounded with session folder"  # batch = session_folder (CONTEXT.md: not "imaging session")
 CONFOUNDED_DAY = "confounded with acquisition day"
 CONFOUNDED_BATCH = "confounded with culture batch"
+CONFOUNDED_OTHER = "confounded with batch"  # a batch column matching none of the known sources
 SESSION_COLUMN = "imaging_session"
-BATCH_COLUMN = "batch"  # tumours.csv: the imaging batch per `[tumour] batch` (table.build); else imaging_session
+BATCH_COLUMN = "batch"  # tumours.csv: the batch per `[tumour] batch` (table.build); else the session folder
 
 
 def batch_of(table: pd.DataFrame) -> tuple[str, str]:
@@ -45,7 +46,7 @@ def batch_of(table: pd.DataFrame) -> tuple[str, str]:
                 c = table[col].fillna("").astype(str)
                 if b.equals(c) or (b[c != ""].equals(c[c != ""]) and b[c == ""].str.startswith("(").all()):
                     return BATCH_COLUMN, label
-        return BATCH_COLUMN, "confounded with imaging batch"
+        return BATCH_COLUMN, CONFOUNDED_OTHER
     return SESSION_COLUMN, CONFOUNDED
 
 
@@ -57,9 +58,9 @@ class CellModel:
     mean: dict[Cell, float]  # mean log(readout) per present cell
     s2: float  # pooled residual variance (log scale); nan when df = 0
     df: int  # residual degrees of freedom = tumours − present cells
-    sessions: dict[Cell, dict[str, float]] = field(default_factory=dict)  # cell -> {batch: share of its tumours}
+    batches: dict[Cell, dict[str, float]] = field(default_factory=dict)  # cell -> {batch: share of its tumours}
     dropped: int = 0  # rows left out (missing, non-positive or outside the declared levels)
-    confounded_label: str = CONFOUNDED  # what a batch is (culture batch / imaging session / day), for notes
+    confounded_label: str = CONFOUNDED  # display label of a confounded contrast (culture batch / session folder / day)
     # ticket 13: fixed block effects (log scale, centred within each connected set; 0 for a set of one batch)
     blocks: dict[str, float] = field(default_factory=dict)
     component: dict[Cell, int] = field(default_factory=dict)  # cell -> connected set of batches it belongs to
@@ -93,7 +94,7 @@ class Estimate:
     df: int
     n: int  # tumours in the cells the contrast uses
     missing: list[Cell] = field(default_factory=list)  # cells the contrast needs that have no tumours
-    confounded: bool = False  # a multiplicative imaging-session shift does not cancel
+    confounded: bool = False  # a multiplicative batch shift does not cancel
 
 
 def cell_of(table: pd.DataFrame, facs: list[Factor]) -> pd.Series:
@@ -109,18 +110,20 @@ def usable(table: pd.DataFrame, facs: list[Factor], column: str) -> pd.Series:
     return ok
 
 
-def fit(table: pd.DataFrame, facs: list[Factor], column: str, session: str | None = None) -> CellModel:
-    """`session` = the batch column (default: `batch_of(table)`); confounding is judged per batch."""
+def fit(table: pd.DataFrame, facs: list[Factor], column: str, batch_column: str | None = None) -> CellModel:
+    """`batch_column` = the column naming each tumour's batch (default: `batch_of(table)`); confounding is judged
+    per batch."""
     label = CONFOUNDED
-    if session is None:
-        session, label = batch_of(table)
+    if batch_column is None:
+        batch_column, label = batch_of(table)
+    session = batch_column
     ok = usable(table, facs, column)
     t = table[ok]
     y = np.log(pd.to_numeric(t[column]).to_numpy(float))
     keys = cell_of(t, facs)
     n: dict[Cell, int] = {}
     mean: dict[Cell, float] = {}
-    sessions: dict[Cell, dict[str, float]] = {}
+    shares: dict[Cell, dict[str, float]] = {}
     ss = 0.0
     for cell, idx in keys.groupby(keys).groups.items():
         pos = t.index.get_indexer(idx)
@@ -128,11 +131,11 @@ def fit(table: pd.DataFrame, facs: list[Factor], column: str, session: str | Non
         n[cell], mean[cell] = len(yc), float(yc.mean())
         ss += float(((yc - yc.mean()) ** 2).sum())
         if session in t.columns:
-            sessions[cell] = t.loc[idx, session].astype(str).value_counts(normalize=True).to_dict()
+            shares[cell] = t.loc[idx, session].astype(str).value_counts(normalize=True).to_dict()
     batches = (t[session].astype(str).to_numpy() if session in t.columns else np.array([""] * len(t), dtype=object))
     component, sets = _connected(list(keys), list(batches))
     blocks = {b: 0.0 for bs in sets for b in bs}
-    m = CellModel(list(facs), column, n, mean, float("nan"), len(y) - len(n), sessions, int((~ok).sum()), label,
+    m = CellModel(list(facs), column, n, mean, float("nan"), len(y) - len(n), shares, int((~ok).sum()), label,
                   blocks, component, {}, session if session in t.columns else "", sets)
     extra = [b for bs in sets for b in bs[1:]]
     if extra:
@@ -237,7 +240,7 @@ def confounded(model: CellModel, weights: dict[Cell, float]) -> bool:
         return any(abs(v) > 1e-9 for v in per_set.values())
     per: dict[str, float] = {}
     for cell, w in weights.items():
-        for s, share in model.sessions.get(cell, {}).items():
+        for s, share in model.batches.get(cell, {}).items():
             per[s] = per.get(s, 0.0) + w * share
     return any(abs(v) > 1e-9 for v in per.values())
 
@@ -280,7 +283,7 @@ def readout_results(table: pd.DataFrame, facs: list[Factor], fams: list, readout
                     ) -> pd.DataFrame:
     """Every contrast of every family for one readout, Holm within each family, labelled (ADR 0003):
     stars only for confirmatory families of confirmatory readouts; descriptive families and contrasts confounded with
-    imaging session are shown with estimate + CI but never tested; contrasts needing absent cells are kept as rows
+    the batch are shown with estimate + CI but never tested; contrasts needing absent cells are kept as rows
     saying which data they need."""
     from ..analysis import holm, stars
     from .families import contrasts
