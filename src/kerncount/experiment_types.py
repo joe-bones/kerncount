@@ -28,6 +28,7 @@ class RunOptions:
     rebuild: list[str] = field(default_factory=list)
     resegment: bool = False  # ignore cached segmentations / measurements
     no_review: bool = False  # skip drawing review images
+    unlock: str | None = None  # tumour: unlock a changed analysis plan with this reason (logged)
 
 
 class UnknownExperimentType(ValueError):

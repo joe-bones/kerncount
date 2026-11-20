@@ -1,7 +1,7 @@
 """The analysis-plan lock of a tumour project (ADR 0003): once results exist, the plan behind them stays fixed.
 
-The plan = factors (levels, reference), readouts (column, confirmatory / exploratory), families and the focus factor
-of normalised values; `results.lock(settings)` hashes it, and every stats_long.csv row carries `lock <hash>`.
+The plan = factors (levels, reference), readouts (column, confirmatory / exploratory), families, the focus factor
+of normalised values and the measurement settings behind the confirmatory values (`results.MEASUREMENT_KEYS`); `results.lock(settings)` hashes it, and every stats_long.csv row carries `lock <hash>`.
 Results exist = `stats_long.csv` in the project folder; their hash is read back from it.
 
 While results exist, a change of the plan (a settings.toml whose hash differs from the results') needs an explicit
@@ -9,8 +9,9 @@ While results exist, a change of the plan (a settings.toml whose hash differs fr
 hash is appended to `lock_log.csv` in the project folder; the run copies the log into the report (`report_lines`), so a
 changed lock is visible next to the results. A run ends an unlock: the new results are locked again.
 
-Enforced by the web interface (`gui_tumour`); a settings.toml edited in a text editor is not blocked, but the next run
-records "without a logged unlock" in the log and the report.
+Enforced by the web interface (`gui_tumour`, when settings are saved) and by `kerncount run` (`enforce`: a settings.toml
+edited in a text editor stops the run unless `--unlock "reason"` is given, which logs the unlock). A rebuild that still
+happens without an unlock (e.g. through the Python API) is recorded "without a logged unlock" in the log and report.
 
 Standard library only (the web interface imports it without the scientific stack).
 """
@@ -96,8 +97,9 @@ def check_change(project_dir: Path, old_lock: str, new_lock: str) -> None:
     if st["locked"]:
         raise PlanLocked(
             f"the analysis plan is locked: results exist (lock {st['results_lock']}), so factors, levels, reference "
-            "levels, readout roles and contrast families cannot change. Unlock it first (Settings -> Analysis plan -> "
-            "Unlock, with a reason); the unlock and the change are logged in lock_log.csv and printed in the report.")
+            "levels, readout roles, contrast families and the measurement settings of the confirmatory readouts "
+            "cannot change. Unlock it first (Settings -> Analysis plan -> Unlock, with a reason); the unlock and the "
+            "change are logged in lock_log.csv and printed in the report.")
 
 
 def unlock(project_dir: Path, reason: str, settings_lock: str) -> dict:
@@ -110,6 +112,27 @@ def unlock(project_dir: Path, reason: str, settings_lock: str) -> dict:
     if _active_unlock(project_dir, cur):
         raise ValueError("the analysis plan is already unlocked")
     return _append(project_dir, "unlock", cur, settings_lock, reason)
+
+
+def enforce(project_dir: Path, settings_lock: str, unlock_reason: str | None = None) -> str:
+    """`kerncount run`: raise PlanLocked when settings.toml has a plan other than the results' and no unlock is in
+    force; `unlock_reason` (from `--unlock`) logs an unlock first. Returns a note for the console ("" = none)."""
+    if unlock_reason is not None and len(" ".join(str(unlock_reason).split())) < 3:
+        raise ValueError("--unlock needs a reason (it is logged in lock_log.csv and printed in the report)")
+    st = status(project_dir, settings_lock)
+    if not st["changed"]:
+        return "--unlock ignored: the analysis plan did not change" if unlock_reason is not None else ""
+    if not st["locked"]:
+        return f"analysis plan unlocked ({st['unlocked']['at']}: {st['unlocked']['reason']}); this run locks it again"
+    if unlock_reason is None:
+        raise PlanLocked(
+            f"the analysis plan is locked: the results were built with plan {st['results_lock']}, settings.toml now "
+            f"has plan {settings_lock} (factors, readout roles, families or the measurement settings of the "
+            "confirmatory readouts changed). Undo the change, or unlock with a reason: "
+            "kerncount run <experiment> --unlock \"why the plan changed\" (logged in lock_log.csv and printed in "
+            "the report).")
+    e = unlock(project_dir, unlock_reason, settings_lock)
+    return f"analysis plan unlocked: {e['reason']} (logged in {LOG})"
 
 
 def relock(project_dir: Path, settings_lock: str) -> dict:

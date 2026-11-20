@@ -160,7 +160,8 @@ def _projects(a) -> list[Path]:
 def cmd_run(a):
     from . import experiment_types, settings
 
-    opts = experiment_types.RunOptions(rebuild=a.rebuild, resegment=a.resegment, no_review=a.no_review)
+    opts = experiment_types.RunOptions(rebuild=a.rebuild, resegment=a.resegment, no_review=a.no_review,
+                                       unlock=a.unlock)
     for prj in _projects(a):
         print(f"\n=== {prj.name}")
         _experiment_type(settings.load(prj)).run(prj, opts)
@@ -236,6 +237,8 @@ def main(argv=None):
                    help="overwrite existing generation folders, e.g. --rebuild g2  or  --rebuild all")
     r.add_argument("--resegment", action="store_true", help="ignore cached segmentations")
     r.add_argument("--no-review", action="store_true", help="skip drawing review images (faster)")
+    r.add_argument("--unlock", default=None, metavar="REASON",
+                   help="tumour experiments: unlock a changed analysis plan (logged with this reason in lock_log.csv)")
     r.set_defaults(func=cmd_run)
     rg = sub.add_parser("regen", help="rebuild generations from counts.csv only (fast; after manual corrections)")
     rg.add_argument("project", nargs="?", help="experiment name, or a project folder path")

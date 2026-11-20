@@ -82,6 +82,15 @@ class TumourVolume(ExperimentType):
         from .measure import raw_dir
 
         s = settings_mod.load(project_dir)
+        from . import lock_log
+        from .results import lock
+
+        try:  # review fix: the CLI enforces the analysis-plan lock like the web interface (ADR 0003)
+            note = lock_log.enforce(Path(project_dir), lock(s)[0], options.unlock)
+        except ValueError as e:  # PlanLocked or a missing reason
+            raise SystemExit(str(e)) from None
+        if note:
+            print(note)
         lp = Path(project_dir) / "layout.csv"
         if not lp.exists():
             raise SystemExit(f"{lp} not found - run 'kerncount init' first")

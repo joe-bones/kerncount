@@ -321,6 +321,20 @@ def test_lock_hash_changes_when_the_family_spec_or_readout_split_changes():
     assert results.lock(base)[0] == results.lock(_settings())[0]
 
 
+def test_lock_hash_covers_the_settings_that_define_the_confirmatory_readouts():
+    """Review fix (ADR 0003: locked before results are viewed): the measurement settings behind the confirmatory
+    values are part of the plan; exploratory-only scales are not; 20 and 20.0 are the same plan."""
+    from kerncount.tumour import results
+
+    base = results.lock(_settings())[0]
+    for k, v in (("mid_section_um", 30.0), ("outline_smooth_um", 4.0), ("smooth_sigma_um", 3.0),
+                 ("threshold", "otsu"), ("min_object_um3", 5000.0)):
+        assert results.lock(_settings(**{k: v}))[0] != base, k
+    assert results.lock(_settings(slab_um=80.0))[0] == base
+    assert results.lock(_settings(mid_section_um=20))[0] == base
+    assert results.lock(_settings())[1]["measurement"]["mid_section_um"] == 20.0
+
+
 def test_analyse_with_one_genotype_and_groups_of_one_does_not_fail(tmp_path):
     from kerncount.experiment_types import RunOptions, get
 

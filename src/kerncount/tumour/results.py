@@ -27,14 +27,30 @@ def model_text(model: stats.CellModel) -> str:
 NAN = float("nan")
 
 
+# [tumour] settings that define the confirmatory values (segmentation + mid-section rule): part of the locked plan
+# (review fix 2026-11-20; ADR 0003 "locked in settings before results are viewed"). Exploratory-only scales
+# (roughness, slab, surface grid) are not.
+MEASUREMENT_KEYS = ("smooth_sigma_um", "threshold", "min_object_um3", "mid_section_um", "outline_smooth_um")
+
+
+def _measurement(settings: dict) -> dict:
+    from .config import tumour_settings
+
+    ts = tumour_settings(settings)
+    return {k: (float(ts[k]) if isinstance(ts[k], (int, float)) and not isinstance(ts[k], bool) else str(ts[k]))
+            for k in MEASUREMENT_KEYS}
+
+
 def lock(settings: dict) -> tuple[str, dict]:
-    """(12-hex hash, spec) of the analysis plan: factors (levels, reference), readouts (column, role), families."""
+    """(12-hex hash, spec) of the analysis plan: factors (levels, reference), readouts (column, role), families,
+    the measurement settings behind the confirmatory readouts (MEASUREMENT_KEYS) and the batch rule."""
     spec = {
         "factors": [{"name": f.name, "levels": list(f.levels), "reference": f.reference} for f in factors(settings)],
         "readouts": [{"name": r.name, "column": r.column, "role": r.role} for r in readouts(settings)],
         "families": [{"id": f.id, "effect": f.effect, "factors": list(f.factors), "role": f.role}
                      for f in families(settings)],
         "normalise_by": (normalise_by(settings, factors(settings)) or Factor("", ("",), "")).name,
+        "measurement": _measurement(settings),
     }
     if batch(settings) != "session_folder":  # ticket 12: decides which contrasts are tested; in the hash only when
         spec["batch"] = batch(settings)  # not the session folder, so locks made before ticket 13 stay valid

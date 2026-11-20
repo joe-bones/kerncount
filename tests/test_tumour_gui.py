@@ -131,6 +131,41 @@ def test_relock_and_runs_without_an_unlock_are_recorded(tmp_path):
     assert len(lock_log.entries(tmp_path)) == n
 
 
+def test_cli_run_refuses_a_changed_plan_without_unlock_and_logs_an_unlock_given_on_the_command_line(
+        tmp_path, monkeypatch, capsys):
+    """Review fix: `kerncount run` enforces the lock like the web interface. A plan changed in a text editor (here a
+    measurement setting) stops the run with a clear message unless `--unlock "reason"` is given, which is logged."""
+    from kerncount import cli
+    from kerncount.tumour import layout as layout_mod
+
+    prj = _tumour_project(tmp_path, results=True)
+    monkeypatch.chdir(tmp_path)
+
+    class Reached(Exception):
+        pass
+
+    def reached(*a, **k):
+        raise Reached()
+
+    monkeypatch.setattr(layout_mod, "check", reached)  # stands for the rest of the run
+    with pytest.raises(Reached):  # unchanged plan: runs
+        cli.main(["run", "T"])
+    p = prj / "settings.toml"
+    p.write_text(p.read_text().replace("mid_section_um = 20.0", "mid_section_um = 30.0"))
+    with pytest.raises(SystemExit, match=r"analysis plan is locked.*--unlock"):
+        cli.main(["run", "T"])
+    assert not (prj / lock_log.LOG).exists()
+    with pytest.raises(Reached):
+        cli.main(["run", "T", "--unlock", "thicker mid-section (lab decision)"])
+    e = lock_log.entries(prj)
+    assert [x["action"] for x in e] == ["unlock"] and e[0]["reason"] == "thicker mid-section (lab decision)"
+    assert e[0]["settings_lock"] == plan_lock(settings.load(prj))[0]
+    with pytest.raises(Reached):  # the unlock is in force until the run rebuilds the results
+        cli.main(["run", "T"])
+    with pytest.raises(SystemExit, match="reason"):
+        cli.main(["run", "T", "--unlock", " "])
+
+
 # ---------------------------------------------------------------- headline statistics without sensitivity rows
 
 def test_headline_statistics_leave_out_sensitivity_rows(tmp_path):
@@ -213,6 +248,10 @@ def test_tumour_settings_form_and_rerun_advice(tsrv):
     assert [s["action"] for s in r["steps"]] == ["run"] and not r["steps"][0]["slow"]
     s = settings.load(tsrv.state.workspace / "analysis" / "T")
     assert s["tumour"]["threshold_sweep"] is True and s["tumour"]["sweep_scales"] == [0.85, 1.15]
+    # review fix: the mid-section thickness defines the confirmatory values, so it is part of the locked plan
+    code, r = tsrv.call("/api/settings", body={"experiment": "T", "values": {"tumour": {"mid_section_um": "30"}}})
+    assert code == 400 and "locked" in r["error"]
+    assert tsrv.call("/api/tumour/unlock", body={"experiment": "T", "reason": "thicker mid-section"})[0] == 200
     code, r = tsrv.call("/api/settings", body={"experiment": "T", "values": {"tumour": {"mid_section_um": "30"}}})
     assert code == 200 and r["steps"][0]["slow"]
     # cell-count projects keep their form
