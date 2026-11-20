@@ -282,24 +282,28 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
     "tumour": {
         "smooth_sigma_um": dict(kind="float", min=0, label="Smoothing before the threshold (µm)", reseg=True,
                                 help="Gaussian smoothing at a physical scale, identical for every tumour, so noise and "
-                                     "single bright pixels do not change the outline. 2 µm = about 3 pixels in xy."),
+                                     "single bright pixels do not change the outline. 2 µm = about 3 pixels in xy. Part of "
+                                     "the locked analysis plan."),
         "threshold": dict(kind="choice", options=["intermedians", "otsu"], label="Threshold rule", reseg=True,
                           help="One automatic rule for every tumour (ADR 0002; never set by hand per tumour). "
                                "intermedians = half-way between the background and the tumour level (medians), so "
                                "it does not depend on tumour size and ignores saturated pixels; otsu = classical "
                                "two-class split (shifts with tumour size). Check its robustness with the threshold "
-                               "sweep."),
+                               "sweep. Part of the locked analysis plan."),
         "min_object_um3": dict(kind="float", min=0, label="Smallest object (µm³)", reseg=True,
                                help="Connected objects smaller than this are noise. Larger ones besides the main "
-                                    "mass are satellites (tumour burden, invasion fraction)."),
+                                    "mass are satellites (tumour burden, invasion fraction). Part of the locked "
+                                    "analysis plan."),
         "mid_section_um": dict(kind="float", min=0, label="Mid-section thickness (µm)", reseg=True,
                                help="The confirmatory area and perimeter are averaged over the layers within this "
-                                    "thickness, centred on the layer where the main mass is largest - the same "
-                                    "physical slab for every tumour, whatever the imaged depth. 20 µm = 9-11 layers."),
+                                    "thickness, centred on the layer where the main mass is largest - exactly the "
+                                    "same physical thickness for every tumour and z-step (the two outermost layers "
+                                    "count in part). Part of the locked analysis plan."),
         "outline_smooth_um": dict(kind="float", min=0, label="Outline smoothing for perimeters (µm)", reseg=True,
                                   help="The outline is smoothed at this scale before its length is measured: at 8 µm "
                                        "the perimeter measures the tumour's shape, not pixel noise or single cells "
-                                       "at the border (a finer scale moves it with the threshold)."),
+                                       "at the border (a finer scale moves it with the threshold). Part of the "
+                                       "locked analysis plan."),
         "roughness_fine_um": dict(kind="float", min=0, label="Edge roughness: fine scale (µm)", reseg=True,
                                   help="Edge roughness = outline length at this smoothing ÷ at the coarse scale "
                                        "below (1 = smooth border; higher = ragged, infiltrating). Exploratory."),
