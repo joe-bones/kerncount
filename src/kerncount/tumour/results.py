@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from . import planner, plots, sensitivity, stats
-from .config import Factor, Family, Readout, batch, factors, families, normalise_by, readouts
+from .config import Factor, Family, Readout, batch, factors, families, normalise_by, readouts, tumour_settings
 
 MODEL = "N-way linear model on log(readout), full interaction, pooled variance"
 BLOCK = "; batch as fixed block effect"  # ticket 13: appended when the model estimates block effects
@@ -281,6 +281,14 @@ def _about(settings: dict, h: str, spec: dict, fams: list[Family], notes: list[s
              "Readouts: " + "; ".join(f"{r['name']} ({r['role']})" for r in spec["readouts"]),
              f"Normalised values: % of the model-estimated {spec['normalise_by']} reference in the same cell of the "
              "other factors."]
+    ts = tumour_settings(settings)
+    thick, zrule = str(ts.get("section_thickness_um", "")).strip(), str(ts.get("z_range_rule", "")).strip()
+    lines += [f"Mid-section: {float(ts['mid_section_um']):g} µm of depth for every tumour, centred on the layer of "
+              "largest main-mass cross-section; the outermost layers count with the fraction of their extent inside "
+              "it, so the thickness is the same at every z-step (achieved thickness per tumour: tumours.csv "
+              "mid_section_um).",
+              f"Section thickness: {thick + ' µm' if thick else 'not recorded'}; z-range at the microscope: "
+              f"{zrule or 'not recorded'} ([tumour] section_thickness_um, z_range_rule; experiment metadata)."]
     lines += [f"Family {f.id} [{f.role}]: {f.effect} effect of {' × '.join(f.factors)} — {f.label}" for f in fams]
     present = {f.name: sorted(set(table[f.name].astype(str)) & set(f.levels), key=f.levels.index) for f in facs}
     absent = [f"{f.name}: {', '.join(lv for lv in f.levels if lv not in present[f.name])}" for f in facs

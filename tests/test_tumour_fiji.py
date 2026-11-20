@@ -269,6 +269,7 @@ def test_concordance_outputs_follow_the_declared_confirmatory_readouts(tmp_path)
     assert set(cmp["readout"]) == {"area"} and set(cmp["fiji_column"]) == {"fiji_area"}
     md = report.read_text()
     assert "Method concordance" in md and "Threshold sweep" in md and "threshold_sweep = false" in md
+    assert "mostly reflects the acquired stack depth" in md  # review fix (ADR 0002 amendment)
     assert str(tmp_path / "concordance.csv") in written
 
 

@@ -198,7 +198,12 @@ def analyse(out: Path, table: pd.DataFrame, settings: dict, facs: list[Factor], 
     ts = tumour_settings(settings)
     conf = [r for r in readouts(settings) if r.role == "confirmatory" and r.column in table.columns]
     written: list[str] = []
-    md = ["## Method concordance: primary vs Fiji legacy (ADR 0002)", ""]
+    md = ["## Method concordance: primary vs Fiji legacy (ADR 0002)", "",
+          "**Fiji volume mostly reflects the acquired stack depth, not tumour size** (ADR 0002 amendment "
+          "2026-11-20): only ~80-150 µm of each tumour is imaged, and the lab's per-layer Triangle threshold turns "
+          "faint haze in near-empty layers into tumour, so Fiji's main object spans every imaged layer and its "
+          "volume is about footprint x acquired depth (an acquisition choice). Compare the mid-section area and "
+          "perimeter below, not volumes.", ""]
     cmps = []
     for ro in conf:
         fcol = legacy_counterpart(settings, ro)

@@ -20,13 +20,17 @@ DEFAULTS: dict = {
     "threshold": "intermedians",  # per-tumour automatic threshold, no rolling ball (docs/tumour.md)
     "min_object_um3": 1000.0,  # connected objects smaller than this are noise (not satellites)
     # Readouts (ticket 05, ADR 0002/0003 amendments 2026-11-20): physical scales, identical for every tumour.
-    # Mid-section = layers within +-mid_section_um/2 of the layer with the largest main-mass cross-section.
+    # Mid-section = exactly mid_section_um of depth centred on the layer with the largest main-mass cross-section
+    # (outermost layers weighted by the fraction of their extent inside it; review fix 2026-11-20).
     "mid_section_um": 20.0,
     "outline_smooth_um": 8.0,  # Gaussian smoothing of the outline before measuring perimeters (µm)
     "roughness_fine_um": 2.0,  # edge roughness = outline length at this smoothing (µm) ...
     "roughness_smooth_um": 20.0,  # ... / outline length at this smoothing
     "slab_um": 40.0,  # depth of the slab for the (exploratory) slab volume
     "surface_grid_um": 2.0,  # isotropic grid of the (exploratory) 3D mesh surface area
+    # Experiment metadata (ADR 0002 amendment): printed in the report's About section, "not recorded" while empty.
+    "section_thickness_um": "",  # thickness of the cut brain sections (µm)
+    "z_range_rule": "",  # how the imaged z-range was chosen at the microscope (free text)
     # Sensitivity models (ticket 08): random permutations per contrast (when not enumerated exactly) and their seed.
     "sensitivity_permutations": 9999,
     "sensitivity_seed": 20261119,
@@ -130,12 +134,14 @@ notes = ""
 smooth_sigma_um = 2.0     # Gaussian smoothing (µm) before the threshold; identical for every tumour
 threshold = "intermedians"   # per-tumour automatic threshold without rolling ball: "intermedians" or "otsu"
 min_object_um3 = 1000.0   # smaller connected objects are noise; larger ones besides the main mass are satellites
-mid_section_um = 20.0     # mid-section thickness (µm), centred on the layer of largest main-mass cross-section
+mid_section_um = 20.0     # mid-section thickness (µm, exact for every z-step), centred on the layer of largest main-mass cross-section
 outline_smooth_um = 8.0   # outline smoothing (µm) for perimeters; identical for this method and the Fiji masks
 roughness_fine_um = 2.0   # edge roughness = outline length at roughness_fine_um / at roughness_smooth_um
 roughness_smooth_um = 20.0
 slab_um = 40.0            # depth (µm) of the slab for the exploratory slab volume
 surface_grid_um = 2.0     # isotropic grid (µm) of the exploratory 3D mesh surface area
+section_thickness_um = "" # experiment metadata: thickness of the cut sections (µm); "" = not recorded (printed in the report)
+z_range_rule = ""         # experiment metadata: how the imaged z-range was chosen at the microscope (free text)
 sensitivity_permutations = 9999   # sensitivity: random permutations per contrast (exact enumeration when fewer splits)
 sensitivity_seed = 20261119       # seed of the permutations (recorded in the report; same seed = same p-values)
 planner_fold_change = 1.5         # power planner (planning aid): tumours per group needed to detect this fold-change

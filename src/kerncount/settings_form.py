@@ -309,6 +309,12 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
                         help="Exploratory slab volume = main-mass volume within this depth around the mid-section."),
         "surface_grid_um": dict(kind="float", min=0.1, label="3D surface grid (µm)", reseg=True,
                                 help="Isotropic grid of the exploratory 3D mesh surface area."),
+        "section_thickness_um": dict(kind="text", label="Section thickness (µm)",
+                                     help="Experiment metadata: thickness of the cut brain sections. Printed in the "
+                                          "report ('not recorded' while empty)."),
+        "z_range_rule": dict(kind="text", label="How the z-range was chosen",
+                             help="Experiment metadata (free text): how the imaged depth range was chosen at the "
+                                  "microscope. Printed in the report ('not recorded' while empty)."),
         "normalise_by": dict(kind="text", label="Normalise to the reference of factor",
                              help="Normalised values = % of the model-estimated reference level of this factor in "
                                   "the same cell of the other factors (e.g. tumour_line: % of cntrl with the same "

@@ -335,6 +335,25 @@ def test_lock_hash_covers_the_settings_that_define_the_confirmatory_readouts():
     assert results.lock(_settings())[1]["measurement"]["mid_section_um"] == 20.0
 
 
+def test_report_states_mid_section_and_the_acquisition_metadata_or_not_recorded(tmp_path):
+    """Review fix (ADR 0002 amendment): section thickness and the z-range rule are experiment metadata, printed in
+    the report's About section ('not recorded' while empty); the mid-section thickness rule is stated."""
+    from kerncount.tumour import config, results
+
+    assert 'section_thickness_um = ""' in config.TEMPLATE and 'z_range_rule = ""' in config.TEMPLATE
+    t = _vol_table(np.random.default_rng(13))
+    vol = [{"name": "main_mass_volume", "column": "main_mass_volume_mm3", "role": "confirmatory"}]
+    results.analyse(tmp_path, t, _settings(readouts=vol, sensitivity_permutations=99))
+    md = (tmp_path / "stats_report.md").read_text()
+    assert "Section thickness: not recorded" in md and "z-range at the microscope: not recorded" in md
+    assert "Mid-section: 20 µm" in md
+    results.analyse(tmp_path / "b", t, _settings(readouts=vol, sensitivity_permutations=99, section_thickness_um=150,
+                                                 z_range_rule="first to last layer with visible mCherry"))
+    md = (tmp_path / "b" / "stats_report.md").read_text()
+    assert "Section thickness: 150 µm" in md
+    assert "z-range at the microscope: first to last layer with visible mCherry" in md
+
+
 def test_analyse_with_one_genotype_and_groups_of_one_does_not_fail(tmp_path):
     from kerncount.experiment_types import RunOptions, get
 
