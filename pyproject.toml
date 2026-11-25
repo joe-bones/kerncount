@@ -1,13 +1,23 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "kerncount"
-version = "0.3.0"
+version = "0.4.0"
 description = "Automated nucleus counting, intensity measurement and multi-n analysis for fluorescence images"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Josiah Bones" }]
+keywords = ["microscopy", "nucleus counting", "stardist", "fluorescence", "image analysis"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
 dependencies = [
     "numpy",
     "scipy>=1.11",
@@ -22,6 +32,10 @@ dependencies = [
     "csbdeep>=0.7",  # imported directly (csbdeep.utils.normalize); also a dependency of stardist
     "tensorflow>=2.13",
 ]
+
+[project.urls]
+Homepage = "https://github.com/joe-bones/kerncount"
+Issues = "https://github.com/joe-bones/kerncount/issues"
 
 [project.optional-dependencies]
 test = ["pytest"]

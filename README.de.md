@@ -648,3 +648,6 @@ Hinweise zu Algorithmen und Implementierung: `docs/technical.md`.
 ## Danksagung
 Die Kernerkennung verwendet [StarDist](https://github.com/stardist/stardist) (Schmidt et al., MICCAI 2018;
 Weigert et al., WACV 2020) mit dem vortrainierten Modell `2D_versatile_fluo`.
+
+## Lizenz
+MIT: siehe [LICENSE](LICENSE).

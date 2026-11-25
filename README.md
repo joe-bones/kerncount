@@ -644,3 +644,6 @@ Algorithm and implementation notes: `docs/technical.md`.
 ## Acknowledgements
 Nucleus detection uses [StarDist](https://github.com/stardist/stardist) (Schmidt et al., MICCAI 2018;
 Weigert et al., WACV 2020) with its pretrained `2D_versatile_fluo` model.
+
+## License
+MIT: see [LICENSE](LICENSE).
