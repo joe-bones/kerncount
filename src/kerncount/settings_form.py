@@ -30,7 +30,8 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
     "experiment": {
         "type": dict(kind="choice", options=sorted(experiment_types.TYPES), label="Experiment type",
                      help="How the raw data are found, measured and analysed. cell_count = nuclei and marker intensity "
-                          "on plates. After changing it, scan the raw folder again (init with a fresh layout)."),
+                          "on plates; tumour_volume = mCherry tumour z-stacks (one tumour = one n, docs/tumour.md). "
+                          "After changing it, scan the raw folder again (init with a fresh layout)."),
         "cell_line": dict(kind="text", label="Cell line",
                           help="e.g. LN229. Experiments (n's) of different cell lines are never pooled. Override per n "
                                "or condition with a cell_line column in layout.csv."),
@@ -275,7 +276,107 @@ FORM_ITEMS: dict[str, dict[str, dict]] = {
                                   help="On: power and smallest detectable effect use the multiple-comparison adjustment "
                                        "of the statistics (all comparisons vs the reference). Off: one unadjusted test."),
     },
+    # tumour experiments ([experiment] type = "tumour_volume"; docs/tumour.md). reseg = the next run measures every
+    # stack again (segmentation + readouts, ~20-60 s per stack); the cache key notices the change by itself.
+    # The analysis plan (factors, readouts, families: arrays of tables) has its own editor (gui_tumour), not items here.
+    "tumour": {
+        "smooth_sigma_um": dict(kind="float", min=0, label="Smoothing before the threshold (µm)", reseg=True,
+                                help="Gaussian smoothing at a physical scale, identical for every tumour, so noise and "
+                                     "single bright pixels do not change the outline. 2 µm = about 3 pixels in xy. Part of "
+                                     "the locked analysis plan."),
+        "threshold": dict(kind="choice", options=["intermedians", "otsu"], label="Threshold rule", reseg=True,
+                          help="One automatic rule for every tumour (ADR 0002; never set by hand per tumour). "
+                               "intermedians = half-way between the background and the tumour level (medians), so "
+                               "it does not depend on tumour size and ignores saturated pixels; otsu = classical "
+                               "two-class split (shifts with tumour size). Check its robustness with the threshold "
+                               "sweep. Part of the locked analysis plan."),
+        "min_object_um3": dict(kind="float", min=0, label="Smallest object (µm³)", reseg=True,
+                               help="Connected objects smaller than this are noise. Larger ones besides the main "
+                                    "mass are satellites (tumour burden, invasion fraction). Part of the locked "
+                                    "analysis plan."),
+        "mid_section_um": dict(kind="float", min=0, label="Mid-section thickness (µm)", reseg=True,
+                               help="The confirmatory area and perimeter are averaged over the layers within this "
+                                    "thickness, centred on the layer where the main mass is largest - exactly the "
+                                    "same physical thickness for every tumour and z-step (the two outermost layers "
+                                    "count in part). Part of the locked analysis plan."),
+        "outline_smooth_um": dict(kind="float", min=0, label="Outline smoothing for perimeters (µm)", reseg=True,
+                                  help="The outline is smoothed at this scale before its length is measured: at 8 µm "
+                                       "the perimeter measures the tumour's shape, not pixel noise or single cells "
+                                       "at the border (a finer scale moves it with the threshold). Part of the "
+                                       "locked analysis plan."),
+        "roughness_fine_um": dict(kind="float", min=0, label="Edge roughness: fine scale (µm)", reseg=True,
+                                  help="Edge roughness = outline length at this smoothing ÷ at the coarse scale "
+                                       "below (1 = smooth border; higher = ragged, infiltrating). Exploratory."),
+        "roughness_smooth_um": dict(kind="float", min=0, label="Edge roughness: coarse scale (µm)", reseg=True,
+                                    help="The heavily smoothed reference outline of the edge roughness."),
+        "slab_um": dict(kind="float", min=0, label="Slab depth for the slab volume (µm)", reseg=True,
+                        help="Exploratory slab volume = main-mass volume within this depth around the mid-section."),
+        "surface_grid_um": dict(kind="float", min=0.1, label="3D surface grid (µm)", reseg=True,
+                                help="Isotropic grid of the exploratory 3D mesh surface area."),
+        "section_thickness_um": dict(kind="text", label="Section thickness (µm)",
+                                     help="Experiment metadata: thickness of the cut brain sections. Printed in the "
+                                          "report ('not recorded' while empty)."),
+        "z_range_rule": dict(kind="text", label="How the z-range was chosen",
+                             help="Experiment metadata (free text): how the imaged depth range was chosen at the "
+                                  "microscope. Printed in the report ('not recorded' while empty)."),
+        "normalise_by": dict(kind="text", label="Normalise to the reference of factor",
+                             help="Normalised values = % of the model-estimated reference level of this factor in "
+                                  "the same cell of the other factors (e.g. tumour_line: % of cntrl with the same "
+                                  "genotype and clodronate). Empty = the factor on the x axis. Part of the locked "
+                                  "analysis plan."),
+        "threshold_sweep": dict(kind="bool", label="Threshold sweep",
+                                help="Recompute every confirmatory effect with the threshold × each scale below and "
+                                     "report whether a conclusion depends on the threshold (ADR 0002). On by "
+                                     "default. Slow on the first run (every stack segmented once more; cached "
+                                     "afterwards); switch off to save that time."),
+        "sweep_scales": dict(kind="list", numbers=True, label="Threshold sweep scales",
+                             help="Factors applied to each tumour's automatic threshold, e.g. 0.8, 0.9, 1.1, 1.2."),
+        "shared_threshold_check": dict(kind="bool", label="Shared-threshold robustness check",
+                                       help="Re-segment every tumour at ONE threshold (median of the per-tumour "
+                                            "thresholds) and report whether a confirmatory effect depends on the "
+                                            "per-tumour adaptation, i.e. on brightness (ADR 0002). Only run when the "
+                                            "acquisition settings are identical. Slow on the first run."),
+        "batch": dict(kind="choice", options=["culture_batch", "session_folder", "acquisition_day"], label="Batch",
+                      help="What counts as one batch in the statistics. culture_batch (default) = the culture "
+                           "preparation, the date at the start of the file names (tissue fixed before imaging, so the "
+                           "imaging day is not a batch); session_folder = each session folder; acquisition_day = each "
+                           "day in the stacks' OME metadata. Batches that share a group enter the model as a fixed "
+                           "block effect; a contrast between groups of unconnected batches is shown but never tested. "
+                           "Part of the locked analysis plan; decide before results are viewed."),
+        "qc_saturation_warn": dict(kind="float", min=0, max=1, label="Saturation warning above (share)",
+                                   help="A tumour gets a warning (never a flag) when more of its mid-section main mass "
+                                        "is saturated (255) than this; the threshold rule is protected up to ~0.5."),
+        "review_px": dict(kind="int", min=100, max=4000, label="Review image size (px per panel)",
+                          help="Longest side of each panel of the blinded review images (review/<code>.jpg)."),
+        "review_jpeg_quality": dict(kind="int", min=1, max=100, label="Review image JPEG quality"),
+        "fiji_legacy": dict(kind="bool", label="Fiji legacy readout",
+                            help="Read the lab's Fiji outputs (masks, 3D Objects Counter tables) as fiji_* columns "
+                                 "and report the new method side by side with Fiji (method concordance). Legacy / "
+                                 "exploratory: never starred."),
+        "fiji_fallback": dict(kind="bool", label="Fiji: re-run the macro when outputs are missing",
+                              help="A tumour without Fiji statistics or mask gets the macro re-implementation run on "
+                                   "its original stack (slow)."),
+        "fiji_min_voxels": dict(kind="int", min=1, label="Fiji: smallest object (voxels)",
+                                help="Minimum object size of the macro's 3D Objects Counter (200000 in the macro)."),
+        "sensitivity_permutations": dict(kind="int", min=99, label="Sensitivity: permutations per contrast",
+                                         help="Random permutations of the permutation test (enumerated exactly when "
+                                              "there are fewer possible splits). Sensitivity only."),
+        "sensitivity_seed": dict(kind="int", min=0, label="Sensitivity: random seed",
+                                 help="Same seed = same permutation p-values; printed in the report."),
+        "planner_fold_change": dict(kind="float", min=1.01, max=100, label="Planning aid: fold-change to detect",
+                                    help="The power planner reports how many tumours per group are needed to detect "
+                                         "this fold-change (e.g. 1.5 = 50 % larger or 1/1.5 smaller). Planning only."),
+        "planner_power": dict(kind="float", min=0.05, max=0.999, label="Planning aid: target power"),
+        "planner_alpha": dict(kind="float", min=0.0001, max=0.5, label="Planning aid: alpha per family"),
+    },
 }
+
+# Sections (and, per section, the form items) shown for each experiment type. Types not listed show every section
+# except those that belong to another type only.
+TYPE_SECTIONS: dict[str, dict[str, list[str] | None]] = {
+    "tumour_volume": {"project": None, "experiment": ["type", "notes"], "tumour": None},
+}
+TYPE_ONLY = {"tumour": "tumour_volume"}  # sections of one experiment type only
 
 SECTION_TITLES = {
     "project": "Project", "experiment": "Experiment (cell line, imaging, controls)", "channels": "Channels", "segmentation": "Finding nuclei", "counting": "What counts as a nucleus",
@@ -284,13 +385,30 @@ SECTION_TITLES = {
     "analysis": "Statistics", "acceptance": "Acceptance criteria per n",
     "design": "Plate design (wells, fields, positions)", "review": "Review images",
     "planner": "Planning the next experiment",
+    "tumour": "Tumour measurement, QC and robustness",
 }
 
 
-def schema() -> list[dict]:
-    return [dict(section=s, title=SECTION_TITLES.get(s, s),
-                 items=[dict(key=k, default=DEFAULTS[s][k], **meta) for k, meta in keys.items()])
-            for s, keys in FORM_ITEMS.items()]
+def _defaults(section: str) -> dict:
+    if section == "tumour":
+        from .tumour.config import DEFAULTS as TUMOUR_DEFAULTS
+
+        return TUMOUR_DEFAULTS
+    return DEFAULTS[section]
+
+
+def schema(etype: str = "cell_count") -> list[dict]:
+    """Form sections of an experiment type (default cell_count: every section it has always had)."""
+    shown = TYPE_SECTIONS.get(etype)
+    out = []
+    for s, keys in FORM_ITEMS.items():
+        if shown is not None and s not in shown or shown is None and TYPE_ONLY.get(s, etype) != etype:
+            continue
+        only = shown.get(s) if shown is not None else None
+        out.append(dict(section=s, title=SECTION_TITLES.get(s, s),
+                        items=[dict(key=k, default=_defaults(s)[k], **meta) for k, meta in keys.items()
+                               if only is None or k in only]))
+    return out
 
 
 def _num(v, as_int=False):
@@ -334,7 +452,8 @@ def coerce(values: dict) -> dict:
                         raise ValueError
                 elif k == "list":
                     items = v if isinstance(v, list) else str(v).split(",")
-                    val = [str(i).strip() for i in items if str(i).strip()]
+                    strs = [str(i).strip() for i in items if str(i).strip()]
+                    val = [_num(i) for i in strs] if meta.get("numbers") else strs
                 elif k == "num_or":
                     s = str(v).strip()
                     val = s if s in meta["special"] else _num(s)
@@ -407,6 +526,8 @@ def toml_value(v) -> str:
 
 
 _SECTION = re.compile(r"^\s*\[([A-Za-z0-9_\-]+)\]\s*(#.*)?$")
+_ARRAY = re.compile(r"^\s*\[\[\s*([A-Za-z0-9_.\-]+)\s*\]\]\s*(#.*)?$")  # [[a.b]]: array-of-tables entry
+_HEADER = re.compile(r"^\s*\[")
 _KEY = re.compile(r"^(\s*)([A-Za-z0-9_\-]+)(\s*=\s*)(.*)$")
 
 
@@ -441,6 +562,9 @@ def update_text(text: str, typed: dict) -> str:
             section = m.group(1)
             last_line_of[section] = i
             continue
+        if _ARRAY.match(line) or _HEADER.match(line):  # [[tumour.factors]] etc.: keys below belong to that entry
+            section = None
+            continue
         m = _KEY.match(line)
         if m and section:
             last_line_of[section] = i
@@ -464,4 +588,46 @@ def update_text(text: str, typed: dict) -> str:
         for k, v in kv.items():
             if parsed.get(sec, {}).get(k) != v:
                 raise ValueError(f"could not write {sec}.{k} (please edit settings.toml directly)")
+    return out
+
+
+def replace_array(text: str, name: str, rows: list[dict]) -> str:
+    """Replace every `[[name]]` entry (e.g. tumour.factors) in settings.toml text by `rows`, written where the first
+    entry was (appended at the end when there was none). Comments above the first entry and everything outside the
+    entries are kept; comments inside the entries are not."""
+    lines = text.splitlines()
+    starts = [i for i, ln in enumerate(lines) if (m := _ARRAY.match(ln)) and m.group(1) == name]
+    keep: list[str] = []
+    at: int | None = None
+    i = 0
+    while i < len(lines):
+        if i in starts:
+            if at is None:
+                at = len(keep)
+            j = i + 1
+            while j < len(lines) and not _HEADER.match(lines[j]):
+                j += 1
+            k = j  # comment / blank lines right above the next header belong to it
+            while k > i + 1 and (not lines[k - 1].strip() or lines[k - 1].lstrip().startswith("#")):
+                k -= 1
+            keep += lines[k:j]
+            i = j
+            continue
+        keep.append(lines[i])
+        i += 1
+    block: list[str] = []
+    for r in rows:
+        block += [f"[[{name}]]"] + [f"{k} = {toml_value(v)}" for k, v in r.items()] + [""]
+    if at is None:
+        keep += ([""] if keep and keep[-1].strip() else []) + block
+    else:
+        while at < len(keep) and not keep[at].strip():  # one blank line after the entries, not several
+            del keep[at]
+        keep[at:at] = block
+    out = "\n".join(keep).rstrip("\n") + "\n"
+    parsed: object = tomllib.loads(out)
+    for part in name.split("."):
+        parsed = parsed.get(part, {}) if isinstance(parsed, dict) else {}
+    if (parsed or []) != rows:
+        raise ValueError(f"could not write [[{name}]] (please edit settings.toml directly)")
     return out

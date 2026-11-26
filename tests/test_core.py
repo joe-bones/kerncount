@@ -428,3 +428,26 @@ def test_concurrent_lock_writes_do_not_lose_updates(tmp_path):
     assert sorted(lk["channel"] for lk in data["locks"]) == sorted(f"C{i}" for i in range(16))
     assert all(lk["fields"] == 2 for lk in data["locks"])
     assert [p.name for p in tmp_path.iterdir()] == ["cutoffs.json"]
+
+
+def test_init_all_with_a_type_skips_projects_of_another_type_and_continues(tmp_path, monkeypatch, capsys):
+    """Review fix: `init --all --type X` reports an experiment whose settings.toml has another type and goes on with
+    the rest (it used to stop at the first one)."""
+    import tifffile
+    from kerncount import cli, settings as st_mod
+
+    for exp in ("expA", "expB", "expC"):
+        d = tmp_path / "data" / exp / "01.02.26 run" / "cntrl"
+        d.mkdir(parents=True)
+        tifffile.imwrite(d / "1.tif", np.zeros((16, 16), np.uint16))
+    monkeypatch.chdir(tmp_path)
+    cli.main(["init", "expA"])  # cell_count project
+    cli.main(["init", "--all", "--type", "cell_count"])
+    assert all((tmp_path / "analysis" / e / "settings.toml").exists() for e in ("expB", "expC"))
+    capsys.readouterr()
+    cli.main(["init", "--all", "--type", "tumour_volume"])  # every existing project is cell_count: all reported
+    out = capsys.readouterr().out
+    assert out.count("is for type 'cell_count'") == 3 and "expA" in out and "expC" in out
+    assert st_mod.load(tmp_path / "analysis" / "expC")["experiment"]["type"] == "cell_count"  # untouched
+    with pytest.raises(SystemExit, match="is for type 'cell_count'"):  # a single experiment still stops
+        cli.main(["init", "expA", "--type", "tumour_volume"])

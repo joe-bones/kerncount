@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import experiment_types, gui_tumour
 from . import settings as settings_mod
 from . import settings_form
 from .cli import ANALYSIS, DATA, workspace_root
@@ -126,7 +127,11 @@ def build_args(action: str, exp: str, o: dict) -> list[str]:
 def _options(action: str, o: dict) -> list[str]:
     gens = [g for g in re.split(r"[\s,;]+", str(o.get("rebuild", ""))) if _GEN.match(g) or g == "all"]
     if action == "init":
-        return ["init"] + (["--force"] if o.get("force") else []) + (["--force-layout"] if o.get("force_layout") else [])
+        etype = str(o.get("type") or "").strip()
+        if etype and etype not in experiment_types.TYPES:
+            raise ValueError(f"unknown experiment type {etype!r}; valid: {', '.join(sorted(experiment_types.TYPES))}")
+        return (["init"] + (["--force"] if o.get("force") else []) + (["--force-layout"] if o.get("force_layout") else [])
+                + (["--type", etype] if etype else []))
     if action == "run":
         args = ["run"]
         if o.get("no_review"):
@@ -211,16 +216,30 @@ class State:
         out = []
         for d in sorted(p for p in (ws / DATA).iterdir() if p.is_dir() and not p.name.startswith(".")):
             prj = ws / ANALYSIS / d.name
+            etype = experiment_type(prj)
             out.append(dict(name=d.name, initialised=(prj / "settings.toml").exists(),
                             counted=(prj / "counts.csv").exists(), generations=generations(prj),
                             sampling=gen_dirs(prj / "sampling"),
-                            intensity=(prj / "intensity" / "manifest.json").exists()))
+                            intensity=(prj / "intensity" / "manifest.json").exists(), type=etype,
+                            results=etype == gui_tumour.TYPE and (prj / "stats_long.csv").exists()))
         return out
 
     def project(self, exp: str) -> Path:
         if not exp or exp not in {e["name"] for e in self.experiments()}:
             raise ValueError(f"unknown experiment: {exp}")
         return self.workspace / ANALYSIS / exp
+
+
+def experiment_type(prj: Path) -> str:
+    """[experiment] type of a project (experiment_types.DEFAULT when not set up, unreadable or not set)."""
+    st = prj / "settings.toml"
+    if not st.is_file():
+        return experiment_types.DEFAULT
+    try:
+        return str((tomllib.loads(st.read_text(encoding="utf-8")).get("experiment") or {}).get("type")
+                   or experiment_types.DEFAULT)
+    except (OSError, ValueError):
+        return experiment_types.DEFAULT
 
 
 def gen_dirs(root: Path) -> list[str]:
@@ -290,9 +309,10 @@ def project_info(prj: Path) -> dict:
             gens.append({**json.loads(meta.read_text(encoding="utf-8")), "name": g})
         except (OSError, ValueError):
             gens.append(dict(name=g))
+    etype = str(s.get("experiment", {}).get("type") or experiment_types.DEFAULT)
     return dict(
-        path=str(prj), settings=s, settings_text=st.read_text(encoding="utf-8") if st.exists() else "",
-        schema=settings_form.schema(), generations=gens,
+        path=str(prj), settings=s, settings_text=st.read_text(encoding="utf-8") if st.exists() else "", type=etype,
+        schema=settings_form.schema(etype), generations=gens,
         sampling=gen_dirs(prj / "sampling"), planner=planner_gens(prj),
         colours=n_colours(prj, gens[-1]["name"] if gens else None),
         intensity=(prj / "intensity" / "manifest.json").exists(),
@@ -1236,7 +1256,9 @@ def make_handler(state: State):
             if path == "/api/state":
                 j = state.job
                 return dict(workspace=str(state.workspace or ""), experiments=state.experiments(),
-                            job=j and dict(label=j.label, running=j.running, returncode=j.returncode))
+                            job=j and dict(label=j.label, running=j.running, returncode=j.returncode),
+                            types=[dict(name=k, label=getattr(v, "label", k))
+                                   for k, v in sorted(experiment_types.TYPES.items())])
             if path == "/api/log":
                 since = int(arg("since", "0") or 0)
                 j = state.job
@@ -1282,6 +1304,20 @@ def make_handler(state: State):
                 return planner_info(prj, arg("gen") or None, arg("cl") or None)
             if path == "/api/plans":
                 return plans_info(prj)
+            if path.startswith("/api/tumour/"):
+                what = path.removeprefix("/api/tumour/")
+                if what == "overview":
+                    return gui_tumour.overview(prj)
+                if what == "layout":
+                    return gui_tumour.layout_info(prj)
+                if what == "plan":
+                    return gui_tumour.plan_info(prj)
+                if what == "review":  # blinded: codes only
+                    return gui_tumour.review_info(prj)
+                if what == "results":
+                    return gui_tumour.results_info(prj)
+                if what == "stats":
+                    return gui_tumour.stats_info(prj, sensitivity=arg("sensitivity") == "1")
             raise ValueError(f"unknown request {path}")
 
         def do_POST(self):
@@ -1348,6 +1384,8 @@ def make_handler(state: State):
                 target = {"folder": prj, "data": state.workspace / DATA / body["experiment"]}.get(what)
                 if target is None and what == "results" and gens:
                     target = prj / "generations" / gens[-1] / "results.xlsx"
+                if target is None and what == "results" and (prj / "results.xlsx").is_file():  # tumour projects
+                    target = prj / "results.xlsx"
                 if target is None and body.get("path"):
                     target = inside(prj, body["path"])
                     if private(prj, target) and not is_cutoffs(prj, target):
@@ -1368,15 +1406,27 @@ def make_handler(state: State):
                         raise ValueError(f"settings.toml is not valid: {e}") from None
                 else:
                     text = settings_form.update_text(st.read_text(encoding="utf-8"), settings_form.coerce(body.get("values", {})))
-                with file_lock(st):
-                    atomic_write(st, text)
-                return dict(ok=True, message="settings saved", **rerun_advice(before, settings_mod.load(prj)))
+                gui_tumour.write_settings(prj, text)  # tumour projects: the analysis-plan lock is checked first
+                after = settings_mod.load(prj)
+                advice = (gui_tumour.rerun_advice if gui_tumour.is_tumour(after) or gui_tumour.is_tumour(before)
+                          else rerun_advice)(before, after)
+                return dict(ok=True, message="settings saved", **advice)
             if path == "/api/settings_reset":
                 self._idle()
-                raw = settings_mod.load(prj)["project"]["raw_dir"]
+                cur = settings_mod.load(prj)
+                raw = cur["project"]["raw_dir"]
                 raw_abs = Path(raw) if Path(raw).is_absolute() else (prj / raw)
+                try:  # an experiment type's own template (tumour_volume), else the cell-count one
+                    template = experiment_types.of(cur).settings_template()
+                except experiment_types.UnknownExperimentType:
+                    template = None
+                # the plan in the template replaces the current one: a locked plan blocks the reset (raw_dir does
+                # not matter for the plan)
+                hashes = (gui_tumour.guard(prj, cur, settings_mod._merge(settings_mod.DEFAULTS, tomllib.loads(
+                    template.format(raw_dir="raw")))) if template is not None else None)
                 with file_lock(prj / "settings.toml"):
-                    bk = settings_mod.write_template(prj, raw_abs)  # backs the old file up first
+                    bk = settings_mod.write_template(prj, raw_abs, template=template)  # backs the old file up first
+                gui_tumour.record(prj, hashes)
                 return ("settings reset to defaults" +
                         (f"; the previous settings.toml is kept in {bk.relative_to(prj).as_posix()}" if bk else ""))
             if path == "/api/layout":
@@ -1404,6 +1454,21 @@ def make_handler(state: State):
             if path == "/api/tuning/unlock":
                 self._idle()
                 return tuning_unlock(prj, body)
+            if path == "/api/tumour/layout":
+                self._idle()
+                return gui_tumour.save_layout(prj, body.get("rows", []))
+            if path == "/api/tumour/plan":
+                self._idle()
+                return gui_tumour.save_plan(prj, body)
+            if path == "/api/tumour/unlock":
+                self._idle()
+                return gui_tumour.unlock(prj, str(body.get("reason", "")))
+            if path == "/api/tumour/relock":
+                self._idle()
+                return gui_tumour.relock(prj)
+            if path == "/api/tumour/corrections":  # blinded: by review code only
+                self._idle()
+                return gui_tumour.save_corrections(prj, body.get("changes", []), body.get("mtime"))
             if path == "/api/planner/evaluate":
                 return planner_evaluate(prj, body)
             if path == "/api/platemap":

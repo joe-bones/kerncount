@@ -12,6 +12,7 @@ const S = { state: null, exp: null, sec: "home", params: {}, project: null, ov: 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => "&#" + c.charCodeAt(0) + ";");
 const js = v => esc(JSON.stringify(v));  // a JSON value inside an HTML attribute
+const isTumour = e => !!e && e.type === "tumour_volume";  // experiment type (ADR 0004); also used by tumour.js
 // The page runs under Content-Security-Policy script-src 'self': no inline <script>, no inline on* attributes.
 // Templates attach handlers with on("click", fn), which stores fn and returns data-on-click="<id>"; one delegated
 // listener per event type runs it with `this` = the element (as an inline handler would; returning false prevents
@@ -87,7 +88,7 @@ const SECTIONS = [
   ["Results", [["results", "Results explorer"], ["stats", "Statistics table"], ["layers", "Layer comparison", e => e.intensity],
                ["intensity", "Intensity & cut-off", e => e.intensity]]],
   ["Images", [["review", "Review images"], ["corrections", "Corrections"]]],
-  ["Plan the next experiment", [["planner", "Planner"], ["plates", "Plate maps"]]],
+  ["Plan the next experiment", [["planner", "Planner", e => !isTumour(e)], ["plates", "Plate maps", e => !isTumour(e)]]],
   ["Set-up", [["layout", "Layout"], ["settings", "Settings"], ["files", "All files"]]],
 ];
 const SEC_TITLE = Object.fromEntries(SECTIONS.flatMap(([, l]) => l.map(([k, t]) => [k, t])));
@@ -135,6 +136,7 @@ async function applyHash() {
 function resetExp() {
   S.project = null; S.ov = null; S.counts = null; S.review = null; S.pending = {}; S.round = null; S.dir = ""; S.man = {}; S.stats = {};
   S.reviewN = null; S.reviewT = null; S.tune = null; S.plan = null; S.plans = null; S.intens = null;
+  S.tov = null; S.tlay = null; S.trev = null; S.tstats = null; S.tplan = null; S.tround = null; S.tsel = null;  // tumour.js
 }
 function go(exp, sec) { nav(OLD_TABS[sec] || sec || "home", {}, exp); }
 
@@ -154,7 +156,7 @@ function renderSide() {
   if (!S.state) return;
   const html = S.state.experiments.map(e => `<button class="exp ${e.name === S.exp ? "active" : ""}" ${on("click", function (event) { go((e.name)) })}>
       <span class="nm">${esc(e.name)}</span>
-      <span class="st">${!e.initialised ? "not set up" : !e.generations.length ? "set up, not run" : e.generations.length + " generation(s)"}${e.intensity ? " · intensity" : ""}</span></button>
+      <span class="st">${!e.initialised ? "not set up" : isTumour(e) ? (e.results ? "tumours · results" : "tumours · set up, not run") : !e.generations.length ? "set up, not run" : e.generations.length + " generation(s)"}${e.intensity ? " · intensity" : ""}</span></button>
       ${e.name === S.exp ? `<div class="secnav">${SECTIONS.map(([g, items]) => {
         const its = items.filter(([, , show]) => !show || show(e));
         return its.length ? `<div class="grp">${esc(g)}</div>` + its.map(([k, t]) => `<a class="${k === S.sec ? "active" : ""} ${!e.initialised && k !== "home" ? "dis" : ""}" ${on("click", function (event) { nav(String(k)) })}>${esc(t)}</a>`).join("") : "";
@@ -184,6 +186,7 @@ async function render() {
 
 function onJobFinished() {
   S.project = null; S.counts = null; S.review = null; S.ov = null; S.man = {}; S.stats = {}; S.intens = null; S.plan = null;
+  S.tov = null; S.trev = null; S.tstats = null;
   if (S.sec === "corrections" && Object.keys(S.pending).length) return; // don't wipe unsaved edits
   if (!$("modal").classList.contains("hidden")) return;
   if (S.sec === "intensity" && S.params.tab === "tune") return; // keep a tuning session
@@ -218,8 +221,8 @@ async function startJob(action, options = {}) {
 // "start over" and other overwrites: say exactly what is reset; the old files are kept in _work/backups/
 const BACKUP_TXT = "The current files are copied to <code>_work/backups/</code> (with the date and time) before they are replaced.";
 const SETTINGS_LOST = `<li><code>settings.toml</code>: <b>every setting</b>, including the <b>experiment metadata</b> (cell line, magnification, camera pixel size, seeding density, stain / antibody, negative control, timepoint) and the channel layout, the counting, intensity, statistics, acceptance and planner settings (the raw images folder is kept)</li>`;
-function setUp(force, forceLayout) {
-  if (!force && !forceLayout) return startJob("init", {});
+function setUp(force, forceLayout, type) {
+  if (!force && !forceLayout) return startJob("init", type ? { type } : {});
   const items = (force ? SETTINGS_LOST : "") + `<li><code>layout.csv</code>: treatment names, n names, exclusions and per-n / per-condition overrides you edited (a fresh scan of the folders replaces it)</li>`;
   confirmBox(`<b>${force ? "Start over" : "Rewrite the layout"}?</b> This resets:<ul>${items}</ul>Counts, manual corrections (counts.csv), cached detections and generations are not touched. ${BACKUP_TXT}`,
     () => startJob("init", { force, force_layout: forceLayout }), force ? "Start over" : "Rewrite layout.csv");
@@ -381,9 +384,10 @@ function runPanel(e) {
     ${S.running ? `<div class="notice info">A job is running — see the log at the bottom. Buttons that change files are paused until it finishes.</div>` : ""}
     <div class="steps">
       ${step(1, e.initialised, "Set up", "Scan the raw image folders and create the project (layout + settings).",
-        `<label class="small"><input type="checkbox" id="o_force"> start over: reset settings and layout</label>
+        `${e.initialised ? "" : `<label class="small">experiment type <select id="o_type">${((S.state && S.state.types) || [{ name: "cell_count", label: "cell_count" }]).map(t => `<option value="${esc(t.name)}" ${t.name === "cell_count" ? "selected" : ""}>${esc(t.label)}</option>`).join("")}</select></label>`}
+         <label class="small"><input type="checkbox" id="o_force"> start over: reset settings and layout</label>
          <label class="small"><input type="checkbox" id="o_forcelayout"> rewrite the layout only (after changing how channels are saved)</label>
-         <button class="${e.initialised ? "" : "primary"}" ${d} ${on("click", function (event) { setUp($('o_force').checked, $('o_forcelayout').checked); })}>${e.initialised ? "Re-scan folders" : "Set up"}</button>`)}
+         <button class="${e.initialised ? "" : "primary"}" ${d} ${on("click", function (event) { setUp($('o_force').checked, $('o_forcelayout').checked, $('o_type') ? $('o_type').value : ""); })}>${e.initialised ? "Re-scan folders" : "Set up"}</button>`)}
       ${step(2, gens.length > 0, "Run the analysis", "Count nuclei, measure intensities, score quality, draw review images and build statistics. Always safe to re-run.",
         `<label><input type="checkbox" id="o_noreview"> skip review images (faster)</label>
          <label><input type="checkbox" id="o_reseg"> re-detect every nucleus (ignore cache)</label>
@@ -492,9 +496,10 @@ function itemValue(sec, f) {
   return $(id).value;
 }
 RENDER.settings = async function (b) {
-  const p = S.project;
+  const p = S.project, tum = isTumour(p), rd = tum ? "re-measures" : "re-detects";
   b.innerHTML = `<p class="muted" style="margin-top:0">Every setting of this experiment. Changes are saved to <code>settings.toml</code>; after saving, kerncount tells you which steps to re-run.
-      Settings marked <span class="tag fail">re-detects</span> make the next run re-detect every nucleus (slow); the others reuse the detections.</p>
+      ${tum ? `Settings marked <span class="tag fail">${rd}</span> make the next run segment and measure every stack again (slow); the others reuse the cached segmentations.`
+            : `Settings marked <span class="tag fail">${rd}</span> make the next run re-detect every nucleus (slow); the others reuse the detections.`}</p>
     <div class="bar"><button class="primary" ${on("click", function (event) { saveSettings() })}>Save settings</button>
       <span class="muted small" id="setState"></span><span class="spacer"></span>
       <select ${on("change", function (event) { document.getElementById('sec_'+this.value).scrollIntoView() })}><option>Jump to section…</option>${p.schema.map(s => `<option value="${s.section}">${esc(s.title)}</option>`).join("")}</select>
@@ -502,7 +507,7 @@ RENDER.settings = async function (b) {
     <div id="rerun"></div>
     ${p.schema.map(sec => `<div class="form-sec" id="sec_${sec.section}"><h3>${esc(sec.title)} <span class="key small muted">[${sec.section}]</span></h3>${sec.items.map(f => {
       const v = (p.settings[sec.section] || {})[f.key];
-      return `<div class="form-item" data-sec="${sec.section}" data-key="${f.key}"><div><div class="lbl">${esc(f.label || f.key)} ${f.reseg ? `<span class="tag fail">re-detects</span>` : ""}</div>
+      return `<div class="form-item" data-sec="${sec.section}" data-key="${f.key}"><div><div class="lbl">${esc(f.label || f.key)} ${f.reseg ? `<span class="tag fail">${rd}</span>` : ""}</div>
         <div class="key">${sec.section}.${f.key} · default ${esc(JSON.stringify(f.default))}</div></div>
         <div>${itemInput(sec.section, f, v)}</div>${f.help ? `<div class="help">${esc(f.help)}</div>` : ""}</div>`; }).join("")}</div>`).join("")}
     <details class="card"><summary>Advanced: edit settings.toml as text</summary>

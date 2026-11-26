@@ -74,22 +74,47 @@ def _experiment_type(s: dict):
         sys.exit(str(e))
 
 
-def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False):
-    from . import discover, settings
+class TypeMismatch(Exception):
+    """`init --type X` on a project whose settings.toml has another type (without --force)."""
 
+
+def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False, etype_name: str | None = None):
+    from . import discover, experiment_types, settings
+
+    new_type = None
+    if etype_name:
+        try:
+            new_type = experiment_types.get(etype_name)
+        except experiment_types.UnknownExperimentType as e:
+            sys.exit(str(e).replace("settings.toml [experiment] type", "--type"))
     prj.mkdir(parents=True, exist_ok=True)
     if (prj / "settings.toml").exists() and not force:
+        current = _experiment_type(settings.load(prj))
+        if new_type is not None and new_type.name != current.name:
+            raise TypeMismatch(f"settings.toml in {prj} is for type {current.name!r}; use --force to reset it to "
+                               f"--type {new_type.name}")
         print(f"settings.toml already exists in {prj} (kept). Use --force to reset it.")
     else:
         had = (prj / "settings.toml").exists()
-        settings.write_template(prj, raw)  # backs up an existing settings.toml to _work/backups/ first
+        template = new_type.settings_template() if new_type is not None else None
+        if new_type is not None and template is None:  # a type without its own template: default + type line
+            template = settings.TEMPLATE.replace(f'type = "{experiment_types.DEFAULT}"', f'type = "{new_type.name}"', 1)
+        settings.write_template(prj, raw, template)  # backs up an existing settings.toml to _work/backups/ first
         if had:
             print(f"settings.toml reset to the defaults; the previous version is kept in {settings.BACKUPS}/")
     s = settings.load(prj)
     etype = _experiment_type(s)
     layout = etype.scan_layout(raw, s)
     lp = prj / "layout.csv"
-    if lp.exists() and not (force or force_layout):
+    merged = etype.merge_layout(discover.read_table(lp), layout, s) if lp.exists() and not (force or force_layout) \
+        else None
+    if merged is not None:  # raw folder reorganised: layout.csv updated with the user's edits, old one backed up
+        layout, messages = merged
+        bk = settings.backup(prj, "layout.csv")
+        print("\n".join(messages))
+        kept = bk.relative_to(prj).as_posix() if bk is not None else "-"
+        print(f"layout.csv updated; the previous version is kept in {kept}")
+    elif lp.exists() and not (force or force_layout):
         lp = prj / "layout.new.csv"
         print(f"layout.csv already exists (kept); fresh scan written to {lp.name} for comparison.")
     elif lp.exists():
@@ -99,15 +124,23 @@ def _init_one(raw: Path, prj: Path, force: bool, force_layout: bool = False):
     etype.report_layout(layout, s, raw)
     ws = workspace_root()
     target = prj.name if ws and prj.resolve().parent == (ws / ANALYSIS).resolve() else str(prj)
-    print(f"\nWrote {lp}\nCheck the n / treatment names (edit the CSV if needed), then run:  kerncount run \"{target}\"")
+    hint = getattr(etype, "layout_hint", "Check the n / treatment names (edit the CSV if needed)")
+    print(f"\nWrote {lp}\n{hint}, then run:  kerncount run \"{target}\"")
 
 
 def cmd_init(a):
     if a.all:
         ws = workspace_root() or sys.exit("--all needs a workspace: run from a folder that contains data/")
+        skipped = []
         for exp in _experiments(ws):
             print(f"\n=== {exp}")
-            _init_one(ws / DATA / exp, ws / ANALYSIS / exp, a.force, a.force_layout)
+            try:
+                _init_one(ws / DATA / exp, ws / ANALYSIS / exp, a.force, a.force_layout, a.type)
+            except TypeMismatch as e:  # report it and go on with the other experiments
+                print(f"skipped: {e}")
+                skipped.append(exp)
+        if skipped:
+            print(f"\nNot initialised as --type {a.type} (settings.toml has another type): {', '.join(skipped)}")
         return
     if not a.raw_dir:
         sys.exit("give an experiment name (from data/), a raw folder, or --all")
@@ -119,7 +152,10 @@ def cmd_init(a):
         # data/<name> may be a symlink to a folder elsewhere: the project still belongs in this workspace
         in_ws = ws and (raw.parent == (ws / DATA).resolve() or (ws / DATA / raw.name).resolve() == raw)
         prj = (ws / ANALYSIS / raw.name) if in_ws else raw.parent.parent / ANALYSIS / raw.name
-    _init_one(raw, prj, a.force, a.force_layout)
+    try:
+        _init_one(raw, prj, a.force, a.force_layout, a.type)
+    except TypeMismatch as e:
+        sys.exit(str(e))
 
 
 def _projects(a) -> list[Path]:
@@ -138,7 +174,8 @@ def _projects(a) -> list[Path]:
 def cmd_run(a):
     from . import experiment_types, settings
 
-    opts = experiment_types.RunOptions(rebuild=a.rebuild, resegment=a.resegment, no_review=a.no_review)
+    opts = experiment_types.RunOptions(rebuild=a.rebuild, resegment=a.resegment, no_review=a.no_review,
+                                       unlock=a.unlock)
     for prj in _projects(a):
         print(f"\n=== {prj.name}")
         _experiment_type(settings.load(prj)).run(prj, opts)
@@ -204,6 +241,8 @@ def main(argv=None):
     i.add_argument("--force", action="store_true", help="overwrite settings.toml and layout.csv")
     i.add_argument("--force-layout", action="store_true",
                    help="keep settings.toml, rewrite layout.csv (e.g. after setting [channels] files = \"interleaved\")")
+    i.add_argument("--type", default=None, metavar="NAME",
+                   help="experiment type of a new project, e.g. tumour_volume (default: cell_count)")
     i.set_defaults(func=cmd_init)
     r = sub.add_parser("run", help="count, check, and analyse (safe to re-run any time)")
     r.add_argument("project", nargs="?", help="experiment name, or a project folder path")
@@ -212,6 +251,8 @@ def main(argv=None):
                    help="overwrite existing generation folders, e.g. --rebuild g2  or  --rebuild all")
     r.add_argument("--resegment", action="store_true", help="ignore cached segmentations")
     r.add_argument("--no-review", action="store_true", help="skip drawing review images (faster)")
+    r.add_argument("--unlock", default=None, metavar="REASON",
+                   help="tumour experiments: unlock a changed analysis plan (logged with this reason in lock_log.csv)")
     r.set_defaults(func=cmd_run)
     rg = sub.add_parser("regen", help="rebuild generations from counts.csv only (fast; after manual corrections)")
     rg.add_argument("project", nargs="?", help="experiment name, or a project folder path")
