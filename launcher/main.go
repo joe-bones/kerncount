@@ -42,6 +42,9 @@ const uvBase = "https://github.com/astral-sh/uv/releases/latest/download/"
 
 func uvURL() string {
 	if runtime.GOOS == "darwin" {
+		if runtime.GOARCH == "amd64" { // Intel Mac
+			return uvBase + "uv-x86_64-apple-darwin.tar.gz"
+		}
 		return uvBase + "uv-aarch64-apple-darwin.tar.gz"
 	}
 	return uvBase + "uv-x86_64-pc-windows-msvc.zip"

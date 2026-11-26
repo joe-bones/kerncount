@@ -112,7 +112,7 @@ data/<experiment>/                              z. B. data/my_experiment/
 ### Am einfachsten: Ein-Klick-Programm (ohne Administratorrechte, ohne Python, ohne Befehle)
 Laden Sie aus dem [neuesten Release](https://github.com/joe-bones/kerncount/releases/latest) herunter:
 - **Windows:** `kerncount.exe`
-- **Mac (Apple Silicon):** `kerncount-mac.zip`. Ein Doppelklick entpackt es zu `kerncount.app`.
+- **Mac (Apple Silicon oder Intel):** `kerncount-mac.zip`. Ein Doppelklick entpackt es zu `kerncount.app`. Auf Intel-Macs wird TensorFlow 2.16 installiert, die letzte Version für Intel-Macs.
 
 Legen Sie es in Ihren Arbeitsbereich-Ordner (neben `data`) und doppelklicken Sie darauf. Der erste Start braucht
 Internet, einige Minuten und etwa 1 GB: Python 3.12 und alles, was kerncount benötigt, wird in Ihren Benutzerordner

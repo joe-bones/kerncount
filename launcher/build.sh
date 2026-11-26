@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build the one-click launchers from any OS with Go >= 1.22 installed:
 #   dist/kerncount.exe       Windows, 64-bit
-#   dist/kerncount-mac.zip   kerncount.app for Mac (Apple silicon)
+#   dist/kerncount-mac.zip   kerncount.app for Mac (universal: Apple silicon + Intel; Intel needs lipo, i.e. build on a Mac)
 #   sh launcher/build.sh
 # The exe embeds the current kerncount source (pyproject.toml + src/kerncount, no model weights or tests).
 set -e
@@ -26,7 +26,16 @@ echo "built dist/kerncount.exe"
 APP=../dist/kerncount.app
 rm -rf "$APP" ../dist/kerncount-mac.zip
 mkdir -p "$APP/Contents/MacOS"
-GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$APP/Contents/MacOS/kerncount" .
+# universal binary (Apple silicon + Intel) when lipo is available (macOS), else Apple silicon only
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ../dist/kerncount-arm64 .
+GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ../dist/kerncount-amd64 .
+if command -v lipo >/dev/null 2>&1; then
+  lipo -create -output "$APP/Contents/MacOS/kerncount" ../dist/kerncount-arm64 ../dist/kerncount-amd64
+else
+  echo "WARNING: lipo not found; kerncount.app will run on Apple silicon only (build on a Mac for Intel support)"
+  cp ../dist/kerncount-arm64 "$APP/Contents/MacOS/kerncount"
+fi
+rm -f ../dist/kerncount-arm64 ../dist/kerncount-amd64
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' ../pyproject.toml)
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -40,7 +49,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
-  <key>LSArchitecturePriority</key><array><string>arm64</string></array>
+  <key>LSArchitecturePriority</key><array><string>arm64</string><string>x86_64</string></array>
 </dict></plist>
 PLIST
 if command -v codesign >/dev/null 2>&1; then
