@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kerncount"
-version = "0.4.0"
+version = "0.4.1"
 description = "Automated nucleus counting, intensity measurement and multi-n analysis for fluorescence images"
 readme = "README.md"
 requires-python = ">=3.11"

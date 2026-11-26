@@ -110,7 +110,7 @@ data/<experiment>/                              e.g. data/my_experiment/
 ### Easiest: one-click app (no admin rights, no Python, no commands)
 Download from the [latest release](https://github.com/joe-bones/kerncount/releases/latest):
 - **Windows:** `kerncount.exe`
-- **Mac (Apple silicon):** `kerncount-mac.zip`. Double-click to unzip; this gives `kerncount.app`.
+- **Mac (Apple silicon or Intel):** `kerncount-mac.zip`. Double-click to unzip; this gives `kerncount.app`. On Intel Macs it installs TensorFlow 2.16, the last version built for Intel Macs.
 
 Put it in your workspace folder (next to `data`) and double-click it. The first start needs internet, takes
 a few minutes and about 1 GB: it installs Python 3.12 and everything kerncount needs into your user folder.

@@ -1,4 +1,4 @@
-# One-click kerncount: `kerncount.exe` (Windows) and `kerncount.app` (Mac, Apple silicon)
+# One-click kerncount: `kerncount.exe` (Windows) and `kerncount.app` (Mac: Apple silicon and Intel)
 
 No admin rights, no Python, no terminal commands. Put the launcher anywhere (ideally in your workspace folder,
 next to `data`) and double-click it.
